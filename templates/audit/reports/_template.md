@@ -1,7 +1,7 @@
 # Audit — {{label}} — <cible>
 
 **Date** : {{date}}
-**Auditeur** : Antoine
+**Auditeur** : <ton nom>
 **Périmètre** : <décrire ce qui est dans/hors scope>
 
 ## Résumé exécutif
