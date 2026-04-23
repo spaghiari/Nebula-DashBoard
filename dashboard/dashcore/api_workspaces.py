@@ -33,11 +33,6 @@ from dashcore.config import (
 from dashcore.helpers import *
 
 
-def list_workspaces() -> list[dict]:
-    data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
-    return data.get("workspaces", [])
-
-
 def list_templates() -> list[dict]:
     if not TEMPLATES_DIR.exists():
         return []

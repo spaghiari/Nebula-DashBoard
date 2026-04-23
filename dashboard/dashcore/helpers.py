@@ -233,6 +233,11 @@ def launch_script(bat_name: str) -> tuple[bool, str]:
         return False, f"Erreur : {e}"
 
 
+def list_workspaces() -> list[dict]:
+    data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+    return data.get("workspaces", [])
+
+
 def cleanup_orphan_bats() -> dict:
     """Retire les .bat qui ne correspondent à aucun workspace du registre."""
     ws_ids = {w["id"] for w in list_workspaces()}
@@ -283,6 +288,9 @@ def global_search(q: str) -> dict:
         hay = f"{m.get('id','')} {m.get('name','')} {m.get('description','')} {m.get('notes','')}".lower()
         if q in hay:
             results.append({"kind": "mcp", "id": m["id"], "label": m.get("name"), "route": "#/mcps"})
+    # Import tardif pour éviter les cycles dashcore.helpers ↔ dashcore.api_{plugins,workspaces}
+    from dashcore.api_plugins import list_skills_global
+    from dashcore.api_workspaces import list_templates
     for s in list_skills_global():
         if q in (s["name"] + " " + s["description"]).lower():
             results.append({"kind": "skill", "id": s["id"], "label": s["name"], "route": "#/tools"})
@@ -402,6 +410,9 @@ def all_stats() -> dict:
 
 def sanity_check() -> dict:
     """Compare registre ↔ .mcp.json effectivement écrits dans chaque workspace."""
+    # Import tardif pour éviter le cycle dashcore.helpers ↔ dashcore.api_mcps
+    from dashcore.api_mcps import mcp_applies_to, build_mcp_server_entry
+
     env_local = load_env_local()
     registry = read_json(MCP_REGISTRY, {"mcps": []}).get("mcps", [])
     ws_list = list_workspaces()
