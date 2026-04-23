@@ -51,7 +51,7 @@ STATIC_TYPES = {
 }
 
 ALLOWED_TRANSPORTS = ("stdio", "http", "sse")
-ALLOWED_STATUS = ("disponible", "à configurer", "désactivé")
+ALLOWED_STATUS = ("connecté", "disponible", "à configurer", "désactivé")
 
 _MUTATION_LOCK = threading.Lock()
 log = logging.getLogger("dashboard")
