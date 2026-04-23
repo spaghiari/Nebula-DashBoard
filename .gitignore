@@ -1,8 +1,0 @@
-.env.local
-*.bak
-*.tmp
-__pycache__/
-*.pyc
-logs/
-workspaces/*/
-!workspaces/.gitkeep
