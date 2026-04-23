@@ -603,6 +603,8 @@ def list_skills_global() -> list[dict]:
 
 
 def list_skills_for_workspace(ws_id: str) -> dict:
+    if not safe_id(ws_id):
+        return {"global": list_skills_global(), "local": []}
     ws_dir = WORKSPACES_DIR / ws_id
     local = list_skills_in_dir(ws_dir / ".claude" / "skills")
     return {"global": list_skills_global(), "local": local}
@@ -2013,10 +2015,14 @@ class Handler(BaseHTTPRequestHandler):
 
         if p.startswith("/api/workspaces/") and p.endswith("/skills"):
             ws_id = p.split("/")[3]
+            if not safe_id(ws_id):
+                self._send_json(400, {"error":"id invalide"}); return
             self._send_json(200, list_skills_for_workspace(ws_id)); return
 
         if p.startswith("/api/workspaces/") and p.endswith("/plugins"):
             ws_id = p.split("/")[3]
+            if not safe_id(ws_id):
+                self._send_json(400, {"error":"id invalide"}); return
             self._send_json(200, {"plugins": get_workspace_plugins(ws_id)}); return
 
         # /api/skills/<scope>/<name>/content  → contenu brut du SKILL.md
