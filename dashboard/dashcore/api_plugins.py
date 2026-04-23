@@ -31,7 +31,7 @@ from dashcore.config import (
 
 
 from dashcore.helpers import *
-from dashcore.api_workspaces import list_workspaces
+from dashcore.api_workspaces import list_workspaces, _workspace_settings_path
 
 
 def list_plugins() -> dict:
