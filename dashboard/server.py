@@ -60,8 +60,13 @@ MCP_REGISTRY = ROOT / "mcp" / "registry.json"
 ENV_FILE = ROOT / ".env.local"
 
 SAFE_ID = re.compile(r"^[a-zA-Z0-9_-]{1,40}$")
+SAFE_PLUGIN_SPEC = re.compile(r"^[a-zA-Z0-9@/_.-]{1,120}$")
 ENV_VAR_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)\}")
 BAT_UNSAFE = re.compile(r'[&|<>^"%\r\n]')
+PATH_UNSAFE = re.compile(r'["\r\n]')
+
+# Sérialise les mutations JSON concurrentes (ThreadingHTTPServer).
+_MUTATION_LOCK = threading.Lock()
 
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -84,13 +89,24 @@ def read_json(path: Path, default):
 
 
 def write_json(path: Path, data) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        backup = path.with_suffix(path.suffix + ".bak")
-        shutil.copy2(path, backup)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    with _MUTATION_LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            backup = path.with_suffix(path.suffix + ".bak")
+            shutil.copy2(path, backup)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+
+
+def resolve_cli(name: str) -> str:
+    """Retourne le chemin absolu d'un binaire CLI ou son nom brut en fallback."""
+    return shutil.which(name) or name
+
+
+def safe_path(path: str) -> bool:
+    """Refuse les chemins avec caractères problématiques pour un shell Windows."""
+    return bool(path) and not PATH_UNSAFE.search(path)
 
 
 def safe_id(s: str) -> bool:
@@ -500,8 +516,8 @@ def claude_plugin_cli(args: list[str], timeout: int = 120) -> tuple[int, dict]:
     """Appelle `claude plugin ...` en CLI direct. Retourne (status_http, {ok, output})."""
     try:
         r = subprocess.run(
-            ["claude", "plugin"] + args,
-            capture_output=True, text=True, timeout=timeout, shell=True,
+            [resolve_cli("claude"), "plugin"] + args,
+            capture_output=True, text=True, timeout=timeout,
         )
         return 200, {
             "ok": r.returncode == 0,
@@ -519,25 +535,25 @@ def claude_plugin_cli(args: list[str], timeout: int = 120) -> tuple[int, dict]:
 
 def install_plugin_cli(plugin_spec: str) -> tuple[int, dict]:
     """`claude plugin install <name>@<marketplace>`"""
-    if not plugin_spec or any(c in plugin_spec for c in (";", "&", "|", "\n")):
+    if not plugin_spec or not SAFE_PLUGIN_SPEC.match(plugin_spec):
         return 400, {"error": "spec invalide"}
     return claude_plugin_cli(["install", plugin_spec])
 
 
 def enable_plugin_cli(plugin_id: str) -> tuple[int, dict]:
-    if not plugin_id or any(c in plugin_id for c in (";", "&", "|", "\n")):
+    if not plugin_id or not SAFE_PLUGIN_SPEC.match(plugin_id):
         return 400, {"error": "id invalide"}
     return claude_plugin_cli(["enable", plugin_id])
 
 
 def disable_plugin_cli(plugin_id: str) -> tuple[int, dict]:
-    if not plugin_id or any(c in plugin_id for c in (";", "&", "|", "\n")):
+    if not plugin_id or not SAFE_PLUGIN_SPEC.match(plugin_id):
         return 400, {"error": "id invalide"}
     return claude_plugin_cli(["disable", plugin_id])
 
 
 def uninstall_plugin_cli(plugin_id: str) -> tuple[int, dict]:
-    if not plugin_id or any(c in plugin_id for c in (";", "&", "|", "\n")):
+    if not plugin_id or not SAFE_PLUGIN_SPEC.match(plugin_id):
         return 400, {"error": "id invalide"}
     return claude_plugin_cli(["uninstall", plugin_id])
 
@@ -1049,14 +1065,18 @@ claude
 # ------------------------ resume last session ------------------------
 
 def launch_resume(ws_id: str) -> tuple[bool, str]:
+    if not safe_id(ws_id):
+        return False, "id invalide"
     w = next((x for x in list_workspaces() if x["id"] == ws_id), None)
     if not w:
         return False, "workspace absent"
+    path = w.get("path", "")
+    if not safe_path(path):
+        return False, "chemin de workspace invalide"
     try:
         # /k garde la fenêtre ouverte après exécution (utile si claude -c termine ou échoue)
         subprocess.Popen(
-            f'start "" cmd /k "cd /d \"{w["path"]}\" && claude -c"',
-            shell=True,
+            ["cmd", "/c", "start", "", "cmd", "/k", f'cd /d "{path}" && claude -c'],
             creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
         )
         return True, f"Reprise session : {ws_id}"
@@ -1067,13 +1087,15 @@ def launch_resume(ws_id: str) -> tuple[bool, str]:
 # ------------------------ MCP live check (claude mcp list) ------------------------
 
 def mcp_live_check(ws_id: str) -> tuple[int, dict]:
+    if not safe_id(ws_id):
+        return 400, {"error": "id invalide"}
     w = next((x for x in list_workspaces() if x["id"] == ws_id), None)
     if not w:
         return 404, {"error": "workspace absent"}
     try:
         r = subprocess.run(
-            ["claude", "mcp", "list"],
-            cwd=w["path"], capture_output=True, text=True, timeout=10, shell=True,
+            [resolve_cli("claude"), "mcp", "list"],
+            cwd=w["path"], capture_output=True, text=True, timeout=10,
         )
         output = (r.stdout or "") + (r.stderr or "")
         # Parsing basique : lignes avec "name: ..."
