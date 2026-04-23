@@ -88,7 +88,7 @@ def delete_template(tpl_id: str) -> tuple[int, dict]:
     d = TEMPLATES_DIR / tpl_id
     if not d.exists():
         return 404, {"error": "Template introuvable"}
-    shutil.rmtree(d)
+    _remove_dir_or_link(d)
     return 200, {"ok": True}
 
 
@@ -477,7 +477,7 @@ def delete_workspace(ws_id: str, purge: bool = False) -> tuple[int, dict]:
     if purge:
         ws_dir = WORKSPACES_DIR / ws_id
         if ws_dir.exists():
-            shutil.rmtree(ws_dir)
+            _remove_dir_or_link(ws_dir)
             notes.append(f"dossier supprimé : {ws_dir}")
         else:
             notes.append("dossier déjà absent du disque")

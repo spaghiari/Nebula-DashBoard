@@ -449,6 +449,17 @@ def sanity_check() -> dict:
     return {"findings": findings, "missing_env": missing_env}
 
 
+def _remove_dir_or_link(p: Path) -> None:
+    """shutil.rmtree refuse un symlink/junction pointant sur un dossier.
+    On tente unlink (symlink, junction, fichier) puis rmtree (vrai dossier)."""
+    try:
+        p.unlink()
+        return
+    except (IsADirectoryError, PermissionError, OSError):
+        pass
+    shutil.rmtree(p)
+
+
 OPEN_TARGETS = {
     "claude-json": CLAUDE_JSON,
     "claude-settings": CLAUDE_SETTINGS,

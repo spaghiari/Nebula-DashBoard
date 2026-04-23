@@ -254,13 +254,13 @@ def uninstall_plugin(plugin_id: str, remove_files: bool = False) -> tuple[int, d
         short = plugin_id.split("@")[0]
         for entry in (plugins_dir / plugin_id, plugins_dir / short):
             if entry.exists():
-                shutil.rmtree(entry)
+                _remove_dir_or_link(entry)
                 removed_dir = str(entry)
                 break
         if not removed_dir:
             for d in plugins_dir.iterdir() if plugins_dir.exists() else []:
                 if d.is_dir() and (plugin_id in d.name or short in d.name):
-                    shutil.rmtree(d)
+                    _remove_dir_or_link(d)
                     removed_dir = str(d)
                     break
 
@@ -402,9 +402,9 @@ def delete_skill(scope: str, name: str) -> tuple[int, dict]:
     if parent is None or not safe_id(name):
         return 400, {"error": "scope ou nom invalide"}
     d = parent / name
-    if not d.exists():
+    if not d.exists() and not d.is_symlink():
         return 404, {"error": "skill introuvable"}
-    shutil.rmtree(d)
+    _remove_dir_or_link(d)
     return 200, {"ok": True}
 
 
