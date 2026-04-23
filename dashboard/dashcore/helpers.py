@@ -339,23 +339,23 @@ def apply_template(src_dir: Path, dst_dir: Path, vars: dict) -> list[str]:
 
 
 def project_dir_for_path(path: Path) -> Path | None:
-    """Trouve le dossier ~/.claude/projects/<encodé> qui correspond à `path`."""
+    """Trouve le dossier ~/.claude/projects/<encodé> qui correspond à `path`.
+
+    Claude encode le chemin en remplaçant `:` et `\\` par `-`. On encode
+    directement le path cible plutôt que d'essayer de décoder les noms
+    de dossier (décodage ambigu dès qu'un segment contient un `-`)."""
     if not CLAUDE_PROJECTS.exists():
         return None
-    target = str(path.resolve()).lower()
-    best = None
-    best_score = 0
+    target = str(path.resolve())
+    encoded = target.replace(":", "-").replace("\\", "-").replace("/", "-")
+    candidate = CLAUDE_PROJECTS / encoded
+    if candidate.is_dir():
+        return candidate
+    enc_lower = encoded.lower()
     for d in CLAUDE_PROJECTS.iterdir():
-        if not d.is_dir():
-            continue
-        decoded = d.name.replace("-", "\\").lstrip("\\").lower()
-        decoded = re.sub(r"^([a-z])\\", r"\1:\\", decoded)
-        if decoded == target or decoded.rstrip("\\") == target.rstrip("\\"):
+        if d.is_dir() and d.name.lower() == enc_lower:
             return d
-        if target.startswith(decoded) and len(decoded) > best_score:
-            best = d
-            best_score = len(decoded)
-    return best
+    return None
 
 
 def workspace_stats(ws: dict) -> dict:
