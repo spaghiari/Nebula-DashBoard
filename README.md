@@ -1,93 +1,200 @@
-# claude-dashboard
+# Claude Workspace
 
+Un environnement local pour gérer plusieurs workspaces Claude Code depuis une
+interface web unique : MCPs, skills, plugins, templates, hooks et permissions.
 
+**100 % local** — serveur Python stdlib sur `127.0.0.1:4777`, zéro dépendance
+externe, zéro télémétrie, secrets dans `.env.local` jamais exposés au
+navigateur.
 
-## Getting started
+---
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+## Pourquoi
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+Claude Code est puissant mais sa config (MCPs, skills, permissions, hooks) vit
+éparpillée dans `~/.claude.json`, `.mcp.json` par projet, `~/.claude/skills/`,
+etc. Dès qu'on a plusieurs projets :
 
-## Add your files
+- Dupliquer/modifier un MCP → édition manuelle de N fichiers
+- Oublier un token dans un commit → fuite
+- Activer un plugin seulement sur 2 workspaces sur 5 → usine à gaz
+- Retrouver quelle session correspond à quel projet → galère
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+Ce dashboard centralise tout ça.
+
+---
+
+## Fonctionnalités
+
+- **Workspaces** — CRUD, duplication, export, lancement 1 clic (ouvre un
+  terminal `claude` dans le bon dossier)
+- **Templates** — création d'un workspace depuis un template (Python, Node,
+  audit, automation, YAML, blank) avec interpolation `{{name}}`, `{{date}}`…
+- **MCPs** — registre unique, substitution `${VAR}` depuis `.env.local`,
+  auto-sync des `.mcp.json` de chaque workspace quand un MCP change, import
+  JSON, test de connexion
+- **Skills / Agents / Commands** — scope global (`~/.claude/skills/`) ou local
+  (`<ws>/.claude/skills/`), matrice skill × workspace
+- **Plugins** — parcours du marketplace officiel, install/uninstall/enable/
+  disable via la CLI `claude plugin`, override par workspace via
+  `enabledPlugins` dans `settings.json`
+- **Sessions** — browser des sessions Claude Code passées par workspace
+- **Hooks & permissions** — éditeur pour `~/.claude/settings.json` et
+  `<ws>/.claude/settings.json`
+- **Statusline** — affiche workspace, branche git, modèle, nb de MCPs actifs
+
+---
+
+## Architecture
 
 ```
-cd existing_repo
-git remote add origin https://git.exemple.lan/erti/claude-dashboard.git
-git branch -M main
-git push -uf origin main
+claude-workspace/
+├── CLAUDE.md                 # Contexte global chargé par Claude Code
+├── .env.local.example        # Template des secrets (à copier en .env.local)
+├── .gitignore
+│
+├── dashboard/                # Le dashboard web
+│   ├── server.py             # Serveur Python stdlib (ThreadingHTTPServer)
+│   ├── index.html            # SPA (hash router, vanilla JS)
+│   └── data/
+│       └── workspaces.json   # Liste des workspaces déclarés
+│
+├── mcp/                      # Registre des MCPs
+│   ├── registry.json         # MCPs avec placeholders ${VAR}
+│   ├── import-mcps.json      # Bundle d'exemples à importer
+│   └── configs/              # Configs détaillées par MCP (optionnel)
+│
+├── memory/                   # Mémoire globale chargée via @import dans CLAUDE.md
+│   ├── profil.md             # Qui tu es
+│   ├── stack.md              # Ta stack technique
+│   ├── conventions.md        # Tes préférences de collaboration
+│   └── snippets/             # Bouts de code récurrents
+│
+├── scripts/                  # Utilitaires Windows
+│   ├── start-dashboard.bat   # Lance le serveur
+│   ├── new-workspace.bat     # Création rapide en ligne de commande
+│   ├── launch-TEMPLATE.bat   # Template de script de lancement par workspace
+│   ├── statusline.py         # Statusline Claude Code
+│   └── update-memory.bat     # Ouvre memory/global.md dans notepad
+│
+├── templates/                # Templates de workspace
+│   ├── README.md             # Format d'un template
+│   ├── blank/                # Minimal
+│   ├── dev-python/           # Projet Python (src/ + tests/ + requirements)
+│   ├── dev-node/             # Projet Node.js ESM
+│   ├── audit/                # Audit sécurité (rapports datés)
+│   ├── automation/           # Workflows / scripts d'automatisation
+│   └── config-yaml/          # Configs YAML (HA, k8s, compose…)
+│
+└── workspaces/               # Tes workspaces (vide à l'origine)
+    └── <ton-projet>/
+        ├── CLAUDE.md         # Contexte du workspace
+        ├── .mcp.json         # Généré par le dashboard
+        └── .claude/
+            ├── settings.json # Hooks + permissions + enabledPlugins
+            ├── skills/       # Skills locales
+            ├── agents/       # Subagents
+            └── commands/     # Slash commands
 ```
 
-## Integrate with your tools
+---
 
-* [Set up project integrations](https://git.exemple.lan/erti/claude-dashboard/-/settings/integrations)
+## Prérequis
 
-## Collaborate with your team
+- **Windows 10/11** (adaptation Linux/macOS possible, scripts `.bat` à porter)
+- **Python 3.10+** (stdlib uniquement — aucun `pip install` requis)
+- **Node.js** + **npx** (pour les MCPs qui s'installent via `npx -y …`)
+- **Claude Code CLI** (`npm install -g @anthropic-ai/claude-code`)
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+---
 
 ## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```cmd
+git clone https://git.exemple.lan/erti/claude-dashboard.git C:\claude-workspace
+cd C:\claude-workspace
+copy .env.local.example .env.local
+notepad .env.local              :: renseigne tes secrets
+scripts\start-dashboard.bat
+```
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+Puis ouvre http://127.0.0.1:4777/
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+---
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+## Le flux `.env.local` → `${VAR}` → `.mcp.json`
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+1. Tu renseignes tes secrets dans `.env.local` (jamais committé, jamais
+   envoyé au navigateur).
+2. Dans le dashboard, tu déclares un MCP avec des placeholders :
+   ```json
+   "env": { "OPNSENSE_API_KEY": "${OPNSENSE_API_KEY}" }
+   ```
+3. Quand le dashboard écrit un `.mcp.json` dans un workspace, il substitue
+   chaque `${VAR}` par la valeur de `.env.local`.
+4. Claude Code lit ce `.mcp.json` local au démarrage — il ne voit jamais
+   le placeholder.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+---
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+## Ajouter un workspace
 
-## License
-For open source projects, say how it is licensed.
+**Via le dashboard** : bouton "+ Nouveau", choisir un template, remplir
+label/description/outils.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+**Via la ligne de commande** : `scripts\new-workspace.bat` (interactif).
+
+**Manuellement** : voir `AJOUTER-WORKSPACE.md`.
+
+---
+
+## Ajouter un template
+
+1. `cp -r templates/blank templates/mon-template`
+2. Éditer `.template.json` (label, description, emoji)
+3. Éditer `CLAUDE.md` (utiliser `{{name}}`, `{{label}}`, `{{description}}`,
+   `{{tools}}`, `{{date}}`, `{{emoji}}`)
+4. Recharger le dashboard — le template apparaît dans le sélecteur.
+
+Détails complets dans `templates/README.md`.
+
+---
+
+## Ajouter un MCP
+
+**Via le dashboard** : MCPs → "+ Nouveau MCP" ou "↧ Importer JSON".
+
+Un import JSON ressemble à :
+
+```json
+{
+  "mcpServers": {
+    "mon-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@org/mon-mcp"],
+      "env": { "API_KEY": "${MON_API_KEY}" }
+    }
+  }
+}
+```
+
+Puis dans le panneau de scopes : choisir sur quels workspaces il s'applique.
+Les `.mcp.json` concernés sont régénérés immédiatement.
+
+---
+
+## Sécurité
+
+- `.env.local` est dans `.gitignore` dès le départ
+- Le serveur bind sur `127.0.0.1` uniquement (jamais exposé au LAN)
+- Pas d'auth : il est parti du principe qu'une seule personne accède à la
+  machine locale. Si ce n'est pas ton cas, ajoute un reverse-proxy avec auth.
+- Les valeurs résolues de `${VAR}` ne quittent jamais le serveur — le
+  navigateur voit le placeholder, pas la valeur.
+
+---
+
+## Licence
+
+MIT — fais-en ce que tu veux.
