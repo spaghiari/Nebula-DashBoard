@@ -2214,6 +2214,18 @@ function renderToolsPage() {
     </div>
 
     <h2>
+      Variables d'environnement (.env.local)
+      <span class="h2-actions">
+        <button class="h2-btn" id="envAddBtn">+ Nouvelle variable</button>
+        <button class="h2-btn" id="envReloadBtn">↻ Recharger</button>
+      </span>
+    </h2>
+    <div class="row-meta" style="font-size: 12px; color: var(--fg-dim); margin-bottom: 10px;">
+      Valeurs lues/écrites dans <code class="inline">.env.local</code>. Utilisées pour résoudre les <code class="inline">${VAR}</code> dans les MCPs. Les commentaires existants du fichier sont préservés.
+    </div>
+    <div id="envList" class="list"></div>
+
+    <h2>
       Backups Claude config
       <span class="h2-actions"><button class="h2-btn" id="backupBtn">💾 Backup maintenant</button></span>
     </h2>
@@ -2256,8 +2268,11 @@ function renderToolsPage() {
   };
   renderBackupsList();
   renderSnippets();
+  renderEnvEditor();
   renderGlobalSkills();
   renderPluginsInTools();
+  document.getElementById('envAddBtn').onclick = () => envEditRow(null, '');
+  document.getElementById('envReloadBtn').onclick = renderEnvEditor;
   document.getElementById('newGlobalSkillBtn').onclick = () => skillForm('global');
   document.getElementById('globalHooksBtn').onclick = () => hooksForm('global', null);
   document.getElementById('cleanupOrphansBtn').onclick = async () => {
@@ -2265,6 +2280,82 @@ function renderToolsPage() {
     try {
       const r = await API.post('/api/cleanup/orphan-bats', {});
       toast(r.removed.length ? `Supprimés : ${r.removed.join(', ')}` : 'Rien à supprimer');
+    } catch (e) { toast(e.message, true); }
+  };
+}
+
+async function renderEnvEditor() {
+  const c = document.getElementById('envList');
+  if (!c) return;
+  c.innerHTML = '<div class="empty">Chargement…</div>';
+  try {
+    const r = await API.get('/api/env/values');
+    const entries = Object.entries(r.values || {}).sort((a, b) => a[0].localeCompare(b[0]));
+    if (!entries.length) {
+      c.innerHTML = '<div class="empty">Aucune variable. Clique "+ Nouvelle variable" pour en ajouter.</div>';
+      return;
+    }
+    c.innerHTML = '';
+    for (const [key, value] of entries) {
+      const row = document.createElement('div');
+      row.className = 'list-item';
+      row.innerHTML = `
+        <div class="info" style="flex:1; min-width:0;">
+          <div class="name"><code class="inline">${escapeHtml(key)}</code></div>
+          <div class="meta" style="display:flex; gap:6px; align-items:center; margin-top:4px;">
+            <input type="password" value="${escapeHtml(value)}" data-env-value style="flex:1; padding:4px 8px; font-family:monospace; font-size:12px; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--fg); min-width:0;" readonly>
+            <button class="h2-btn" data-toggle title="Afficher/masquer">👁</button>
+          </div>
+        </div>
+        <div class="actions" style="display:flex; gap:6px;">
+          <button class="h2-btn" data-edit>✎ Éditer</button>
+          <button class="h2-btn" data-del title="Supprimer">🗑</button>
+        </div>
+      `;
+      const input = row.querySelector('[data-env-value]');
+      row.querySelector('[data-toggle]').onclick = () => {
+        input.type = input.type === 'password' ? 'text' : 'password';
+      };
+      row.querySelector('[data-edit]').onclick = () => envEditRow(key, value);
+      row.querySelector('[data-del]').onclick = async () => {
+        if (!confirm(`Supprimer la variable "${key}" de .env.local ?`)) return;
+        try {
+          await API.del('/api/env/' + encodeURIComponent(key));
+          toast('Variable supprimée');
+          renderEnvEditor();
+        } catch (e) { toast(e.message, true); }
+      };
+      c.appendChild(row);
+    }
+  } catch (e) {
+    c.innerHTML = '<div class="empty">Erreur : ' + escapeHtml(e.message) + '</div>';
+  }
+}
+
+function envEditRow(existingKey, existingValue) {
+  const isNew = !existingKey;
+  const body = document.createElement('div');
+  body.innerHTML = `
+    <div class="form-row"><label>Clé</label><input id="env-key" placeholder="ex: OPNSENSE_API_KEY" ${isNew ? '' : 'readonly'} value="${escapeHtml(existingKey || '')}"></div>
+    <div class="form-row"><label>Valeur</label><input id="env-value" placeholder="valeur" value="${escapeHtml(existingValue || '')}"></div>
+    <div class="form-hint" style="font-size:11px; color:var(--fg-dim); margin-top:6px;">Nommage : lettres majuscules, chiffres, underscore (A-Z, 0-9, _). Pas de saut de ligne.</div>
+  `;
+  const footer = document.createElement('div');
+  footer.innerHTML = `
+    <button class="btn" id="envCancelBtn">Annuler</button>
+    <button class="btn primary" id="envSaveBtn">Enregistrer</button>
+  `;
+  openModal({ title: isNew ? 'Nouvelle variable' : `Éditer ${existingKey}`, body, footer });
+  footer.querySelector('#envCancelBtn').onclick = closeModal;
+  footer.querySelector('#envSaveBtn').onclick = async () => {
+    const key = body.querySelector('#env-key').value.trim();
+    const value = body.querySelector('#env-value').value;
+    if (!key) { toast('Clé requise', true); return; }
+    try {
+      await API.post('/api/env', { key, value });
+      toast('Enregistré');
+      closeModal();
+      renderEnvEditor();
     } catch (e) { toast(e.message, true); }
   };
 }
