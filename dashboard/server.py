@@ -61,6 +61,16 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log.info("%s %s", self.address_string(), fmt % args)
 
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except Exception:
+            log.exception("Unhandled exception in request handler")
+            try:
+                self._send_json(500, {"error": "internal server error"})
+            except Exception:
+                pass
+
     def _send_json(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -94,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         try:
             return json.loads(raw.decode("utf-8"))
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return None
 
     def do_GET(self):

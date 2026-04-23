@@ -449,6 +449,17 @@ def sanity_check() -> dict:
     return {"findings": findings, "missing_env": missing_env}
 
 
+OPEN_TARGETS = {
+    "claude-json": CLAUDE_JSON,
+    "claude-settings": CLAUDE_SETTINGS,
+    "root-claude-md": ROOT / "CLAUDE.md",
+    "registry": MCP_REGISTRY,
+    "env-local": ENV_FILE,
+    "workspaces-json": WORKSPACES_JSON,
+    "global-memory": ROOT / "memory",
+}
+
+
 def open_target(key: str) -> tuple[bool, str]:
     if key.startswith("workspace-claude-md:"):
         ws_id = key.split(":", 1)[1]
