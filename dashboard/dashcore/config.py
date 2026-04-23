@@ -50,5 +50,8 @@ STATIC_TYPES = {
     ".png":  "image/png",
 }
 
+ALLOWED_TRANSPORTS = ("stdio", "http", "sse")
+ALLOWED_STATUS = ("disponible", "à configurer", "désactivé")
+
 _MUTATION_LOCK = threading.Lock()
 log = logging.getLogger("dashboard")
