@@ -1,0 +1,5 @@
+{
+  "label": "Dev Node.js",
+  "description": "Projet Node.js — ESM par défaut, vitest ou node --test",
+  "emoji": "🟢"
+}

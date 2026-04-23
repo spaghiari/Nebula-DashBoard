@@ -1,0 +1,79 @@
+{
+  "_note": "Bundle d'exemples de MCPs. À coller dans MCPs → ↧ Importer JSON du dashboard. Ne copie que le bloc mcpServers ci-dessous. Renseigne d'abord les variables référencées dans .env.local.",
+
+  "_required_env_vars": {
+    "OPNSENSE_URL": "https://opnsense.example.lan:4443",
+    "OPNSENSE_API_KEY": "(ton token OPNsense)",
+    "OPNSENSE_API_SECRET": "(ton secret OPNsense)",
+    "OPNSENSE_VERIFY_SSL": "false",
+    "N8N_URL": "https://n8n.example.lan",
+    "N8N_TOKEN": "(ton JWT Bearer n8n)",
+    "WIKIJS_API_URL": "https://wiki.example.com",
+    "WIKIJS_TOKEN": "(ton JWT Wiki.js)"
+  },
+
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic-ai/mcp-server-filesystem",
+        "C:\\claude-workspace\\workspaces"
+      ],
+      "env": {}
+    },
+
+    "opnsense": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@richard-stovall/opnsense-mcp-server"
+      ],
+      "env": {
+        "OPNSENSE_URL": "${OPNSENSE_URL}",
+        "OPNSENSE_API_KEY": "${OPNSENSE_API_KEY}",
+        "OPNSENSE_API_SECRET": "${OPNSENSE_API_SECRET}",
+        "OPNSENSE_VERIFY_SSL": "${OPNSENSE_VERIFY_SSL}"
+      }
+    },
+
+    "n8n": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "supergateway",
+        "--streamableHttp",
+        "${N8N_URL}/mcp-server/http",
+        "--header",
+        "Authorization: Bearer ${N8N_TOKEN}"
+      ],
+      "env": {}
+    },
+
+    "wikijs": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "wikijs-mcp",
+        "server"
+      ],
+      "env": {
+        "WIKIJS_API_URL": "${WIKIJS_API_URL}",
+        "WIKIJS_TOKEN": "${WIKIJS_TOKEN}"
+      }
+    }
+  },
+
+  "_scope_suggestions": {
+    "filesystem": ["*"],
+    "opnsense": ["audit"],
+    "n8n": ["n8n"],
+    "wikijs": ["*"]
+  }
+}

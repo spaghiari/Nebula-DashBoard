@@ -1,0 +1,5 @@
+{
+  "label": "Configs YAML",
+  "description": "Gestion de configurations YAML (Home Assistant, k8s, compose, Ansible…)",
+  "emoji": "📐"
+}

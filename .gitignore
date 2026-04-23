@@ -1,0 +1,21 @@
+# Secrets — jamais committé
+.env.local
+
+# Backups & temp
+*.bak
+*.tmp
+
+# Workspaces personnels (chacun les siens)
+workspaces/*/
+!workspaces/.gitkeep
+
+# Fichiers .mcp.json générés par le dashboard (contiennent les secrets résolus)
+workspaces/*/.mcp.json
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Backups du dashboard
+dashboard/data/*.bak
+mcp/*.bak
