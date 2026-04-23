@@ -1,4 +1,4 @@
-# Claude Workspace
+# 🧩 Claude Workspace
 
 Un environnement local pour gérer plusieurs workspaces Claude Code depuis une
 interface web unique : MCPs, skills, plugins, templates, hooks et permissions.
@@ -9,13 +9,13 @@ navigateur.
 
 ---
 
-## Pourquoi
+## 🎯 Pourquoi
 
-Claude Code est puissant mais sa config (MCPs, skills, permissions, hooks) vit
-éparpillée dans `~/.claude.json`, `.mcp.json` par projet, `~/.claude/skills/`,
-etc. Dès qu'on a plusieurs projets :
+Claude Code est puissant, mais sa configuration (MCPs, skills, permissions,
+hooks) vit éparpillée dans `~/.claude.json`, un `.mcp.json` par projet,
+`~/.claude/skills/`, etc. Dès qu'on a plusieurs projets :
 
-- Dupliquer/modifier un MCP → édition manuelle de N fichiers
+- Dupliquer ou modifier un MCP → édition manuelle de N fichiers
 - Oublier un token dans un commit → fuite
 - Activer un plugin seulement sur 2 workspaces sur 5 → usine à gaz
 - Retrouver quelle session correspond à quel projet → galère
@@ -24,28 +24,29 @@ Ce dashboard centralise tout ça.
 
 ---
 
-## Fonctionnalités
+## ✨ Fonctionnalités
 
-- **Workspaces** — CRUD, duplication, export, lancement 1 clic (ouvre un
-  terminal `claude` dans le bon dossier)
+- **Workspaces** — CRUD, duplication, export, lancement en un clic (ouvre un
+  terminal `claude` dans le bon dossier).
 - **Templates** — création d'un workspace depuis un template (Python, Node,
   audit, automation, YAML, blank) avec interpolation `{{name}}`, `{{date}}`…
 - **MCPs** — registre unique, substitution `${VAR}` depuis `.env.local`,
   auto-sync des `.mcp.json` de chaque workspace quand un MCP change, import
-  JSON, test de connexion
+  JSON, test de connexion.
 - **Skills / Agents / Commands** — scope global (`~/.claude/skills/`) ou local
-  (`<ws>/.claude/skills/`), matrice skill × workspace
+  (`<ws>/.claude/skills/`), matrice skill × workspace.
 - **Plugins** — parcours du marketplace officiel, install/uninstall/enable/
   disable via la CLI `claude plugin`, override par workspace via
-  `enabledPlugins` dans `settings.json`
-- **Sessions** — browser des sessions Claude Code passées par workspace
+  `enabledPlugins` dans `settings.json`.
+- **Sessions** — browser des sessions Claude Code passées par workspace.
 - **Hooks & permissions** — éditeur pour `~/.claude/settings.json` et
-  `<ws>/.claude/settings.json`
-- **Statusline** — affiche workspace, branche git, modèle, nb de MCPs actifs
+  `<ws>/.claude/settings.json`.
+- **Statusline** — affiche workspace, branche git, modèle et nombre de MCPs
+  actifs.
 
 ---
 
-## Architecture
+## 🗂 Architecture
 
 ```
 claude-workspace/
@@ -78,7 +79,6 @@ claude-workspace/
 │   └── update-memory.bat     # Ouvre memory/global.md dans notepad
 │
 ├── templates/                # Templates de workspace
-│   ├── README.md             # Format d'un template
 │   ├── blank/                # Minimal
 │   ├── dev-python/           # Projet Python (src/ + tests/ + requirements)
 │   ├── dev-node/             # Projet Node.js ESM
@@ -99,16 +99,16 @@ claude-workspace/
 
 ---
 
-## Prérequis
+## 📋 Prérequis
 
-- **Windows 10/11** (adaptation Linux/macOS possible, scripts `.bat` à porter)
-- **Python 3.10+** (stdlib uniquement — aucun `pip install` requis)
-- **Node.js** + **npx** (pour les MCPs qui s'installent via `npx -y …`)
-- **Claude Code CLI** (`npm install -g @anthropic-ai/claude-code`)
+- **Windows 10/11** — adaptation Linux/macOS possible, scripts `.bat` à porter
+- **Python 3.10+** — stdlib uniquement, aucun `pip install` requis
+- **Node.js** + **npx** — pour les MCPs qui s'installent via `npx -y …`
+- **Claude Code CLI** — `npm install -g @anthropic-ai/claude-code`
 
 ---
 
-## Installation
+## 🚀 Installation
 
 ```cmd
 git clone https://git.exemple.lan/erti/claude-dashboard.git C:\claude-workspace
@@ -122,7 +122,7 @@ Puis ouvre http://127.0.0.1:4777/
 
 ---
 
-## Le flux `.env.local` → `${VAR}` → `.mcp.json`
+## 🔐 Le flux `.env.local` → `${VAR}` → `.mcp.json`
 
 1. Tu renseignes tes secrets dans `.env.local` (jamais committé, jamais
    envoyé au navigateur).
@@ -137,34 +137,32 @@ Puis ouvre http://127.0.0.1:4777/
 
 ---
 
-## Ajouter un workspace
+## ➕ Ajouter un workspace
 
-**Via le dashboard** : bouton "+ Nouveau", choisir un template, remplir
-label/description/outils.
-
-**Via la ligne de commande** : `scripts\new-workspace.bat` (interactif).
-
-**Manuellement** : voir `AJOUTER-WORKSPACE.md`.
+- **Dashboard** : bouton *+ Nouveau*, choisir un template, remplir
+  label/description/outils.
+- **CLI** : `scripts\new-workspace.bat` (interactif).
+- **Manuel** : voir `AJOUTER-WORKSPACE.md`.
 
 ---
 
-## Ajouter un template
+## 🧱 Ajouter un template
 
 1. `cp -r templates/blank templates/mon-template`
-2. Éditer `.template.json` (label, description, emoji)
-3. Éditer `CLAUDE.md` (utiliser `{{name}}`, `{{label}}`, `{{description}}`,
-   `{{tools}}`, `{{date}}`, `{{emoji}}`)
+2. Éditer `.template.json` (label, description, emoji).
+3. Éditer `CLAUDE.md` en utilisant les placeholders `{{name}}`, `{{label}}`,
+   `{{description}}`, `{{tools}}`, `{{date}}`, `{{emoji}}`.
 4. Recharger le dashboard — le template apparaît dans le sélecteur.
 
 Détails complets dans `templates/README.md`.
 
 ---
 
-## Ajouter un MCP
+## 🔌 Ajouter un MCP
 
-**Via le dashboard** : MCPs → "+ Nouveau MCP" ou "↧ Importer JSON".
+Via le dashboard : **MCPs → + Nouveau MCP** ou **↧ Importer JSON**.
 
-Un import JSON ressemble à :
+Format d'import :
 
 ```json
 {
@@ -179,22 +177,22 @@ Un import JSON ressemble à :
 }
 ```
 
-Puis dans le panneau de scopes : choisir sur quels workspaces il s'applique.
-Les `.mcp.json` concernés sont régénérés immédiatement.
+Dans le panneau de scopes, choisir les workspaces concernés. Les `.mcp.json`
+correspondants sont régénérés immédiatement.
 
 ---
 
-## Sécurité
+## 🛡 Sécurité
 
-- `.env.local` est dans `.gitignore` dès le départ
-- Le serveur bind sur `127.0.0.1` uniquement (jamais exposé au LAN)
-- Pas d'auth : il est parti du principe qu'une seule personne accède à la
-  machine locale. Si ce n'est pas ton cas, ajoute un reverse-proxy avec auth.
-- Les valeurs résolues de `${VAR}` ne quittent jamais le serveur — le
+- `.env.local` est dans `.gitignore` dès le départ.
+- Le serveur bind sur `127.0.0.1` uniquement — jamais exposé au LAN.
+- Pas d'authentification : on part du principe qu'une seule personne accède à
+  la machine. Sinon, ajoute un reverse-proxy avec auth.
+- Les valeurs résolues des `${VAR}` ne quittent jamais le serveur : le
   navigateur voit le placeholder, pas la valeur.
 
 ---
 
-## Licence
+## 📄 Licence
 
 MIT — fais-en ce que tu veux.
