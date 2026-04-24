@@ -22,5 +22,11 @@
 - Jamais de mot de passe / token en clair dans les rapports
 - Nom des rapports : `YYYY-MM-DD-cible.md`
 
-## Template de rapport
-Voir `reports/_template.md`.
+## Templates de rapport
+- `reports/_template.md` — rapport Markdown structuré (notes internes, checklist)
+- `reports/_template.html` — rapport HTML rendu pro (livrable client/audit final)
+
+Pour un rapport HTML, remplace toutes les variables `{{variable}}` par les valeurs réelles.
+Variables obligatoires : `{{type}}`, `{{cible}}`, `{{date}}`, `{{domaine}}`, `{{score}}`,
+`{{nb_critique}}`, `{{nb_important}}`, `{{nb_amelioration}}`.
+Sections facultatives : bandeau révision (commenté par défaut), activité d'attaques.

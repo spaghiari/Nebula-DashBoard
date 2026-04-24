@@ -2295,37 +2295,74 @@ async function renderEnvEditor() {
       c.innerHTML = '<div class="empty">Aucune variable. Clique "+ Nouvelle variable" pour en ajouter.</div>';
       return;
     }
-    c.innerHTML = '';
+
+    // Regrouper par préfixe (premier segment avant _)
+    const groups = {};
     for (const [key, value] of entries) {
-      const row = document.createElement('div');
-      row.className = 'list-item';
-      row.innerHTML = `
-        <div class="info" style="flex:1; min-width:0;">
-          <div class="name"><code class="inline">${escapeHtml(key)}</code></div>
-          <div class="meta" style="display:flex; gap:6px; align-items:center; margin-top:4px;">
-            <input type="password" value="${escapeHtml(value)}" data-env-value style="flex:1; padding:4px 8px; font-family:monospace; font-size:12px; background:var(--bg); border:1px solid var(--border); border-radius:4px; color:var(--fg); min-width:0;" readonly>
-            <button class="h2-btn" data-toggle title="Afficher/masquer">👁</button>
-          </div>
-        </div>
-        <div class="actions" style="display:flex; gap:6px;">
-          <button class="h2-btn" data-edit>✎ Éditer</button>
-          <button class="h2-btn" data-del title="Supprimer">🗑</button>
-        </div>
-      `;
-      const input = row.querySelector('[data-env-value]');
-      row.querySelector('[data-toggle]').onclick = () => {
-        input.type = input.type === 'password' ? 'text' : 'password';
-      };
-      row.querySelector('[data-edit]').onclick = () => envEditRow(key, value);
-      row.querySelector('[data-del]').onclick = async () => {
-        if (!confirm(`Supprimer la variable "${key}" de .env.local ?`)) return;
-        try {
-          await API.del('/api/env/' + encodeURIComponent(key));
-          toast('Variable supprimée');
-          renderEnvEditor();
-        } catch (e) { toast(e.message, true); }
-      };
-      c.appendChild(row);
+      const prefix = key.includes('_') ? key.split('_')[0] : '—';
+      (groups[prefix] = groups[prefix] || []).push([key, value]);
+    }
+
+    c.innerHTML = '';
+
+    const tableStyle = 'width:100%; border-collapse:collapse; font-size:13px;';
+    const thStyle = 'text-align:left; padding:5px 10px; color:var(--fg-dim); font-weight:600; font-size:11px; text-transform:uppercase; border-bottom:1px solid var(--border);';
+    const tdStyle = 'padding:5px 10px; vertical-align:middle;';
+    const trHover = 'onmouseover="this.style.background=\'var(--bg-hover)\'" onmouseout="this.style.background=\'\'"';
+
+    for (const [prefix, vars] of Object.entries(groups).sort()) {
+      const section = document.createElement('div');
+      section.style.cssText = 'margin-bottom:18px;';
+
+      const header = document.createElement('div');
+      header.style.cssText = 'font-size:11px; font-weight:700; text-transform:uppercase; color:var(--fg-dim); letter-spacing:.06em; padding:4px 2px 6px; border-bottom:2px solid var(--border); margin-bottom:2px;';
+      header.textContent = prefix;
+      section.appendChild(header);
+
+      const table = document.createElement('table');
+      table.style.cssText = tableStyle;
+      table.innerHTML = `<colgroup><col style="width:220px"><col><col style="width:110px"></colgroup>`;
+
+      for (const [key, value] of vars) {
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid var(--border)';
+        tr.setAttribute('onmouseover', "this.style.background='var(--bg-hover)'");
+        tr.setAttribute('onmouseout', "this.style.background=''");
+        tr.innerHTML = `
+          <td style="${tdStyle}"><code class="inline" style="font-size:12px;">${escapeHtml(key)}</code></td>
+          <td style="${tdStyle}">
+            <div style="display:flex; gap:6px; align-items:center;">
+              <input type="password" value="${escapeHtml(value)}" data-env-value
+                style="flex:1; padding:3px 7px; font-family:monospace; font-size:12px;
+                       background:var(--bg); border:1px solid var(--border); border-radius:4px;
+                       color:var(--fg); min-width:0; max-width:420px;" readonly>
+              <button class="h2-btn" data-toggle title="Afficher/masquer" style="padding:2px 6px;">👁</button>
+            </div>
+          </td>
+          <td style="${tdStyle} text-align:right;">
+            <div style="display:flex; gap:4px; justify-content:flex-end;">
+              <button class="h2-btn" data-edit style="padding:2px 8px;">✎</button>
+              <button class="h2-btn" data-del style="padding:2px 8px;">🗑</button>
+            </div>
+          </td>
+        `;
+        const input = tr.querySelector('[data-env-value]');
+        tr.querySelector('[data-toggle]').onclick = () => {
+          input.type = input.type === 'password' ? 'text' : 'password';
+        };
+        tr.querySelector('[data-edit]').onclick = () => envEditRow(key, value);
+        tr.querySelector('[data-del]').onclick = async () => {
+          if (!confirm(`Supprimer "${key}" de .env.local ?`)) return;
+          try {
+            await API.del('/api/env/' + encodeURIComponent(key));
+            toast('Variable supprimée');
+            renderEnvEditor();
+          } catch (e) { toast(e.message, true); }
+        };
+        table.appendChild(tr);
+      }
+      section.appendChild(table);
+      c.appendChild(section);
     }
   } catch (e) {
     c.innerHTML = '<div class="empty">Erreur : ' + escapeHtml(e.message) + '</div>';
@@ -2338,7 +2375,7 @@ function envEditRow(existingKey, existingValue) {
   body.innerHTML = `
     <div class="form-row"><label>Clé</label><input id="env-key" placeholder="ex: OPNSENSE_API_KEY" ${isNew ? '' : 'readonly'} value="${escapeHtml(existingKey || '')}"></div>
     <div class="form-row"><label>Valeur</label><input id="env-value" placeholder="valeur" value="${escapeHtml(existingValue || '')}"></div>
-    <div class="form-hint" style="font-size:11px; color:var(--fg-dim); margin-top:6px;">Nommage : lettres majuscules, chiffres, underscore (A-Z, 0-9, _). Pas de saut de ligne.</div>
+    <div class="form-hint" style="font-size:11px; color:var(--fg-dim); margin-top:6px;">Nommage : lettres (A-Z, a-z), chiffres, underscore. Ne commence pas par un chiffre. Pas de saut de ligne.</div>
   `;
   const footer = document.createElement('div');
   footer.innerHTML = `
@@ -2821,7 +2858,7 @@ function importMcpForm() {
   const form = document.createElement('div');
   form.innerHTML = `
     <div class="form-row">
-      <label>Objet <code class="inline">{"mcpServers":{...}}</code></label>
+      <label>Objet MCP direct <code class="inline">{"id":"…","command":"…"}</code> ou format Claude <code class="inline">{"mcpServers":{…}}</code></label>
       <textarea id="f-json" style="min-height:260px; font-size:12px;"></textarea>
     </div>
     <div class="form-row">
