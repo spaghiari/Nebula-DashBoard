@@ -274,21 +274,45 @@ class Handler(BaseHTTPRequestHandler):
 
         if p == "/api/mcps/import":
             results = []
+            ws_override = body.get("workspaces", [])
+
+            # Format registre direct : objet avec "id" ou tableau d'objets
+            if "id" in body:
+                entries = [body]
+            elif isinstance(body.get("mcps"), list):
+                entries = body["mcps"]
+            else:
+                entries = None
+
+            if entries is not None:
+                for cfg in entries:
+                    mcp_id = cfg.get("id", "")
+                    if not safe_id(mcp_id):
+                        results.append({"id": mcp_id, "ok": False, "error": "id invalide"}); continue
+                    mcp = dict(cfg)
+                    if ws_override:
+                        mcp["workspaces"] = ws_override
+                    mcp.setdefault("status", "disponible")
+                    s, r = add_or_update_mcp(mcp)
+                    results.append({"id": mcp_id, "ok": s < 400, **r})
+                self._send_json(200, {"ok": True, "results": results}); return
+
+            # Format Claude : {"mcpServers": {"name": {...}}}
             servers = body.get("mcpServers") or body.get("servers") or {}
             if not isinstance(servers, dict):
-                self._send_json(400, {"error":"Attendu: objet mcpServers"}); return
+                self._send_json(400, {"error": "Format non reconnu. Coller soit un objet MCP direct (avec \"id\"), soit {\"mcpServers\":{...}}"}); return
             for name, cfg in servers.items():
                 if not safe_id(name):
                     results.append({"id": name, "ok": False, "error": "id invalide"}); continue
                 mcp = {
                     "id": name,
-                    "name": name,
-                    "transport": cfg.get("type") or ("http" if cfg.get("url") else "stdio"),
+                    "name": cfg.get("name", name),
+                    "transport": cfg.get("transport") or cfg.get("type") or ("http" if cfg.get("url") else "stdio"),
                     "command": cfg.get("command", ""),
                     "args": cfg.get("args", []),
                     "env": cfg.get("env", {}),
                     "url": cfg.get("url", ""),
-                    "workspaces": body.get("workspaces", []),
+                    "workspaces": ws_override or cfg.get("workspaces", []),
                     "status": "disponible",
                 }
                 s, r = add_or_update_mcp(mcp)

@@ -113,7 +113,7 @@ def load_env_local() -> dict:
 def set_env_var(key: str, value: str) -> tuple[int, dict]:
     """Upsert une clé dans .env.local en préservant les commentaires existants."""
     if not key or not ENV_KEY_RE.match(key):
-        return 400, {"error": "clé invalide (A-Z, 0-9, _, ne commence pas par un chiffre)"}
+        return 400, {"error": "clé invalide (lettres, chiffres, underscore ; ne commence pas par un chiffre)"}
     if "\n" in value or "\r" in value:
         return 400, {"error": "la valeur contient un saut de ligne"}
 

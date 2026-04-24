@@ -34,6 +34,19 @@ from dashcore.helpers import *
 from dashcore.api_workspaces import list_workspaces, _workspace_settings_path
 
 
+def _remove_dir_or_link(p: Path) -> None:
+    if os.path.islink(p) or p.is_symlink():
+        p.unlink()
+    elif p.is_dir():
+        try:
+            shutil.rmtree(p)
+        except OSError:
+            # Junction point détecté tardivement (Windows)
+            p.unlink()
+    elif p.exists():
+        p.unlink()
+
+
 def list_plugins() -> dict:
     settings = read_json(CLAUDE_SETTINGS, {}) or {}
     enabled = settings.get("enabledPlugins") or {}

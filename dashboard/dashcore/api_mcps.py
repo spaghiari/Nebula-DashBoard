@@ -81,6 +81,16 @@ def mcp_live_check(ws_id: str) -> tuple[int, dict]:
         return 500, {"error": str(e)}
 
 
+_INVISIBLE = re.compile(r"[​‌‍‪‫‬‭‮⁠  ﻿]")
+
+def _si(s: str) -> str:
+    """Strip invisible Unicode directional/zero-width characters from a string."""
+    return _INVISIBLE.sub("", s)
+
+def _si_list(lst: list) -> list:
+    return [_si(x) if isinstance(x, str) else x for x in lst]
+
+
 def clean_mcp_payload(payload: dict) -> tuple[dict, str | None]:
     mcp_id = (payload.get("id") or "").strip()
     if not safe_id(mcp_id):
@@ -91,8 +101,8 @@ def clean_mcp_payload(payload: dict) -> tuple[dict, str | None]:
         "name": (payload.get("name") or mcp_id).strip(),
         "description": (payload.get("description") or "").strip(),
         "transport": (payload.get("transport") or "stdio").strip(),
-        "command": (payload.get("command") or "").strip(),
-        "args": payload.get("args") or [],
+        "command": _si((payload.get("command") or "").strip()),
+        "args": _si_list(payload.get("args") or []),
         "env": payload.get("env") or {},
         "url": (payload.get("url") or "").strip(),
         "workspaces": payload.get("workspaces") or [],

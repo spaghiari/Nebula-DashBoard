@@ -38,7 +38,7 @@ SAFE_PLUGIN_SPEC = re.compile(r"^[a-zA-Z0-9@/_.-]{1,120}$")
 ENV_VAR_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)\}")
 BAT_UNSAFE = re.compile(r'[&|<>^"%\r\n]')
 PATH_UNSAFE = re.compile(r'["\r\n]')
-ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
 STATIC_TYPES = {
     ".html": "text/html; charset=utf-8",

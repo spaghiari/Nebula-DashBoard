@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audit {{type}} — {{cible}} — {{date}}</title>
+<style>
+  :root {
+    --red:    #e53e3e;
+    --orange: #dd6b20;
+    --blue:   #3182ce;
+    --green:  #38a169;
+    --gray:   #718096;
+    --bg:     #f7fafc;
+    --card:   #ffffff;
+    --border: #e2e8f0;
+    --text:   #1a202c;
+    --text2:  #4a5568;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── Header ── */
+  .report-header {
+    background: linear-gradient(135deg, #1a202c 0%, #2d3748 60%, #1a365d 100%);
+    color: #fff;
+    padding: 48px 60px 36px;
+    position: relative;
+    overflow: hidden;
+  }
+  .report-header::before {
+    content: '';
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 300px; height: 300px;
+    background: radial-gradient(circle, rgba(49,130,206,0.15) 0%, transparent 70%);
+    border-radius: 50%;
+  }
+  .header-badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #90cdf4;
+    margin-bottom: 16px;
+  }
+  .header-badge::before { content: '🛡'; margin-right: 4px; }
+  .report-header h1 { font-size: 32px; font-weight: 700; margin-bottom: 8px; }
+  .report-header .subtitle { color: #a0aec0; font-size: 15px; margin-bottom: 24px; }
+  .header-meta {
+    display: flex; gap: 32px; flex-wrap: wrap;
+    border-top: 1px solid rgba(255,255,255,0.1);
+    padding-top: 20px; margin-top: 20px;
+  }
+  .header-meta dt { font-size: 11px; color: #718096; text-transform: uppercase; letter-spacing: 0.5px; }
+  .header-meta dd { font-weight: 600; color: #e2e8f0; font-size: 13px; margin-top: 2px; }
+
+  /* ── Bandeau révision (optionnel — retirer si pas de mise à jour) ── */
+  .revision-banner {
+    background: linear-gradient(90deg, #276749, #2c5282);
+    color: #fff;
+    padding: 10px 60px;
+    font-size: 12px;
+    display: flex; align-items: center; gap: 10px;
+  }
+
+  /* ── Layout ── */
+  .container { max-width: 1160px; margin: 0 auto; padding: 40px 24px; }
+  .section { margin-bottom: 48px; }
+  .section-title {
+    font-size: 20px; font-weight: 700;
+    border-left: 4px solid var(--blue);
+    padding-left: 12px; margin-bottom: 20px;
+    color: var(--text);
+  }
+  .separator { height: 1px; background: var(--border); margin: 40px 0; }
+
+  /* ── Score cards ── */
+  .score-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+  .score-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px; text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  .score-card .val { font-size: 36px; font-weight: 800; line-height: 1; margin-bottom: 6px; }
+  .score-card .lbl { font-size: 12px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.5px; }
+  .score-card.danger .val { color: var(--red);    }
+  .score-card.warn   .val { color: var(--orange); }
+  .score-card.ok     .val { color: var(--green);  }
+  .score-card.info   .val { color: var(--blue);   }
+
+  /* ── Gauge ── */
+  .risk-gauge {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 28px 32px; margin-bottom: 40px;
+    display: flex; align-items: center; gap: 32px; flex-wrap: wrap;
+  }
+  .gauge-score {
+    font-size: 72px; font-weight: 900; line-height: 1;
+    background: linear-gradient(135deg, #276749, #38a169);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  /* Variantes couleur gauge */
+  .gauge-score.red    { background: linear-gradient(135deg, #c53030, #e53e3e); -webkit-background-clip: text; background-clip: text; }
+  .gauge-score.orange { background: linear-gradient(135deg, #c05621, #dd6b20); -webkit-background-clip: text; background-clip: text; }
+  .gauge-score.blue   { background: linear-gradient(135deg, #2c5282, #3182ce); -webkit-background-clip: text; background-clip: text; }
+  .gauge-label { font-size: 13px; color: var(--text2); margin-top: 4px; }
+  .gauge-bars { flex: 1; min-width: 200px; }
+  .gauge-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .gauge-row .lbl { width: 110px; font-size: 12px; font-weight: 600; }
+  .gauge-row .count { width: 28px; text-align: right; font-weight: 700; font-size: 13px; }
+  .progress-bar { background: #e2e8f0; border-radius: 4px; height: 8px; overflow: hidden; flex: 1; }
+  .progress-fill { height: 100%; border-radius: 4px; }
+
+  /* ── Findings ── */
+  .findings { display: flex; flex-direction: column; gap: 14px; }
+  .finding {
+    background: var(--card); border: 1px solid var(--border);
+    border-left: 4px solid; border-radius: 8px; padding: 18px 20px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  .finding.critique     { border-left-color: var(--red);    }
+  .finding.important    { border-left-color: var(--orange); }
+  .finding.amelioration { border-left-color: var(--blue);  }
+  .finding.resolu       { border-left-color: var(--green); opacity: 0.85; }
+
+  .finding-header { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
+  .finding h3 { font-size: 15px; font-weight: 600; color: var(--text); flex: 1; }
+  .finding p  { color: var(--text2); margin-bottom: 8px; }
+
+  .badge {
+    display: inline-block; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 2px 8px; border-radius: 4px; white-space: nowrap;
+    flex-shrink: 0; margin-top: 2px;
+  }
+  .badge.critique     { background: #fff5f5; color: var(--red);    border: 1px solid #fed7d7; }
+  .badge.important    { background: #fffaf0; color: var(--orange); border: 1px solid #feebc8; }
+  .badge.amelioration { background: #ebf8ff; color: var(--blue);   border: 1px solid #bee3f8; }
+  .badge.resolu       { background: #f0fff4; color: var(--green);  border: 1px solid #c6f6d5; }
+
+  .finding-detail {
+    background: #f7fafc; border: 1px solid var(--border);
+    border-radius: 6px; padding: 12px 14px; margin: 10px 0;
+  }
+  .finding-detail strong { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; color: var(--gray); margin-bottom: 4px; }
+  .finding-detail p { margin: 0; font-size: 13px; }
+
+  /* ── Code ── */
+  code {
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    background: #edf2f7; border-radius: 3px;
+    padding: 1px 5px; font-size: 12px; color: #2d3748;
+  }
+  pre code {
+    display: block; background: #1a202c; color: #e2e8f0;
+    padding: 14px 16px; border-radius: 6px; overflow-x: auto;
+    line-height: 1.5; font-size: 12px; white-space: pre;
+  }
+
+  /* ── Tables ── */
+  .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); }
+  th {
+    background: #f7fafc; text-align: left;
+    padding: 10px 14px; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--gray); border-bottom: 1px solid var(--border);
+  }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #f7fafc; }
+
+  /* ── Pills ── */
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 11px; font-weight: 600;
+  }
+  .pill.green  { background: #f0fff4; color: #276749; border: 1px solid #c6f6d5; }
+  .pill.red    { background: #fff5f5; color: #c53030; border: 1px solid #fed7d7; }
+  .pill.orange { background: #fffaf0; color: #c05621; border: 1px solid #feebc8; }
+  .pill.blue   { background: #ebf8ff; color: #2c5282; border: 1px solid #bee3f8; }
+  .pill.gray   { background: #f7fafc; color: #4a5568; border: 1px solid #e2e8f0; }
+
+  /* ── Info blocks & KV ── */
+  .summary-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 40px;
+  }
+  @media (max-width: 700px) { .summary-grid { grid-template-columns: 1fr; } }
+  .info-block {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 18px;
+  }
+  .info-block h4 {
+    font-size: 12px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.5px; color: var(--gray); margin-bottom: 12px;
+  }
+  .kv { display: flex; justify-content: space-between; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; gap: 12px; }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--text2); }
+  .kv .v { font-weight: 600; text-align: right; }
+
+  /* ── Callouts ── */
+  .callout {
+    display: flex; gap: 12px;
+    background: #fffaf0; border: 1px solid #feebc8; border-radius: 8px;
+    padding: 14px 16px; margin: 12px 0;
+    font-size: 13px; color: #7b341e;
+  }
+  .callout.info    { background: #ebf8ff; border-color: #bee3f8; color: #2c5282; }
+  .callout.danger  { background: #fff5f5; border-color: #fed7d7; color: #c53030; }
+  .callout.success { background: #f0fff4; border-color: #c6f6d5; color: #276749; }
+  .callout .icon   { font-size: 16px; flex-shrink: 0; margin-top: 1px; }
+
+  /* ── TOC ── */
+  .toc {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 20px 24px; margin-bottom: 40px;
+  }
+  .toc h3 { font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--gray); margin-bottom: 12px; }
+  .toc ol { padding-left: 20px; }
+  .toc li { margin-bottom: 4px; }
+  .toc a  { color: var(--blue); text-decoration: none; font-size: 13px; }
+  .toc a:hover { text-decoration: underline; }
+
+  /* ── Footer ── */
+  .report-footer {
+    background: #1a202c; color: #718096;
+    text-align: center; padding: 24px;
+    font-size: 12px; margin-top: 60px;
+  }
+  .report-footer strong { color: #a0aec0; }
+</style>
+</head>
+<body>
+
+<!-- BANDEAU MISE À JOUR — supprimer si pas de révision -->
+<!--
+<div class="revision-banner">
+  <span>✏️</span>
+  <span><strong>Rapport mis à jour — {{date_revision}}</strong> · {{resume_revision}}</span>
+</div>
+-->
+
+<!-- ═══════════════════════════════════════════════════════
+     HEADER
+═══════════════════════════════════════════════════════ -->
+<header class="report-header">
+  <div class="header-badge">Rapport d'audit de sécurité</div>
+  <h1>{{type}} — {{cible}}</h1>
+  <p class="subtitle">{{sous_titre}}</p>
+  <dl class="header-meta">
+    <div><dt>Date</dt><dd>{{date}}</dd></div>
+    <div><dt>Périmètre</dt><dd>{{perimetre}}</dd></div>
+    <div><dt>Version</dt><dd>{{version}}</dd></div>
+    <div><dt>Applications</dt><dd>{{nb_apps}} actives</dd></div>
+    <div><dt>Domaine</dt><dd>{{domaine}}</dd></div>
+    <div><dt>Classifié</dt><dd>CONFIDENTIEL</dd></div>
+  </dl>
+</header>
+
+<main class="container">
+
+  <!-- ═══════════════════════════════════════════════════════
+       SOMMAIRE
+  ═══════════════════════════════════════════════════════ -->
+  <nav class="toc">
+    <h3>Sommaire</h3>
+    <ol>
+      <li><a href="#exec">Résumé exécutif</a></li>
+      <li><a href="#system">Informations système</a></li>
+      <li><a href="#findings">Findings
+        <ol>
+          <li><a href="#f-critique">CRITIQUE ({{nb_critique}})</a></li>
+          <li><a href="#f-important">IMPORTANT ({{nb_important}})</a></li>
+          <li><a href="#f-amelioration">Améliorations ({{nb_amelioration}})</a></li>
+        </ol>
+      </li>
+      <li><a href="#resolved">Actions réalisées</a></li>
+      <li><a href="#apps">Inventaire des applications</a></li>
+      <li><a href="#certs">Certificats TLS</a></li>
+      <li><a href="#policies">Politiques ACL &amp; Règles</a></li>
+      <li><a href="#attacks">Activité d'attaques</a></li>
+      <li><a href="#remediation">Plan de remédiation</a></li>
+      <li><a href="#compliance">Points de conformité</a></li>
+    </ol>
+  </nav>
+
+  <!-- ═══════════════════════════════════════════════════════
+       1. RÉSUMÉ EXÉCUTIF
+  ═══════════════════════════════════════════════════════ -->
+  <section class="section" id="exec">
+    <h2 class="section-title">1. Résumé exécutif</h2>
+
+    <!-- Score global — changer gauge-score en .red / .orange / .blue selon le score -->
+    <div class="risk-gauge">
+      <div>
+        <div class="gauge-score">{{score}}</div>
+        <div class="gauge-label">Score de maturité sécurité</div>
+        <div style="font-size:12px;color:var(--gray);margin-top:4px;">{{resume_score}}</div>
+      </div>
+      <div class="gauge-bars">
+        <div class="gauge-row">
+          <span class="lbl" style="color:var(--red);">CRITIQUE</span>
+          <div class="progress-bar"><div class="progress-fill" style="width:{{pct_critique}}%;background:var(--red);"></div></div>
+          <span class="count" style="color:var(--red);">{{nb_critique}}</span>
+        </div>
+        <div class="gauge-row">
+          <span class="lbl" style="color:var(--orange);">IMPORTANT</span>
+          <div class="progress-bar"><div class="progress-fill" style="width:{{pct_important}}%;background:var(--orange);"></div></div>
+          <span class="count" style="color:var(--orange);">{{nb_important}}</span>
+        </div>
+        <div class="gauge-row">
+          <span class="lbl" style="color:var(--blue);">AMÉLIORATION</span>
+          <div class="progress-bar"><div class="progress-fill" style="width:{{pct_amelioration}}%;background:var(--blue);"></div></div>
+          <span class="count" style="color:var(--blue);">{{nb_amelioration}}</span>
+        </div>
+        <div class="gauge-row">
+          <span class="lbl" style="color:var(--green);">CONFORME</span>
+          <div class="progress-bar"><div class="progress-fill" style="width:100%;background:var(--green);"></div></div>
+          <span class="count" style="color:var(--green);">{{nb_conforme}}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Compteurs synthétiques -->
+    <div class="score-grid">
+      <!-- Adapter la classe : danger / warn / ok / info -->
+      <div class="score-card danger">
+        <div class="val">{{nb_critique}}</div>
+        <div class="lbl">Findings Critiques</div>
+      </div>
+      <div class="score-card warn">
+        <div class="val">{{nb_important}}</div>
+        <div class="lbl">Findings Importants</div>
+      </div>
+      <div class="score-card info">
+        <div class="val">{{nb_amelioration}}</div>
+        <div class="lbl">Améliorations</div>
+      </div>
+      <div class="score-card ok">
+        <div class="val">{{nb_actions}}</div>
+        <div class="lbl">Actions réalisées</div>
+      </div>
+      <!-- Ajouter / retirer des cards selon le type d'audit -->
+      <div class="score-card info">
+        <div class="val">{{kpi_1_val}}</div>
+        <div class="lbl">{{kpi_1_lbl}}</div>
+      </div>
+      <div class="score-card ok">
+        <div class="val">{{kpi_2_val}}</div>
+        <div class="lbl">{{kpi_2_lbl}}</div>
+      </div>
+    </div>
+
+    <!-- Callout principal — changer la classe : success / danger / (defaut=warn) / info -->
+    <div class="callout success">
+      <span class="icon">✅</span>
+      <div>
+        <strong>{{titre_callout_principal}}</strong> {{texte_callout_principal}}
+      </div>
+    </div>
+
+    <p style="color:var(--text2);margin-top:16px;">{{synthese_executive}}</p>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       2. INFORMATIONS SYSTÈME
+  ═══════════════════════════════════════════════════════ -->
+  <section class="section" id="system">
+    <h2 class="section-title">2. Informations système</h2>
+    <div class="summary-grid">
+
+      <div class="info-block">
+        <h4>Plateforme</h4>
+        <div class="kv"><span class="k">Version</span><span class="v">{{sys_version}}</span></div>
+        <div class="kv"><span class="k">Édition</span><span class="v"><span class="pill blue">{{sys_edition}}</span></span></div>
+        <div class="kv"><span class="k">Licence</span><span class="v"><span class="pill green">{{sys_licence}}</span></span></div>
+        <div class="kv"><span class="k">État</span><span class="v"><span class="pill green">{{sys_etat}}</span></span></div>
+        <div class="kv"><span class="k">Mise à jour</span><span class="v"><span class="pill green">{{sys_maj}}</span></span></div>
+        <!-- Ajouter des lignes .kv supplémentaires selon le contexte -->
+      </div>
+
+      <div class="info-block">
+        <h4>Gestion des accès</h4>
+        <div class="kv"><span class="k">Utilisateurs</span><span class="v">{{acces_users}}</span></div>
+        <div class="kv"><span class="k">2FA</span><span class="v"><span class="pill green">{{acces_2fa}}</span></span></div>
+        <div class="kv"><span class="k">Dernier login</span><span class="v">{{acces_last_login}}</span></div>
+        <div class="kv"><span class="k">MdP modifié</span><span class="v">{{acces_mdp}}</span></div>
+      </div>
+
+      <!-- Dupliquer .info-block selon les sections pertinentes (détection, capacités, réseau…) -->
+      <div class="info-block">
+        <h4>Détection / Moteur</h4>
+        <!-- Exemples de contrôles — adapter selon le système audité -->
+        <div class="kv"><span class="k">{{ctrl_1}}</span><span class="v"><span class="pill green">{{ctrl_1_val}}</span></span></div>
+        <div class="kv"><span class="k">{{ctrl_2}}</span><span class="v"><span class="pill green">{{ctrl_2_val}}</span></span></div>
+        <div class="kv"><span class="k">{{ctrl_3}}</span><span class="v"><span class="pill orange">{{ctrl_3_val}}</span></span></div>
+      </div>
+
+      <div class="info-block">
+        <h4>Capacités avancées</h4>
+        <div class="kv"><span class="k">{{cap_1}}</span><span class="v"><span class="pill green">{{cap_1_val}}</span></span></div>
+        <div class="kv"><span class="k">{{cap_2}}</span><span class="v"><span class="pill green">{{cap_2_val}}</span></span></div>
+        <div class="kv"><span class="k">Alarmes/Notifications</span><span class="v"><span class="pill red">{{cap_notif}}</span></span></div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       3. FINDINGS OUVERTS
+  ═══════════════════════════════════════════════════════ -->
+  <section class="section" id="findings">
+    <h2 class="section-title">3. Findings ouverts</h2>
+
+    <!-- ── CRITIQUE ── -->
+    <h3 id="f-critique" style="font-size:16px;color:var(--red);margin-bottom:16px;">
+      🔴 Critique ({{nb_critique}})
+    </h3>
+    <div class="findings">
+
+      <!-- Copier ce bloc pour chaque finding critique -->
+      <div class="finding critique">
+        <div class="finding-header">
+          <span class="badge critique">Critique</span>
+          <h3>C-01 · {{titre_finding_critique}}</h3>
+        </div>
+        <p>{{description_risque}}</p>
+        <div class="finding-detail">
+          <strong>Preuve</strong>
+          <pre><code>$ {{commande_preuve}}
+{{sortie_preuve}}</code></pre>
+        </div>
+        <div class="finding-detail">
+          <strong>Remédiation</strong>
+          <p>{{action_remediation}}</p>
+          <pre><code>{{commande_remediation}}</code></pre>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="separator"></div>
+
+    <!-- ── IMPORTANT ── -->
+    <h3 id="f-important" style="font-size:16px;color:var(--orange);margin-bottom:16px;">
+      🟠 Important ({{nb_important}})
+    </h3>
+    <div class="findings">
+
+      <!-- Copier ce bloc pour chaque finding important -->
+      <div class="finding important">
+        <div class="finding-header">
+          <span class="badge important">Important</span>
+          <h3>I-01 · {{titre_finding_important}}</h3>
+        </div>
+        <p>{{description_risque}}</p>
+        <div class="finding-detail">
+          <strong>Action</strong>
+          <p>{{action_remediation}}</p>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="separator"></div>
+
+    <!-- ── AMÉLIORATIONS ── -->
+    <h3 id="f-amelioration" style="font-size:16px;color:var(--blue);margin-bottom:16px;">
+      💡 Améliorations recommandées ({{nb_amelioration}})
+    </h3>
+    <div class="findings">
+
+      <!-- Copier ce bloc pour chaque amélioration -->
+      <div class="finding amelioration">
+        <div class="finding-header">
+          <span class="badge amelioration">Amélioration</span>
+          <h3>A-01 · {{titre_amelioration}}</h3>
+        </div>
+        <p>{{description}}</p>
+        <div class="finding-detail">
+          <strong>Action</strong>
+          <p>{{action}}</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       4. ACTIONS RÉALISÉES
+  ═══════════════════════════════════════════════════════ -->
+  <section class="section" id="resolved">
+    <h2 class="section-title">4. Actions réalisées — {{date}}</h2>
+
+    <div class="callout success">
+      <span class="icon">✅</span>
+      <div><strong>{{nb_actions}} actions correctives appliquées</strong> durant la session d'audit.</div>
+    </div>
+
+    <div class="findings" style="margin-top:20px;">
+
+      <!-- Copier ce bloc pour chaque action réalisée -->
+      <div class="finding resolu">
+        <div class="finding-header">
+          <!-- Variantes badge : resolu / "Confirmé conforme" / "Résolu / Faux positif" -->
+          <span class="badge resolu">Résolu</span>
+          <h3>{{titre_action}}</h3>
+        </div>
+        <p>{{description_action}}</p>
+        <div class="finding-detail">
+          <strong>Preuve</strong>
+          <p><code>{{preuve_action}}</code></p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       5. INVENTAIRE DES APPLICATIONS
+  ═══════════════════════════════════════════════════════ -->
+  <section class="section" id="apps">
+    <h2 class="section-title">5. Inventaire des applications protégées</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Application</th>
+            <th>Domaine</th>
+            <th>Mode WAF</th>
+            <th>Backend</th>
+            <th>Santé</th>
+            <th>Bot / Chaos</th>
+            <th>Anti-Replay</th>
+            <th>Headers sécu.</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Copier/adapter ce modèle de ligne pour chaque app -->
+          <tr>
+            <td><strong>{{app_nom}}</strong></td>
+            <td>{{app_domaine}}</td>
+            <td><span class="pill green">{{app_mode}}</span></td>
+            <td>{{app_backend}}</td>
+            <td><span class="pill green">UP</span></td>
+            <td><span class="pill green">Actif</span></td>
+            <td><span class="pill green">Actif</span></td>
+            <td><span class="pill green">Oui</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       6. CERTIFICATS TLS
+  ═══════════════════════════════════════════════════════ -->
+  <section class="section" id="certs">
+    <h2 class="section-title">6. Certificats TLS</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Certificat</th>
+            <th>Émetteur</th>
+            <th>Type</th>
+            <th>Expiration</th>
+            <th>Délai</th>
+            <th>Statut</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Adapter les pills selon le délai : green (>60j) / orange (30-60j) / red (<30j) -->
+          <tr>
+            <td>{{cert_domaine}}</td>
+            <td>{{cert_emetteur}}</td>
+            <td><span class="pill blue">ACME</span></td>
+            <td>{{cert_expiration}}</td>
+            <td><span class="pill green">{{cert_delai}}</span></td>
+            <td><span class="pill green">Valide</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       7. POLITIQUES ACL & RÈGLES
+  ═══════════════════════════════════════════════════════ -->
+  <section class="section" id="policies">
+    <h2 class="section-title">7. Politiques ACL &amp; Règles personnalisées</h2>
+
+    <h4 style="margin-bottom:12px;color:var(--text2);">7.1 Whitelist (Allow)</h4>
+    <div class="table-wrap" style="margin-bottom:24px;">
+      <table>
+        <thead>
+          <tr><th>Nom</th><th>Action</th><th>Sites cibles</th><th>Condition</th><th>État</th><th>Hits/jour</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>{{acl_allow_nom}}</td>
+            <td><span class="pill green">Allow</span></td>
+            <td>{{acl_allow_sites}}</td>
+            <td>{{acl_allow_cond}}</td>
+            <td><span class="pill green">Active</span></td>
+            <td>{{acl_allow_hits}}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h4 style="margin-bottom:12px;color:var(--text2);">7.2 Blacklist (Deny)</h4>
+    <div class="table-wrap" style="margin-bottom:24px;">
+      <table>
+        <thead>
+          <tr><th>Nom</th><th>Action</th><th>Sites cibles</th><th>Condition</th><th>Hits/jour</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>{{acl_deny_nom}}</td>
+            <td><span class="pill red">Deny</span></td>
+            <td>{{acl_deny_sites}}</td>
+            <td>{{acl_deny_cond}}</td>
+            <td>{{acl_deny_hits}}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout info">
+      <span class="icon">🔒</span>
+      <div>{{note_architecture_acl}}</div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       8. ACTIVITÉ D'ATTAQUES
+  ═══════════════════════════════════════════════════════ -->
+  <section class="section" id="attacks">
+    <h2 class="section-title">8. Activité d'attaques</h2>
+
+    <div class="callout">
+      <span class="icon">📊</span>
+      <div><strong>Trafic bloqué au {{date}} :</strong> {{resume_attaques}}</div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:20px;">
+      <table>
+        <thead>
+          <tr><th>IP source</th><th>Pays</th><th>Cible</th><th>Bloquées</th><th>Passées</th><th>Date</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>{{atk_ip}}</code></td>
+            <td>{{atk_pays}}</td>
+            <td>{{atk_cible}}</td>
+            <td>{{atk_bloquees}}</td>
+            <td>{{atk_passees}}</td>
+            <td>{{atk_date}}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout info" style="margin-top:16px;">
+      <span class="icon">ℹ</span>
+      <div><strong>Analyse :</strong> {{analyse_attaques}}</div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       9. PLAN DE REMÉDIATION
+  ═══════════════════════════════════════════════════════ -->
+  <section class="section" id="remediation">
+    <h2 class="section-title">9. Plan de remédiation priorisé</h2>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>#</th><th>Finding</th><th>Priorité</th><th>Effort</th><th>Action</th><th>Statut</th></tr>
+        </thead>
+        <tbody>
+          <!-- Ligne ouverte -->
+          <tr>
+            <td>1</td>
+            <td>{{rem_finding}}</td>
+            <td><span class="pill red">CRITIQUE</span></td>
+            <td>{{rem_effort}}</td>
+            <td>{{rem_action}}</td>
+            <td><span class="pill orange">En cours</span></td>
+          </tr>
+          <!-- Séparateur section "réalisé" -->
+          <tr style="background:#f0fff4;">
+            <td colspan="6" style="padding:8px 14px;font-size:12px;font-weight:700;color:#276749;">✅ Actions réalisées le {{date}}</td>
+          </tr>
+          <!-- Ligne résolue -->
+          <tr style="opacity:0.6;">
+            <td>✓</td>
+            <td>{{rem_finding_resolu}}</td>
+            <td><span class="pill green">Résolu</span></td>
+            <td>—</td>
+            <td>{{rem_action_realisee}}</td>
+            <td><span class="pill green">Fait</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════
+       10. POINTS DE CONFORMITÉ
+  ═══════════════════════════════════════════════════════ -->
+  <section class="section" id="compliance">
+    <h2 class="section-title">10. Points de conformité — Bonnes pratiques</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Contrôle</th><th>Statut</th><th>Détail</th></tr>
+        </thead>
+        <tbody>
+          <!-- Statuts possibles : green=Conforme / orange=Partiel / red=Non conforme -->
+          <tr>
+            <td>{{ctrl_nom}}</td>
+            <td><span class="pill green">Conforme</span></td>
+            <td>{{ctrl_detail}}</td>
+          </tr>
+          <tr>
+            <td>{{ctrl_nom_partiel}}</td>
+            <td><span class="pill orange">Partiel</span></td>
+            <td>{{ctrl_detail_partiel}}</td>
+          </tr>
+          <tr>
+            <td>{{ctrl_nom_nc}}</td>
+            <td><span class="pill red">Non conforme</span></td>
+            <td>{{ctrl_detail_nc}}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<!-- ═══════════════════════════════════════════════════════
+     FOOTER
+═══════════════════════════════════════════════════════ -->
+<footer class="report-footer">
+  <p>Rapport généré via <strong>MCP Claude Code</strong> · Audit : <strong>{{date}}</strong> · Score : <strong>{{score}}</strong></p>
+  <p style="margin-top:4px;">Périmètre : {{domaine}} · {{version}} · <em>Confidentiel — usage interne</em></p>
+</footer>
+
+</body>
+</html>
