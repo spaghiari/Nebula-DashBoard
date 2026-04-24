@@ -35,7 +35,7 @@ from dashcore.helpers import (
 from dashcore.api_workspaces import (
     list_templates, duplicate_template, delete_template,
     create_workspace, update_workspace, delete_workspace, duplicate_workspace,
-    read_workspace_config, export_workspace, launch_resume,
+    read_workspace_config, write_workspace_file, export_workspace, launch_resume,
     list_sessions_for_workspace, read_session_messages,
     get_workspace_settings, save_workspace_settings, patch_workspace_settings,
     get_global_hooks, set_global_hooks,
@@ -396,6 +396,11 @@ class Handler(BaseHTTPRequestHandler):
         if p.startswith("/api/workspaces/") and p.endswith("/settings"):
             ws_id = p.split("/")[3]
             s, r = save_workspace_settings(ws_id, (body or {}).get("content", "{}"))
+            self._send_json(s, r); return
+
+        m = re.match(r"^/api/workspaces/([a-zA-Z0-9_-]+)/file$", p)
+        if m:
+            s, r = write_workspace_file(m.group(1), (body or {}).get("filename", ""), (body or {}).get("content", ""))
             self._send_json(s, r); return
 
         m = re.match(r"^/api/workspaces/([a-zA-Z0-9_-]+)/settings/([a-zA-Z]+)$", p)

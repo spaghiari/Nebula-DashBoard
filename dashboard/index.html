@@ -2597,6 +2597,34 @@ async function showWorkspaceConfig(w) {
   const files = data.files || {};
   const listing = data.listing || [];
 
+  // Onglets éditables : filename → label
+  const EDITABLE = {
+    "CLAUDE.md": "CLAUDE.md",
+    "notes.md": "notes.md",
+    ".claude/settings.json": ".claude/settings.json",
+  };
+
+  function makeEditorPanel(filename, content, placeholder) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:8px; height:100%;';
+    if (content === null) {
+      wrap.innerHTML = `
+        <div class="empty" style="margin-bottom:8px;">${escapeHtml(placeholder)}</div>
+        <textarea data-editor="${escapeHtml(filename)}" style="flex:1; min-height:320px; font-family:monospace; font-size:12px; padding:10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--fg); resize:vertical;" placeholder="Créer le fichier en saisissant son contenu…"></textarea>
+        <div style="display:flex; gap:8px; justify-content:flex-end;"><button class="btn primary" data-save="${escapeHtml(filename)}">💾 Créer &amp; Sauvegarder</button></div>
+      `;
+    } else {
+      wrap.innerHTML = `
+        <textarea data-editor="${escapeHtml(filename)}" style="flex:1; min-height:320px; font-family:monospace; font-size:12px; padding:10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--fg); resize:vertical;">${escapeHtml(content)}</textarea>
+        <div style="display:flex; gap:8px; justify-content:flex-end; align-items:center;">
+          <span data-saved-hint style="font-size:11px; color:var(--fg-dim); display:none;">✓ Sauvegardé</span>
+          <button class="btn primary" data-save="${escapeHtml(filename)}">💾 Sauvegarder</button>
+        </div>
+      `;
+    }
+    return wrap;
+  }
+
   const body = document.createElement('div');
   body.innerHTML = `
     <div class="row-meta" style="margin-bottom: 12px;">
@@ -2604,23 +2632,17 @@ async function showWorkspaceConfig(w) {
     </div>
     <div class="tabs">
       <div class="tab active" data-tab="claude">CLAUDE.md</div>
-      <div class="tab" data-tab="mcp">.mcp.json</div>
-      <div class="tab" data-tab="settings">.claude/settings.json</div>
       <div class="tab" data-tab="notes">notes.md</div>
+      <div class="tab" data-tab="settings">.claude/settings.json</div>
+      <div class="tab" data-tab="mcp">.mcp.json <span style="font-size:10px;opacity:.6;">(lecture)</span></div>
       <div class="tab" data-tab="listing">Fichiers (${listing.length})</div>
     </div>
 
-    <div class="tab-panel active" data-panel="claude">
-      ${files["CLAUDE.md"] !== null ? `<pre>${escapeHtml(files["CLAUDE.md"])}</pre>` : '<div class="empty">Absent</div>'}
-    </div>
+    <div class="tab-panel active" data-panel="claude"></div>
+    <div class="tab-panel" data-panel="notes"></div>
+    <div class="tab-panel" data-panel="settings"></div>
     <div class="tab-panel" data-panel="mcp">
-      ${files[".mcp.json"] !== null ? `<pre>${escapeHtml(files[".mcp.json"])}</pre>` : '<div class="empty">Pas de .mcp.json — lance Sync MCPs pour le générer</div>'}
-    </div>
-    <div class="tab-panel" data-panel="settings">
-      ${files[".claude/settings.json"] !== null ? `<pre>${escapeHtml(files[".claude/settings.json"])}</pre>` : '<div class="empty">Pas de settings.json local — ce workspace utilise la config globale</div>'}
-    </div>
-    <div class="tab-panel" data-panel="notes">
-      ${files["notes.md"] !== null ? `<pre>${escapeHtml(files["notes.md"])}</pre>` : '<div class="empty">Absent</div>'}
+      ${files[".mcp.json"] !== null ? `<pre>${escapeHtml(files[".mcp.json"])}</pre>` : '<div class="empty">Pas de .mcp.json — lance Sync MCPs pour le générer.</div>'}
     </div>
     <div class="tab-panel" data-panel="listing">
       <div class="list">
@@ -2636,9 +2658,51 @@ async function showWorkspaceConfig(w) {
     </div>
   `;
 
+  // Injecter les éditeurs dans les panels
+  body.querySelector('[data-panel="claude"]').appendChild(
+    makeEditorPanel("CLAUDE.md", files["CLAUDE.md"], "CLAUDE.md absent — crée-le ici.")
+  );
+  body.querySelector('[data-panel="notes"]').appendChild(
+    makeEditorPanel("notes.md", files["notes.md"], "notes.md absent — crée-le ici.")
+  );
+  body.querySelector('[data-panel="settings"]').appendChild(
+    makeEditorPanel(".claude/settings.json", files[".claude/settings.json"], "settings.json absent — ce workspace utilise la config globale.")
+  );
+
+  // Tabs
   body.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     body.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
     body.querySelectorAll('.tab-panel').forEach(pn => pn.classList.toggle('active', pn.dataset.panel === t.dataset.tab));
+  });
+
+  // Sauvegarde
+  body.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-save]');
+    if (!btn) return;
+    const filename = btn.dataset.save;
+    const ta = body.querySelector(`[data-editor="${filename}"]`);
+    if (!ta) return;
+    btn.disabled = true;
+    try {
+      await API.post(`/api/workspaces/${w.id}/file`, { filename, content: ta.value });
+      const hint = btn.closest('div').querySelector('[data-saved-hint]');
+      if (hint) { hint.style.display = 'inline'; setTimeout(() => hint.style.display = 'none', 2500); }
+      else toast('Sauvegardé');
+      btn.textContent = '💾 Sauvegarder';
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Marquer modifié
+  body.addEventListener('input', e => {
+    const ta = e.target.closest('[data-editor]');
+    if (!ta) return;
+    const filename = ta.dataset.editor;
+    const btn = body.querySelector(`[data-save="${filename}"]`);
+    if (btn) btn.textContent = '💾 Sauvegarder *';
   });
 
   const footer = document.createElement('div');

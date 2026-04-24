@@ -528,3 +528,28 @@ def read_workspace_config(ws_id: str) -> tuple[int, dict]:
     }
 
 
+# Fichiers éditables depuis la vue config (chemin relatif → chemin absolu autorisé)
+_EDITABLE_FILES: dict[str, list[str]] = {
+    "CLAUDE.md":              ["CLAUDE.md"],
+    "notes.md":               ["notes.md"],
+    ".claude/settings.json":  [".claude", "settings.json"],
+}
+
+def write_workspace_file(ws_id: str, filename: str, content: str) -> tuple[int, dict]:
+    if not safe_id(ws_id):
+        return 400, {"error": "id invalide"}
+    if filename not in _EDITABLE_FILES:
+        return 403, {"error": f"Fichier non éditable : {filename}. Autorisés : {', '.join(_EDITABLE_FILES)}"}
+    ws_dir = WORKSPACES_DIR / ws_id
+    if not ws_dir.exists():
+        return 404, {"error": "workspace absent sur disque"}
+    target = ws_dir.joinpath(*_EDITABLE_FILES[filename])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with _MUTATION_LOCK:
+        if target.exists():
+            target.with_suffix(target.suffix + ".bak").write_bytes(target.read_bytes())
+        target.write_text(content, encoding="utf-8")
+    log.info("workspace file written: %s / %s", ws_id, filename)
+    return 200, {"ok": True, "path": str(target)}
+
+
