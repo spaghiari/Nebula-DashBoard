@@ -48,6 +48,7 @@ from dashcore.api_mcps import (
     find_global_mcp_conflicts, remove_mcp_from_claude_global, migrate_global_mcp_to_registry,
 )
 from dashcore.system_update import system_version_info, system_apply_update
+from dashcore.api_ui_state import get_ui_state, patch_ui_state
 from dashcore.api_plugins import (
     list_plugins, list_marketplace_plugins, read_plugin_readme,
     list_installed_plugins, uninstall_plugin,
@@ -250,6 +251,8 @@ def h_get_hooks_global(q, b):    return 200, {"hooks": get_global_hooks()}
 def h_get_search(q, b):
     return 200, global_search(q.get("q", [""])[0])
 def h_get_setup_scan(q, b):      return scan_claude_config()
+def h_get_ui_state(q, b):        return get_ui_state()
+def h_post_ui_state(q, b):       return patch_ui_state(b)
 def h_get_system_version(q, b):
     check = (q.get("check", ["0"])[0] or "0") == "1"
     return 200, system_version_info(check_remote=check)
@@ -345,6 +348,7 @@ ROUTES_GET = [
     (re.compile(rf"^/api/hooks/global$"),                                                   h_get_hooks_global),
     (re.compile(rf"^/api/search$"),                                                         h_get_search),
     (re.compile(rf"^/api/setup/scan$"),                                                     h_get_setup_scan),
+    (re.compile(rf"^/api/ui-state$"),                                                       h_get_ui_state),
     (re.compile(rf"^/api/system/version$"),                                                 h_get_system_version),
 ]
 
@@ -394,6 +398,7 @@ ROUTES_POST = [
     (re.compile(rf"^/api/journal$"),                                                        h_post_journal),
     (re.compile(rf"^/api/hooks/global$"),                                                   h_post_hooks_global),
     (re.compile(rf"^/api/setup/import$"),                                                   h_post_setup_import),
+    (re.compile(rf"^/api/ui-state$"),                                                       h_post_ui_state),
     (re.compile(rf"^/api/system/update$"),                                                  h_post_system_update),
 ]
 

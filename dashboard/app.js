@@ -57,11 +57,12 @@ const THEMES = [
   { id: 'brique',         label: 'Brique',         desc: 'Sombre · orange chaud',         accent: '#fb923c', warm: '#facc15', bg: '#120a08' },
 ];
 
-function applyTheme(id) {
+function applyTheme(id, { save = true } = {}) {
   const valid = THEMES.find(t => t.id === id) ? id : 'atelier';
   if (valid === 'atelier') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', valid);
   try { localStorage.setItem('atelier-theme', valid); } catch {}
+  if (save) API.post('/api/ui-state', { theme: valid }).catch(() => {});
 }
 
 function getCurrentTheme() {
@@ -72,8 +73,8 @@ function getCurrentTheme() {
   return 'atelier';
 }
 
-// Appliquer immédiatement au chargement (avant init pour éviter le flash)
-applyTheme(getCurrentTheme());
+// Appliquer immédiatement au chargement depuis le cache local (évite le flash)
+applyTheme(getCurrentTheme(), { save: false });
 
 /* === HELPERS ====================================================== */
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -1228,16 +1229,11 @@ function modalNewMCP(existing = null) {
 /* ================================================================
    FIRST-RUN WIZARD — assistant de premier lancement
    ================================================================ */
-const ONBOARDED_KEY = 'atelier-onboarded';
-
-function isFirstRun() {
-  try { return !localStorage.getItem(ONBOARDED_KEY); } catch { return false; }
-}
 function markOnboarded() {
-  try { localStorage.setItem(ONBOARDED_KEY, '1'); } catch {}
+  API.post('/api/ui-state', { onboarded: true }).catch(() => {});
 }
 function resetOnboarded() {
-  try { localStorage.removeItem(ONBOARDED_KEY); } catch {}
+  API.post('/api/ui-state', { onboarded: false }).catch(() => {});
 }
 
 async function startFirstRunWizard() {
@@ -4328,11 +4324,21 @@ function init() {
       $('#sidebar').classList.remove('open');
     }
   });
-  route().then(() => {
-    // Premier lancement : déclenche le wizard après le 1er render
-    if (isFirstRun()) {
+  route().then(async () => {
+    // Charger l'état UI depuis le serveur (source de vérité)
+    let uiState = null;
+    try { uiState = await API.get('/api/ui-state'); } catch {}
+
+    // Synchroniser le thème serveur → local si différent du cache LS
+    if (uiState?.theme && uiState.theme !== getCurrentTheme()) {
+      applyTheme(uiState.theme, { save: false });
+    }
+
+    // Premier lancement : déclenche le wizard
+    if (uiState && !uiState.onboarded) {
       setTimeout(() => startFirstRunWizard(), 400);
     }
+
     // Vérification de mise à jour en arrière-plan (non-bloquante)
     setTimeout(() => {
       checkForUpdates().then(renderUpdateBadge).catch(() => {});
