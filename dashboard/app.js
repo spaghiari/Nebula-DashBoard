@@ -1674,6 +1674,9 @@ async function modalSystemUpdate() {
     return;
   }
 
+  // Clean le loader avant d'appendChild les vraies sections
+  body.innerHTML = '';
+
   // ───── Header avec version locale (uniquement si updates dispos ou modifs locales) ─────
   if (info.behind > 0 || (info.dirty && info.behind > 0)) {
     const head = el('div');
