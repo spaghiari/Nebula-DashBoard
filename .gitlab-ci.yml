@@ -1,0 +1,7 @@
+# Pas de pipeline CI pour ce repo.
+# Aucun runner configuré, aucun besoin de tests/build/SAST automatiques.
+# Cette règle empêche tout pipeline de se créer (push, MR, schedule).
+
+workflow:
+  rules:
+    - when: never
