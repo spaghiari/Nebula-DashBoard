@@ -34,17 +34,22 @@ USER_DATA_FILES = frozenset({
 
 
 def _filter_user_data(status_lines: list[str]) -> list[str]:
-    """Retire les lignes `git status --porcelain` qui concernent des données utilisateur."""
+    """Retire les lignes `git status --porcelain` qui concernent des données utilisateur.
+
+    Robuste à toutes les variations de format git status (porcelain v1 avec 2
+    chars status, version courte avec 1 char, lignes avec ou sans espace de
+    tête). On extrait simplement tout ce qui ressemble à un chemin et on
+    matche par substring contre USER_DATA_FILES.
+    """
     out = []
     for line in status_lines:
-        if len(line) < 4:
+        if not line.strip():
             continue
-        # Format porcelain : "XY path" (2 chars de status + space + path)
-        path = line[3:].strip().replace("\\", "/")
-        # Strip les guillemets si chemin contient des espaces
-        if path.startswith('"') and path.endswith('"'):
-            path = path[1:-1]
-        if path in USER_DATA_FILES:
+        # Normalise les backslashes Windows en forward slashes
+        normalized = line.replace("\\", "/")
+        # Match par substring : si un fichier utilisateur apparait dans la
+        # ligne, on filtre. Plus permissif mais robuste à tous les formats.
+        if any(f in normalized for f in USER_DATA_FILES):
             continue
         out.append(line)
     return out
