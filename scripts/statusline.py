@@ -19,7 +19,7 @@ try:
 except Exception:
     pass
 
-WORKSPACES_ROOT = Path(r"C:\claude-workspace\workspaces")
+WORKSPACES_ROOT = Path(__file__).resolve().parent.parent / "workspaces"
 
 # Couleurs ANSI (Claude Code les affiche correctement)
 RESET = "\x1b[0m"

@@ -9,7 +9,8 @@ set /p NOM="Nom du workspace (ex: proxmox, python-ml) : "
 set /p DESC="Description courte : "
 set /p OUTILS="Outils principaux : "
 
-set BASE=C:\claude-workspace\workspaces\%NOM%
+set ROOT=%~dp0..
+set BASE=%ROOT%\workspaces\%NOM%
 mkdir "%BASE%" 2>nul
 mkdir "%BASE%\notes" 2>nul
 
@@ -37,9 +38,9 @@ echo echo  +======================================+
 echo echo  ^^^|   Claude Code -- %NOM%
 echo echo  +======================================+
 echo echo.
-echo cd /d %BASE%
+echo cd /d "%%~dp0..\workspaces\%NOM%"
 echo claude
-) > "C:\claude-workspace\scripts\launch-%NOM%.bat"
+) > "%ROOT%\scripts\launch-%NOM%.bat"
 
 echo.
 echo  OK Workspace "%NOM%" cree : %BASE%

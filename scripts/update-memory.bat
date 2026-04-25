@@ -1,2 +1,2 @@
 @echo off
-notepad C:\claude-workspace\memory\global.md
+notepad "%~dp0..\memory\global.md"

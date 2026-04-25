@@ -6,5 +6,5 @@ echo  +======================================+
 echo  ^|   Claude Code -- ^<NOM^>              ^|
 echo  +======================================+
 echo.
-cd /d C:\claude-workspace\workspaces\<NOM>
+cd /d "%~dp0..\workspaces\<NOM>"
 claude
