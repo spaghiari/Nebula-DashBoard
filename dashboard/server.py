@@ -38,11 +38,11 @@ from dashcore.api_workspaces import (
     read_workspace_config, write_workspace_file, export_workspace, launch_resume,
     list_sessions_for_workspace, read_session_messages,
     get_workspace_settings, save_workspace_settings, patch_workspace_settings,
-    get_global_hooks, set_global_hooks,
+    get_global_hooks, set_global_hooks, register_existing_workspace,
 )
 from dashcore.api_mcps import (
     add_or_update_mcp, delete_mcp, sync_workspace_mcps, sync_all_workspaces,
-    workspace_mcp_status, mcp_live_check, test_mcp,
+    workspace_mcp_status, mcp_live_check, test_mcp, scan_claude_config,
 )
 from dashcore.api_plugins import (
     list_plugins, list_marketplace_plugins, read_plugin_readme,
@@ -138,6 +138,10 @@ class Handler(BaseHTTPRequestHandler):
             ws_id = p.split("/")[3]
             status, payload = read_workspace_config(ws_id)
             self._send_json(status, payload); return
+
+        if p == "/api/setup/scan":
+            s, r = scan_claude_config()
+            self._send_json(s, r); return
 
         if p == "/api/stats":
             self._send_json(200, all_stats()); return
@@ -441,6 +445,21 @@ class Handler(BaseHTTPRequestHandler):
 
         if p == "/api/cleanup/orphan-bats":
             self._send_json(200, cleanup_orphan_bats()); return
+
+        if p == "/api/setup/import":
+            mcps = (body or {}).get("mcps", [])
+            projects = (body or {}).get("projects", [])
+            mcp_results = []
+            ws_results = []
+            for mcp in mcps:
+                mcp.setdefault("status", "disponible")
+                s, r = add_or_update_mcp(mcp)
+                mcp_results.append({"id": mcp.get("id"), "ok": s < 400, **r})
+            for proj in projects:
+                requested = proj.get("id")
+                s, r = register_existing_workspace(proj)
+                ws_results.append({"requested_id": requested, "ok": s < 400, **r})
+            self._send_json(200, {"ok": True, "mcps": mcp_results, "workspaces": ws_results}); return
 
         self._send_json(404, {"error":"route inconnue"})
 

@@ -347,7 +347,7 @@ def project_dir_for_path(path: Path) -> Path | None:
     if not CLAUDE_PROJECTS.exists():
         return None
     target = str(path.resolve())
-    encoded = target.replace(":", "-").replace("\\", "-").replace("/", "-")
+    encoded = target.replace(":", "-").replace("\\", "-").replace("/", "-").replace(" ", "-")
     candidate = CLAUDE_PROJECTS / encoded
     if candidate.is_dir():
         return candidate
@@ -356,6 +356,62 @@ def project_dir_for_path(path: Path) -> Path | None:
         if d.is_dir() and d.name.lower() == enc_lower:
             return d
     return None
+
+
+def resolve_ws_dir(ws_id: str) -> Path:
+    """Retourne le chemin disque réel d'un workspace.
+
+    Cherche d'abord le path dans workspaces.json (workspaces importés peuvent
+    pointer hors de WORKSPACES_DIR). Fallback : WORKSPACES_DIR/ws_id.
+    Point d'accès UNIQUE — toute fonction qui touche au disque d'un workspace
+    DOIT passer par ici, sinon les workspaces importés sont cassés.
+    """
+    data = read_json(WORKSPACES_JSON, {"workspaces": []})
+    w = next((x for x in data.get("workspaces", []) if x.get("id") == ws_id), None)
+    if w and w.get("path"):
+        return Path(w["path"])
+    return WORKSPACES_DIR / ws_id
+
+
+def validate_ws_path(path: str) -> tuple[bool, str]:
+    """Valide un chemin saisi par l'utilisateur (import / update workspace).
+
+    Refuse : vide, relatif, UNC, caractères incompatibles avec un .bat.
+    Retourne (ok, message_erreur).
+    """
+    p = (path or "").strip()
+    if not p:
+        return False, "chemin vide"
+    if p.startswith("\\\\"):
+        return False, "chemins UNC non supportés"
+    pp = Path(p)
+    if not pp.is_absolute():
+        return False, "chemin absolu requis"
+    if BAT_UNSAFE.search(p):
+        return False, "caractères interdits dans le chemin (& | < > ^ \" %)"
+    return True, ""
+
+
+def write_launch_bat(ws_id: str, label: str, path: str) -> Path:
+    """Écrit le script de lancement Claude Code pour un workspace.
+
+    Centralise la génération — quatre sites l'utilisaient avec des copies
+    quasi-identiques (create, duplicate, update, import).
+    """
+    bat_path = SCRIPTS_DIR / f"launch-{ws_id}.bat"
+    safe_label = (label or ws_id).replace("\n", " ").replace("\r", " ")
+    bat_path.write_text(
+        f"@echo off\n"
+        f"echo.\n"
+        f"echo  +======================================+\n"
+        f"echo  ^|   Claude Code -- {safe_label}\n"
+        f"echo  +======================================+\n"
+        f"echo.\n"
+        f'cd /d "{path}"\n'
+        f"claude\n",
+        encoding="utf-8",
+    )
+    return bat_path
 
 
 def workspace_stats(ws: dict) -> dict:
@@ -476,12 +532,12 @@ def open_target(key: str) -> tuple[bool, str]:
         ws_id = key.split(":", 1)[1]
         if not safe_id(ws_id):
             return False, "id invalide"
-        p = WORKSPACES_DIR / ws_id / "CLAUDE.md"
+        p = resolve_ws_dir(ws_id) / "CLAUDE.md"
     elif key.startswith("workspace-dir:"):
         ws_id = key.split(":", 1)[1]
         if not safe_id(ws_id):
             return False, "id invalide"
-        p = WORKSPACES_DIR / ws_id
+        p = resolve_ws_dir(ws_id)
     elif key.startswith("template:"):
         tpl_id = key.split(":", 1)[1]
         if not safe_id(tpl_id):

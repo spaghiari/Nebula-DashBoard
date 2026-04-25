@@ -357,7 +357,7 @@ def list_skills_global() -> list[dict]:
 def list_skills_for_workspace(ws_id: str) -> dict:
     if not safe_id(ws_id):
         return {"global": list_skills_global(), "local": []}
-    ws_dir = WORKSPACES_DIR / ws_id
+    ws_dir = resolve_ws_dir(ws_id)
     local = list_skills_in_dir(ws_dir / ".claude" / "skills")
     return {"global": list_skills_global(), "local": local}
 
@@ -370,7 +370,7 @@ def _skill_dir(scope: str) -> Path | None:
         ws_id = scope.split(":", 1)[1]
         if not safe_id(ws_id):
             return None
-        return WORKSPACES_DIR / ws_id / ".claude" / "skills"
+        return resolve_ws_dir(ws_id) / ".claude" / "skills"
     return None
 
 
@@ -454,7 +454,7 @@ def copy_skill_to_workspace(payload: dict) -> tuple[int, dict]:
     src = CLAUDE_HOME / "skills" / name
     if not src.exists():
         return 404, {"error": "skill global introuvable"}
-    dst_parent = WORKSPACES_DIR / ws_id / ".claude" / "skills"
+    dst_parent = resolve_ws_dir(ws_id) / ".claude" / "skills"
     dst = dst_parent / name
     if dst.exists():
         return 409, {"error": "skill déjà présent dans le workspace"}
@@ -473,7 +473,7 @@ def _file_scope_path(kind: str, scope: str, name: str) -> Path | None:
         ws_id = scope.split(":", 1)[1]
         if not safe_id(ws_id):
             return None
-        return WORKSPACES_DIR / ws_id / ".claude" / kind / f"{name}.md"
+        return resolve_ws_dir(ws_id) / ".claude" / kind / f"{name}.md"
     return None
 
 
@@ -494,13 +494,13 @@ def _list_files_in_dir(d: Path) -> list[dict]:
 
 def list_agents(ws_id: str | None = None) -> dict:
     g = _list_files_in_dir(CLAUDE_HOME / "agents")
-    local = _list_files_in_dir(WORKSPACES_DIR / ws_id / ".claude" / "agents") if ws_id and safe_id(ws_id) else []
+    local = _list_files_in_dir(resolve_ws_dir(ws_id) / ".claude" / "agents") if ws_id and safe_id(ws_id) else []
     return {"global": g, "local": local}
 
 
 def list_commands(ws_id: str | None = None) -> dict:
     g = _list_files_in_dir(CLAUDE_HOME / "commands")
-    local = _list_files_in_dir(WORKSPACES_DIR / ws_id / ".claude" / "commands") if ws_id and safe_id(ws_id) else []
+    local = _list_files_in_dir(resolve_ws_dir(ws_id) / ".claude" / "commands") if ws_id and safe_id(ws_id) else []
     return {"global": g, "local": local}
 
 
