@@ -225,7 +225,7 @@ def build_mcp_server_entry(mcp: dict, env_local: dict) -> tuple[dict, list[str]]
 def sync_workspace_mcps(ws_id: str) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
-    ws_dir = WORKSPACES_DIR / ws_id
+    ws_dir = resolve_ws_dir(ws_id)
     if not ws_dir.exists():
         return 404, {"error": "workspace absent sur disque"}
 
@@ -266,7 +266,7 @@ def sync_all_workspaces() -> tuple[int, dict]:
 def workspace_mcp_status(ws_id: str) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
-    ws_dir = WORKSPACES_DIR / ws_id
+    ws_dir = resolve_ws_dir(ws_id)
     mcp_file = ws_dir / ".mcp.json"
     data = read_json(mcp_file, None)
     active = list((data or {}).get("mcpServers", {}).keys())
@@ -336,3 +336,143 @@ def test_mcp(mcp_id: str) -> tuple[int, dict]:
         return 200, {"ok": False, "message": f"Erreur : {e}"}
 
 
+# ── Setup / Import wizard ─────────────────────────────────────────────────────
+
+def _read_cwd_from_sessions(proj_dir: Path) -> str | None:
+    """Lit le `cwd` d'un message dans les fichiers .jsonl du projet.
+
+    Source de vérité : Claude Code stocke le chemin original (`cwd`) dans
+    chaque message utilisateur. Plus fiable que tout décodage du nom de dossier,
+    et fonctionne même si le dossier source a été supprimé/renommé/déplacé.
+    """
+    for jl in proj_dir.glob("*.jsonl"):
+        try:
+            with jl.open("r", encoding="utf-8", errors="replace") as f:
+                for i, line in enumerate(f):
+                    if i > 50:  # cwd se trouve quasi-toujours dans les 5 premières lignes
+                        break
+                    line = line.strip()
+                    if not line or '"cwd"' not in line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    cwd = obj.get("cwd")
+                    if isinstance(cwd, str) and cwd:
+                        return cwd
+        except OSError:
+            continue
+    return None
+
+
+def _decode_project_path(name: str) -> tuple[str, bool]:
+    """Décode best-effort un nom de dossier ~/.claude/projects/ en chemin Windows.
+
+    Fallback uniquement : utilisé quand aucune session ne contient de `cwd`.
+    Le décodage est ambigu (`:`, `\\`, espaces tous encodés en `-`) — on tente
+    un DFS avec vérification d'existence pour résoudre l'ambiguïté.
+    Retourne (chemin, existe_sur_disque).
+    """
+    m = re.match(r'^([A-Za-z])--(.*)$', name)
+    if not m:
+        return "", False
+    drive = m.group(1).upper() + ":\\"
+    parts = [p for p in m.group(2).split('-') if p]
+    if not parts:
+        base = drive.rstrip("\\")
+        return base, Path(base).exists()
+
+    def dfs(idx: int, segs: list[str]) -> list[str] | None:
+        if idx == len(parts):
+            return segs if Path(drive + "\\".join(segs)).exists() else None
+        seg = parts[idx]
+        # Option A : nouveau segment de chemin
+        r = dfs(idx + 1, segs + [seg])
+        if r is not None:
+            return r
+        if segs:
+            # Option B : tiret littéral (ex: reverse-engineering)
+            r = dfs(idx + 1, segs[:-1] + [segs[-1] + "-" + seg])
+            if r is not None:
+                return r
+            # Option C : espace littéral (Claude encode aussi les espaces en -)
+            r = dfs(idx + 1, segs[:-1] + [segs[-1] + " " + seg])
+            if r is not None:
+                return r
+        return None
+
+    found = dfs(1, [parts[0]])
+    if found:
+        return drive + "\\".join(found), True
+    # Fallback naïf (chemin probablement incorrect mais utile comme point de départ)
+    return drive + "\\".join(parts), False
+
+
+def scan_claude_config() -> tuple[int, dict]:
+    """Scanne ~/.claude/ pour détecter MCPs et projets existants.
+
+    Utilisé par le wizard d'import initial : permet à un nouvel utilisateur
+    de pré-remplir le dashboard depuis sa config Claude Code existante.
+    """
+    result: dict = {"mcps": [], "projects": []}
+
+    # ── MCPs ─────────────────────────────────────────────────────────────────
+    existing_ids = {m["id"] for m in read_json(MCP_REGISTRY, {"mcps": []}).get("mcps", [])}
+    seen: set[str] = set()
+
+    for sf in (CLAUDE_SETTINGS, CLAUDE_HOME / "settings.local.json"):
+        if not sf.exists():
+            continue
+        servers = (read_json(sf, {}).get("mcpServers") or {})
+        for name, cfg in servers.items():
+            if name in seen:
+                continue
+            seen.add(name)
+            result["mcps"].append({
+                "id": name,
+                "name": name,
+                "transport": cfg.get("transport") or ("http" if cfg.get("url") else "stdio"),
+                "command": cfg.get("command", ""),
+                "args": cfg.get("args", []),
+                "env": cfg.get("env", {}),
+                "url": cfg.get("url", ""),
+                "already_registered": name in existing_ids,
+            })
+
+    # ── Projets ───────────────────────────────────────────────────────────────
+    if not CLAUDE_PROJECTS.exists():
+        return 200, result
+
+    existing_paths = {
+        w.get("path", "").lower()
+        for w in read_json(WORKSPACES_JSON, {"workspaces": []}).get("workspaces", [])
+    }
+
+    for proj_dir in sorted(CLAUDE_PROJECTS.iterdir()):
+        if not proj_dir.is_dir():
+            continue
+        sessions = list(proj_dir.glob("*.jsonl"))
+        if not sessions:
+            continue
+        # Source de vérité prioritaire : le cwd stocké dans les sessions
+        path = _read_cwd_from_sessions(proj_dir)
+        source = "session"
+        if not path:
+            # Fallback : DFS sur le nom de dossier (ambigu mais souvent correct)
+            path, _ = _decode_project_path(proj_dir.name)
+            source = "decoded"
+        path_exists = bool(path) and Path(path).exists()
+        last_mod = max(s.stat().st_mtime for s in sessions)
+        result["projects"].append({
+            "encoded": proj_dir.name,
+            "path": path or "",
+            "path_exists": path_exists,
+            "path_source": source,
+            "sessions": len(sessions),
+            "already_registered": (path or "").lower() in existing_paths,
+            "last_modified": last_mod,
+        })
+
+    result["projects"].sort(key=lambda x: x["last_modified"], reverse=True)
+    return 200, result

@@ -547,6 +547,7 @@ function renderHomePage() {
       Workspaces
       <span class="h2-actions">
         <button class="h2-btn" id="syncAllBtn">↻ Sync MCPs</button>
+        <button class="h2-btn" id="importSetupBtn">⬇ Importer depuis Claude</button>
         <button class="h2-btn" id="addWorkspaceBtn">+ Nouveau</button>
       </span>
     </h2>
@@ -583,6 +584,7 @@ function renderHomePage() {
   renderEntries();
 
   document.getElementById('syncAllBtn').onclick = syncAll;
+  document.getElementById('importSetupBtn').onclick = openImportWizard;
   document.getElementById('addWorkspaceBtn').onclick = workspaceForm;
   document.getElementById('addEntry').onclick = addJournalEntry;
   document.getElementById('clearEntries').onclick = clearJournal;
@@ -2543,19 +2545,26 @@ function editWorkspaceForm(w) {
       <div class="form-row"><label>Emoji</label><input id="f-emoji" value="${escapeHtml(w.emoji || '')}" maxlength="4"></div>
     </div>
     <div class="form-row"><label>Description</label><input id="f-desc" value="${escapeHtml(w.description || '')}"></div>
+    ${w.template === 'imported' ? `
+    <div class="form-row">
+      <label>Chemin <span style="color:var(--orange);font-size:10px;">workspace importé</span></label>
+      <input id="f-path" value="${escapeHtml(w.path || '')}" placeholder="C:\\chemin\\vers\\le\\projet" style="font-family:var(--mono);font-size:12px;">
+    </div>` : `
     <div class="form-row" style="margin-top:10px;">
       <span class="hint">Pour modifier le contenu du workspace (CLAUDE.md, fichiers) : utilise le bouton <strong>Dossier</strong> ou <strong>CLAUDE.md</strong> pour l'ouvrir dans ton éditeur.</span>
-    </div>
+    </div>`}
   `;
   const footer = document.createElement('div');
   footer.innerHTML = `<button class="btn" id="cancelBtn">Annuler</button><button class="btn primary" id="okBtn">Enregistrer</button>`;
   openModal({ title: `Modifier — ${w.label || w.id}`, body: form, footer });
   footer.querySelector('#cancelBtn').onclick = closeModal;
   footer.querySelector('#okBtn').onclick = async () => {
+    const pathInput = form.querySelector('#f-path');
     const payload = {
       label: form.querySelector('#f-label').value.trim(),
       emoji: form.querySelector('#f-emoji').value.trim() || '📁',
       description: form.querySelector('#f-desc').value.trim(),
+      ...(pathInput ? { path: pathInput.value.trim() } : {}),
     };
     try {
       await API.post(`/api/workspaces/${w.id}/update`, payload);
@@ -2597,6 +2606,34 @@ async function showWorkspaceConfig(w) {
   const files = data.files || {};
   const listing = data.listing || [];
 
+  // Onglets éditables : filename → label
+  const EDITABLE = {
+    "CLAUDE.md": "CLAUDE.md",
+    "notes.md": "notes.md",
+    ".claude/settings.json": ".claude/settings.json",
+  };
+
+  function makeEditorPanel(filename, content, placeholder) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:8px; height:100%;';
+    if (content === null) {
+      wrap.innerHTML = `
+        <div class="empty" style="margin-bottom:8px;">${escapeHtml(placeholder)}</div>
+        <textarea data-editor="${escapeHtml(filename)}" style="flex:1; min-height:320px; font-family:monospace; font-size:12px; padding:10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--fg); resize:vertical;" placeholder="Créer le fichier en saisissant son contenu…"></textarea>
+        <div style="display:flex; gap:8px; justify-content:flex-end;"><button class="btn primary" data-save="${escapeHtml(filename)}">💾 Créer &amp; Sauvegarder</button></div>
+      `;
+    } else {
+      wrap.innerHTML = `
+        <textarea data-editor="${escapeHtml(filename)}" style="flex:1; min-height:320px; font-family:monospace; font-size:12px; padding:10px; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--fg); resize:vertical;">${escapeHtml(content)}</textarea>
+        <div style="display:flex; gap:8px; justify-content:flex-end; align-items:center;">
+          <span data-saved-hint style="font-size:11px; color:var(--fg-dim); display:none;">✓ Sauvegardé</span>
+          <button class="btn primary" data-save="${escapeHtml(filename)}">💾 Sauvegarder</button>
+        </div>
+      `;
+    }
+    return wrap;
+  }
+
   const body = document.createElement('div');
   body.innerHTML = `
     <div class="row-meta" style="margin-bottom: 12px;">
@@ -2604,23 +2641,17 @@ async function showWorkspaceConfig(w) {
     </div>
     <div class="tabs">
       <div class="tab active" data-tab="claude">CLAUDE.md</div>
-      <div class="tab" data-tab="mcp">.mcp.json</div>
-      <div class="tab" data-tab="settings">.claude/settings.json</div>
       <div class="tab" data-tab="notes">notes.md</div>
+      <div class="tab" data-tab="settings">.claude/settings.json</div>
+      <div class="tab" data-tab="mcp">.mcp.json <span style="font-size:10px;opacity:.6;">(lecture)</span></div>
       <div class="tab" data-tab="listing">Fichiers (${listing.length})</div>
     </div>
 
-    <div class="tab-panel active" data-panel="claude">
-      ${files["CLAUDE.md"] !== null ? `<pre>${escapeHtml(files["CLAUDE.md"])}</pre>` : '<div class="empty">Absent</div>'}
-    </div>
+    <div class="tab-panel active" data-panel="claude"></div>
+    <div class="tab-panel" data-panel="notes"></div>
+    <div class="tab-panel" data-panel="settings"></div>
     <div class="tab-panel" data-panel="mcp">
-      ${files[".mcp.json"] !== null ? `<pre>${escapeHtml(files[".mcp.json"])}</pre>` : '<div class="empty">Pas de .mcp.json — lance Sync MCPs pour le générer</div>'}
-    </div>
-    <div class="tab-panel" data-panel="settings">
-      ${files[".claude/settings.json"] !== null ? `<pre>${escapeHtml(files[".claude/settings.json"])}</pre>` : '<div class="empty">Pas de settings.json local — ce workspace utilise la config globale</div>'}
-    </div>
-    <div class="tab-panel" data-panel="notes">
-      ${files["notes.md"] !== null ? `<pre>${escapeHtml(files["notes.md"])}</pre>` : '<div class="empty">Absent</div>'}
+      ${files[".mcp.json"] !== null ? `<pre>${escapeHtml(files[".mcp.json"])}</pre>` : '<div class="empty">Pas de .mcp.json — lance Sync MCPs pour le générer.</div>'}
     </div>
     <div class="tab-panel" data-panel="listing">
       <div class="list">
@@ -2636,9 +2667,51 @@ async function showWorkspaceConfig(w) {
     </div>
   `;
 
+  // Injecter les éditeurs dans les panels
+  body.querySelector('[data-panel="claude"]').appendChild(
+    makeEditorPanel("CLAUDE.md", files["CLAUDE.md"], "CLAUDE.md absent — crée-le ici.")
+  );
+  body.querySelector('[data-panel="notes"]').appendChild(
+    makeEditorPanel("notes.md", files["notes.md"], "notes.md absent — crée-le ici.")
+  );
+  body.querySelector('[data-panel="settings"]').appendChild(
+    makeEditorPanel(".claude/settings.json", files[".claude/settings.json"], "settings.json absent — ce workspace utilise la config globale.")
+  );
+
+  // Tabs
   body.querySelectorAll('.tab').forEach(t => t.onclick = () => {
     body.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === t));
     body.querySelectorAll('.tab-panel').forEach(pn => pn.classList.toggle('active', pn.dataset.panel === t.dataset.tab));
+  });
+
+  // Sauvegarde
+  body.addEventListener('click', async e => {
+    const btn = e.target.closest('[data-save]');
+    if (!btn) return;
+    const filename = btn.dataset.save;
+    const ta = body.querySelector(`[data-editor="${filename}"]`);
+    if (!ta) return;
+    btn.disabled = true;
+    try {
+      await API.post(`/api/workspaces/${w.id}/file`, { filename, content: ta.value });
+      const hint = btn.closest('div').querySelector('[data-saved-hint]');
+      if (hint) { hint.style.display = 'inline'; setTimeout(() => hint.style.display = 'none', 2500); }
+      else toast('Sauvegardé');
+      btn.textContent = '💾 Sauvegarder';
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // Marquer modifié
+  body.addEventListener('input', e => {
+    const ta = e.target.closest('[data-editor]');
+    if (!ta) return;
+    const filename = ta.dataset.editor;
+    const btn = body.querySelector(`[data-save="${filename}"]`);
+    if (btn) btn.textContent = '💾 Sauvegarder *';
   });
 
   const footer = document.createElement('div');
@@ -2851,6 +2924,168 @@ function mcpForm(existing = null) {
       closeModal();
       route();
     } catch (e) { toast(e.message, true); }
+  };
+}
+
+// ============================================================
+// Import wizard — depuis la config Claude Code existante
+// ============================================================
+async function openImportWizard() {
+  const body = document.createElement('div');
+  const footer = document.createElement('div');
+
+  body.innerHTML = `<p style="color:var(--fg-dim);font-size:12px;padding:12px 0;">Scan en cours…</p>`;
+  footer.innerHTML = `<button class="btn" id="wizCancel">Annuler</button>`;
+  openModal({ title: '⬇ Importer depuis Claude Code', body, footer, wide: true });
+  footer.querySelector('#wizCancel').onclick = closeModal;
+
+  let scan;
+  try {
+    scan = await API.get('/api/setup/scan');
+  } catch (e) {
+    body.innerHTML = `<p style="color:var(--red);font-size:12px;padding:12px 0;">Erreur : ${escapeHtml(e.message)}</p>`;
+    return;
+  }
+
+  const mcps = scan.mcps || [];
+  const projects = scan.projects || [];
+
+  body.innerHTML = `
+    <style>
+      .wiz-section { margin-bottom: 20px; }
+      .wiz-head {
+        display: flex; align-items: baseline; gap: 8px;
+        margin: 0 0 6px; padding-bottom: 6px;
+        border-bottom: 1px solid var(--border);
+      }
+      .wiz-head span { font-size: 13px; font-weight: 600; color: var(--accent); }
+      .wiz-head small { font-size: 11px; color: var(--fg-dim); }
+      .wiz-row {
+        display: grid;
+        grid-template-columns: 18px 1fr 1fr;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 2px;
+        border-bottom: 1px solid var(--border);
+        font-size: 12px;
+      }
+      .wiz-row:last-child { border-bottom: none; }
+      .wiz-row.disabled { opacity: 0.45; }
+      .wiz-row input[type=checkbox] { cursor: pointer; }
+      .wiz-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .wiz-sub  { font-size: 11px; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .wiz-path-input {
+        width: 100%; box-sizing: border-box;
+        font-size: 11px; font-family: var(--mono);
+        background: var(--bg-input); color: var(--fg);
+        border: 1px solid var(--border); border-radius: 3px;
+        padding: 3px 6px;
+      }
+      .wiz-path-input:focus { outline: 1px solid var(--accent); }
+      .wiz-path-input:disabled { opacity: 0.4; cursor: not-allowed; }
+      .badge-r    { font-size: 10px; padding: 1px 5px; border-radius: 3px; margin-left: 5px; background: var(--bg-hover); color: var(--fg-dim); }
+      .badge-warn { font-size: 10px; padding: 1px 5px; border-radius: 3px; margin-left: 5px; background: rgba(210,153,34,.15); color: var(--orange); }
+      .wiz-empty  { font-size: 12px; color: var(--fg-dim); padding: 8px 2px; }
+    </style>
+
+    <div class="wiz-section">
+      <div class="wiz-head">
+        <span>MCPs (${mcps.length})</span>
+        <small>— ~/.claude/settings.json</small>
+      </div>
+      ${mcps.length === 0 ? '<div class="wiz-empty">Aucun MCP trouvé.</div>' : mcps.map((m, i) => `
+        <div class="wiz-row${m.already_registered ? ' disabled' : ''}">
+          <input type="checkbox" id="mcp-${i}" ${m.already_registered ? 'disabled' : ''}>
+          <div>
+            <div class="wiz-name">${escapeHtml(m.name)}${m.already_registered ? '<span class="badge-r">enregistré</span>' : ''}</div>
+            <div class="wiz-sub">${escapeHtml(m.transport)} · ${escapeHtml(m.command || m.url || '')}</div>
+          </div>
+          <div class="wiz-sub">${escapeHtml((m.args || []).join(' '))}</div>
+        </div>`).join('')}
+    </div>
+
+    <div class="wiz-section">
+      <div class="wiz-head">
+        <span>Projets (${projects.length})</span>
+        <small>— ~/.claude/projects/</small>
+      </div>
+      ${projects.length === 0 ? '<div class="wiz-empty">Aucun projet trouvé.</div>' : projects.map((p, i) => {
+        const name = (p.path || '').split('\\').pop() || (p.path || '').split('/').pop() || p.encoded;
+        const date = new Date(p.last_modified * 1000).toLocaleDateString('fr-FR');
+        const blocked = p.already_registered;
+        return `
+        <div class="wiz-row${blocked ? ' disabled' : ''}">
+          <input type="checkbox" id="proj-${i}" data-pathexists="${p.path_exists ? '1' : '0'}" ${blocked ? 'disabled' : ''}>
+          <div>
+            <div class="wiz-name">
+              ${escapeHtml(name)}
+              ${p.already_registered ? '<span class="badge-r">enregistré</span>' : ''}
+              ${!p.path_exists && !p.already_registered ? '<span class="badge-warn">chemin à corriger</span>' : ''}
+            </div>
+            <div class="wiz-sub">${p.sessions} session(s) · ${date}</div>
+          </div>
+          <input class="wiz-path-input" type="text" id="proj-path-${i}"
+            value="${escapeHtml(p.path)}"
+            placeholder="Chemin du dossier…"
+            ${blocked ? 'disabled' : ''}>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+
+  footer.innerHTML = `
+    <button class="btn" id="wizCancel2">Annuler</button>
+    <button class="btn primary" id="wizImport">Importer la sélection</button>
+  `;
+  footer.querySelector('#wizCancel2').onclick = closeModal;
+  footer.querySelector('#wizImport').onclick = async () => {
+    // Utilise l'index ORIGINAL (i) pour accéder aux éléments DOM — ne pas filtrer avant map
+    const selectedMcps = mcps
+      .map((m, i) => {
+        if (m.already_registered) return null;
+        if (!body.querySelector(`#mcp-${i}`)?.checked) return null;
+        return { ...m };
+      })
+      .filter(Boolean);
+
+    const selectedProjects = projects
+      .map((p, i) => {
+        if (p.already_registered) return null;
+        if (!body.querySelector(`#proj-${i}`)?.checked) return null;
+        const pathInput = body.querySelector(`#proj-path-${i}`);
+        const path = (pathInput ? pathInput.value : p.path).trim();
+        if (!path) return null;
+        const name = path.split('\\').pop() || path.split('/').pop() || p.encoded;
+        const id = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || `proj-${i}`;
+        return { id, path, label: name };
+      })
+      .filter(Boolean);
+
+    if (!selectedMcps.length && !selectedProjects.length) {
+      return toast('Aucun élément sélectionné.', true);
+    }
+
+    try {
+      const r = await API.post('/api/setup/import', { mcps: selectedMcps, projects: selectedProjects });
+      const okM = (r.mcps || []).filter(x => x.ok).length;
+      const okW = (r.workspaces || []).filter(x => x.ok).length;
+      const renamed = (r.workspaces || []).filter(x => x.ok && x.renamed);
+      const missing = (r.workspaces || []).filter(x => x.ok && x.path_exists === false);
+      const errs = [
+        ...(r.mcps || []).filter(x => !x.ok).map(x => `MCP ${x.id} : ${x.error || '?'}`),
+        ...(r.workspaces || []).filter(x => !x.ok).map(x => `Projet ${x.requested_id || x.id} : ${x.error || '?'}`),
+      ];
+      const parts = [`Importés : ${okM} MCP(s), ${okW} projet(s)`];
+      if (renamed.length) parts.push(`Renommés (ID en conflit) : ${renamed.map(x => `${x.requested_id} → ${x.id}`).join(', ')}`);
+      if (missing.length) parts.push(`Chemin inexistant sur disque : ${missing.map(x => x.id).join(', ')}`);
+      if (errs.length) parts.push(errs.join(' · '));
+      toast(parts.join(' — '), errs.length > 0);
+      closeModal();
+      await loadData();
+      route();
+    } catch (e) {
+      toast(e.message, true);
+    }
   };
 }
 

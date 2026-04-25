@@ -291,19 +291,7 @@ def duplicate_workspace(payload: dict) -> tuple[int, dict]:
         return 409, {"error": "destination déjà existante"}
 
     shutil.copytree(src, dst)
-
-    # .bat de lancement
-    bat_path = SCRIPTS_DIR / f"launch-{new_id}.bat"
-    bat_content = f"""@echo off
-echo.
-echo  +======================================+
-echo  ^|   Claude Code -- {label}
-echo  +======================================+
-echo.
-cd /d {dst}
-claude
-"""
-    bat_path.write_text(bat_content, encoding="utf-8")
+    write_launch_bat(new_id, label, str(dst))
 
     # registre
     data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
@@ -340,10 +328,13 @@ def launch_resume(ws_id: str) -> tuple[bool, str]:
         return False, f"Erreur : {e}"
 
 
+_resolve_ws_dir = resolve_ws_dir  # alias rétro-compat (centralisé dans helpers.py)
+
+
 def export_workspace(ws_id: str) -> tuple[int, bytes | dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
-    ws_dir = WORKSPACES_DIR / ws_id
+    ws_dir = _resolve_ws_dir(ws_id)
     if not ws_dir.exists():
         return 404, {"error": "workspace absent"}
 
@@ -360,7 +351,7 @@ def export_workspace(ws_id: str) -> tuple[int, bytes | dict]:
 
 
 def _workspace_settings_path(ws_id: str) -> Path:
-    return WORKSPACES_DIR / ws_id / ".claude" / "settings.json"
+    return _resolve_ws_dir(ws_id) / ".claude" / "settings.json"
 
 
 def create_workspace(payload: dict) -> tuple[int, dict]:
@@ -395,18 +386,7 @@ def create_workspace(payload: dict) -> tuple[int, dict]:
         "emoji": emoji,
     }
     created = apply_template(tpl_dir, ws_dir, vars)
-
-    bat_path = SCRIPTS_DIR / f"launch-{ws_id}.bat"
-    bat_content = f"""@echo off
-echo.
-echo  +======================================+
-echo  ^|   Claude Code -- {label}
-echo  +======================================+
-echo.
-cd /d {ws_dir}
-claude
-"""
-    bat_path.write_text(bat_content, encoding="utf-8")
+    write_launch_bat(ws_id, label, str(ws_dir))
 
     data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
     data.setdefault("workspaces", []).append({
@@ -437,22 +417,16 @@ def update_workspace(ws_id: str, payload: dict) -> tuple[int, dict]:
         entry["description"] = (payload.get("description") or "").strip()
     if "emoji" in payload:
         entry["emoji"] = (payload.get("emoji") or "📁").strip()
+    if "path" in payload:
+        new_path = (payload.get("path") or "").strip()
+        if new_path:
+            ok, err = validate_ws_path(new_path)
+            if not ok:
+                return 400, {"error": f"chemin invalide : {err}"}
+            entry["path"] = str(Path(new_path)).rstrip("\\/")
     ws_list[idx] = entry
     write_json(WORKSPACES_JSON, data)
-
-    # Regénère le .bat avec le nouveau label
-    bat_path = SCRIPTS_DIR / f"launch-{ws_id}.bat"
-    bat_content = f"""@echo off
-echo.
-echo  +======================================+
-echo  ^|   Claude Code -- {entry['label']}
-echo  +======================================+
-echo.
-cd /d {entry['path']}
-claude
-"""
-    bat_path.write_text(bat_content, encoding="utf-8")
-
+    write_launch_bat(ws_id, entry["label"], entry["path"])
     return 200, {"ok": True, "workspace": entry}
 
 
@@ -475,7 +449,7 @@ def delete_workspace(ws_id: str, purge: bool = False) -> tuple[int, dict]:
         notes.append("absent du registre")
 
     if purge:
-        ws_dir = WORKSPACES_DIR / ws_id
+        ws_dir = _resolve_ws_dir(ws_id)
         if ws_dir.exists():
             _remove_dir_or_link(ws_dir)
             notes.append(f"dossier supprimé : {ws_dir}")
@@ -492,7 +466,7 @@ def delete_workspace(ws_id: str, purge: bool = False) -> tuple[int, dict]:
 def read_workspace_config(ws_id: str) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
-    ws_dir = WORKSPACES_DIR / ws_id
+    ws_dir = _resolve_ws_dir(ws_id)
     if not ws_dir.exists():
         return 404, {"error": "workspace absent sur disque"}
 
@@ -528,3 +502,86 @@ def read_workspace_config(ws_id: str) -> tuple[int, dict]:
     }
 
 
+# Fichiers éditables depuis la vue config (chemin relatif → chemin absolu autorisé)
+_EDITABLE_FILES: dict[str, list[str]] = {
+    "CLAUDE.md":              ["CLAUDE.md"],
+    "notes.md":               ["notes.md"],
+    ".claude/settings.json":  [".claude", "settings.json"],
+}
+
+def write_workspace_file(ws_id: str, filename: str, content: str) -> tuple[int, dict]:
+    if not safe_id(ws_id):
+        return 400, {"error": "id invalide"}
+    if filename not in _EDITABLE_FILES:
+        return 403, {"error": f"Fichier non éditable : {filename}. Autorisés : {', '.join(_EDITABLE_FILES)}"}
+    ws_dir = _resolve_ws_dir(ws_id)
+    if not ws_dir.exists():
+        return 404, {"error": "workspace absent sur disque"}
+    target = ws_dir.joinpath(*_EDITABLE_FILES[filename])
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with _MUTATION_LOCK:
+        if target.exists():
+            target.with_suffix(target.suffix + ".bak").write_bytes(target.read_bytes())
+        target.write_text(content, encoding="utf-8")
+    log.info("workspace file written: %s / %s", ws_id, filename)
+    return 200, {"ok": True, "path": str(target)}
+
+
+def register_existing_workspace(payload: dict) -> tuple[int, dict]:
+    """Enregistre un dossier existant comme workspace sans créer de fichiers.
+
+    Contrairement à create_workspace, ne touche pas au contenu du dossier.
+    Auto-suffixe l'ID en cas de collision et renvoie l'ID effectif au front.
+    """
+    requested_id = re.sub(r'[^a-zA-Z0-9_-]', '-', (payload.get("id") or "").strip())[:40].strip('-')
+    path = (payload.get("path") or "").strip()
+    label = sanitize_bat((payload.get("label") or requested_id).strip()) or requested_id
+
+    if not safe_id(requested_id):
+        return 400, {"error": f"id invalide après nettoyage : '{requested_id}'"}
+
+    ok, err = validate_ws_path(path)
+    if not ok:
+        return 400, {"error": err}
+
+    path_norm = str(Path(path)).rstrip("\\/")
+    path_exists = Path(path_norm).exists()
+
+    data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+    data.setdefault("workspaces", [])
+
+    if any(w.get("path", "").lower() == path_norm.lower() for w in data["workspaces"]):
+        return 409, {"error": f"Chemin déjà enregistré : {path_norm}"}
+
+    # Auto-suffix si l'ID est déjà pris
+    ws_id = requested_id
+    suffix = 2
+    while any(w["id"] == ws_id for w in data["workspaces"]):
+        ws_id = f"{requested_id}-{suffix}"
+        suffix += 1
+        if suffix > 99:
+            return 409, {"error": f"Trop de conflits d'ID pour : {requested_id}"}
+
+    data["workspaces"].append({
+        "id": ws_id,
+        "label": label,
+        "emoji": (payload.get("emoji") or "📁").strip(),
+        "description": (payload.get("description") or "").strip(),
+        "path": path_norm,
+        "template": "imported",
+    })
+    write_json(WORKSPACES_JSON, data)
+
+    try:
+        write_launch_bat(ws_id, label, path_norm)
+    except Exception as e:
+        log.warning("write_launch_bat failed for %s: %s", ws_id, e)
+
+    log.info("workspace imported: %s → %s (path_exists=%s)", ws_id, path_norm, path_exists)
+    return 201, {
+        "ok": True,
+        "id": ws_id,
+        "renamed": ws_id != requested_id,
+        "requested_id": requested_id,
+        "path_exists": path_exists,
+    }
