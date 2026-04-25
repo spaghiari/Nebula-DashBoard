@@ -1,7 +1,8 @@
-# 🧩 Claude Workspace
+# 🧩 Atelier — Claude Workspace Dashboard
 
 Un environnement local pour gérer plusieurs workspaces Claude Code depuis une
-interface web unique : MCPs, skills, plugins, templates, hooks et permissions.
+interface web unique : workspaces, MCPs, skills, plugins, templates, hooks,
+permissions et sessions.
 
 **100 % local** — serveur Python stdlib sur `127.0.0.1:4777`, zéro dépendance
 externe, zéro télémétrie, secrets dans `.env.local` jamais exposés au
@@ -20,24 +21,56 @@ hooks) vit éparpillée dans `~/.claude.json`, un `.mcp.json` par projet,
 - Activer un plugin seulement sur 2 workspaces sur 5 → usine à gaz
 - Retrouver quelle session correspond à quel projet → galère
 
-Ce dashboard centralise tout ça.
+Atelier centralise tout ça.
 
 ---
 
 ## ✨ Fonctionnalités
 
-- **Workspaces** — CRUD, duplication, export, lancement en un clic.
-- **Templates** — création d'un workspace depuis un template (Python, Node,
-  audit, automation, YAML, blank) avec interpolation `{{name}}`, `{{date}}`…
-- **MCPs** — registre unique, substitution `${VAR}` depuis `.env.local`,
-  auto-sync des `.mcp.json` quand un MCP change, import JSON, test.
-- **Skills / Agents / Commands** — scope global ou local, matrice
-  skill × workspace.
-- **Plugins** — marketplace officiel, install/uninstall/enable/disable via
-  `claude plugin`, override par workspace dans `settings.json`.
-- **Sessions** — browser des sessions passées par workspace.
-- **Hooks & permissions** — éditeur pour `settings.json` global et local.
-- **Statusline** — workspace, branche git, modèle, nombre de MCPs actifs.
+### Pilotage
+- **Workspaces** — CRUD, duplication, export ZIP, lancement en un clic, reprise
+  de session (`claude -c`), enregistrement d'un dossier existant.
+- **Templates** — création depuis modèle (Python, Node, audit, automation,
+  YAML, blank) avec interpolation `{{name}}`, `{{label}}`, `{{description}}`,
+  `{{tools}}`, `{{date}}`, `{{emoji}}`. Édition multi-fichiers depuis l'UI.
+- **MCPs** — registre unique, transport `stdio`/`http`/`sse`, champs `cwd` et
+  `headers`, substitution `${VAR}` depuis `.env.local`, sync automatique des
+  `.mcp.json`, test live, import bulk depuis JSON Claude.
+- **Skills** — page dédiée avec édition multi-fichiers (SKILL.md + références),
+  copier vers workspaces, cross-référence.
+- **Plugins** — browser marketplace (catalogue officiel + externes + README),
+  install/uninstall en un clic, **vue scope par workspace** scalable
+  (segmented control 3 états : Actif / Inactif / Hériter), actions de masse.
+- **Sessions** — liste des conversations Claude Code passées par workspace.
+- **Hooks & permissions** — éditeur GUI pour `settings.json` global + local.
+
+### Confort & UX
+- **5 thèmes** — Atelier sombre/clair, Marine (bleu), Forêt (émeraude),
+  Brique (orange). Persisté en localStorage.
+- **Command palette** — `/` ou `Ctrl+K`, recherche globale.
+- **Raccourcis clavier** — chord `g h/m/p/k/t/o/a` pour naviguer, `n`/`m`/`s`
+  pour les actions rapides, `Ctrl+S` dans les éditeurs.
+- **Page Aide** intégrée — 12 sections couvrant tout, avec sommaire sticky.
+- **Wizard premier lancement** — 5 étapes (bienvenue, thème, import config,
+  workspace, raccourcis) qui se déclenche automatiquement au 1er run.
+
+### Onboarding
+- **Wizard d'import** — scan de `~/.claude/` pour récupérer MCPs et projets
+  existants en un clic.
+- **Détection des conflits** — repère les MCPs présents à la fois dans
+  `~/.claude.json`/`settings.json` et dans le registre Atelier, propose la
+  migration ou le nettoyage avec backup automatique.
+- **Auto-update** — vérification git en arrière-plan, badge dans la sidebar
+  quand des updates sont dispos, modale avec changelog et `git pull` en un
+  clic. Détection du redémarrage nécessaire (Python vs frontend).
+
+### Sécurité
+- Bind `127.0.0.1` strict, pas d'auth (on suppose une machine perso).
+- Validation `safe_id` partout, regex stricte sur les paths.
+- `_MUTATION_LOCK` réentrant pour les écritures concurrentes.
+- Cap Content-Length 10 MB anti-DoS.
+- Subprocess `shell=False`, encoding UTF-8 explicite, timeouts.
+- Backups automatiques avant chaque modification destructive.
 
 ---
 
@@ -45,61 +78,71 @@ Ce dashboard centralise tout ça.
 
 ```
 claude-workspace/
-├── CLAUDE.md                 # Contexte global chargé par Claude Code
-├── .env.local.example        # Template des secrets (à copier en .env.local)
+├── CLAUDE.md                    # Contexte global chargé par Claude Code
+├── .env.local.example           # Template des secrets
+├── .env.local                   # ← LOCAL, gitignored
 ├── .gitignore
 │
-├── dashboard/                # Le dashboard web
-│   ├── server.py             # Serveur Python stdlib (ThreadingHTTPServer)
-│   ├── index.html            # SPA (hash router, vanilla JS)
+├── dashboard/                   # Le dashboard web
+│   ├── server.py                # Serveur Python stdlib + dispatcher de routes
+│   ├── index.html               # Squelette SPA
+│   ├── app.css                  # Design system (5 thèmes)
+│   ├── app.js                   # SPA vanilla JS (router, pages, modales)
+│   ├── dashcore/                # Backend modulaire
+│   │   ├── config.py            # Constantes & chemins
+│   │   ├── helpers.py           # I/O, validation, fichiers
+│   │   ├── env_local.py         # Gestion .env.local + ${VAR}
+│   │   ├── journal.py           # Journal markdown
+│   │   ├── workspace_io.py      # Paths workspace, stats, sanity check
+│   │   ├── api_workspaces.py    # CRUD workspaces, templates, settings
+│   │   ├── api_mcps.py          # MCPs, conflicts, scan, sync
+│   │   ├── api_plugins.py       # Plugins, skills, agents, commandes
+│   │   └── system_update.py     # Auto-update via git
 │   └── data/
-│       └── workspaces.json   # Liste des workspaces déclarés
+│       └── workspaces.json      # ← LOCAL, gitignored
 │
-├── mcp/                      # Registre des MCPs
-│   ├── registry.json         # MCPs avec placeholders ${VAR}
-│   ├── import-mcps.json      # Bundle d'exemples à importer
-│   └── configs/              # Configs détaillées par MCP (optionnel)
+├── mcp/                         # Registre des MCPs
+│   ├── registry.json            # ← LOCAL, gitignored
+│   ├── import-mcps.json         # Bundle d'exemples à importer
+│   └── configs/                 # Configs détaillées (samples)
 │
-├── memory/                   # Mémoire chargée via @import dans CLAUDE.md
-│   ├── profil.md             # Qui tu es
-│   ├── stack.md              # Ta stack technique
-│   ├── conventions.md        # Tes préférences de collaboration
-│   └── snippets/             # Bouts de code récurrents
+├── memory/                      # Mémoire chargée via @import
+│   ├── profil.md                # Qui tu es
+│   ├── stack.md                 # Ta stack technique
+│   ├── conventions.md           # Tes préférences
+│   ├── global.md                # Notes globales
+│   └── snippets/                # Bouts de code récurrents
 │
-├── scripts/                  # Utilitaires Windows
-│   ├── start-dashboard.bat   # Lance le serveur
-│   ├── new-workspace.bat     # Création rapide en ligne de commande
-│   ├── launch-TEMPLATE.bat   # Template de script de lancement
-│   ├── statusline.py         # Statusline Claude Code
-│   └── update-memory.bat     # Ouvre memory/global.md dans notepad
+├── scripts/                     # Utilitaires
+│   ├── start-dashboard.bat      # Lance le serveur
+│   ├── new-workspace.bat        # Création CLI rapide
+│   ├── launch-TEMPLATE.bat      # Template (les launch-<id>.bat sont gitignored)
+│   ├── statusline.py            # Statusline Claude Code
+│   └── update-memory.bat        # Édite memory/global.md
 │
-├── templates/                # Templates de workspace
-│   ├── blank/                # Minimal
-│   ├── dev-python/           # Projet Python (src/ + tests/ + requirements)
-│   ├── dev-node/             # Projet Node.js ESM
-│   ├── audit/                # Audit sécurité (rapports datés)
-│   ├── automation/           # Workflows / scripts d'automatisation
-│   └── config-yaml/          # Configs YAML (HA, k8s, compose…)
+├── templates/                   # Templates de workspace
+│   ├── blank/, dev-python/, dev-node/
+│   ├── audit/, automation/, config-yaml/
+│   └── README.md
 │
-└── workspaces/               # Tes workspaces (vide à l'origine)
+└── workspaces/                  # ← LOCAL, gitignored sauf .gitkeep
     └── <ton-projet>/
-        ├── CLAUDE.md         # Contexte du workspace
-        ├── .mcp.json         # Généré par le dashboard
+        ├── CLAUDE.md
+        ├── .mcp.json            # Généré par le dashboard
         └── .claude/
-            ├── settings.json # Hooks + permissions + enabledPlugins
-            ├── skills/       # Skills locales
-            ├── agents/       # Subagents
-            └── commands/     # Slash commands
+            ├── settings.json    # Hooks + permissions + plugins
+            ├── skills/, agents/, commands/
 ```
 
 ---
 
 ## 📋 Prérequis
 
-- **Windows 10/11** — adaptation Linux/macOS possible, scripts `.bat` à porter
+- **Windows 10/11** — adaptable Linux/macOS (les scripts `.bat` sont à porter)
 - **Python 3.10+** — stdlib uniquement, aucun `pip install` requis
 - **Node.js** + **npx** — pour les MCPs qui s'installent via `npx -y …`
 - **Claude Code CLI** — `npm install -g @anthropic-ai/claude-code`
+- **git** — pour l'auto-update
 
 ---
 
@@ -113,54 +156,47 @@ notepad .env.local              :: renseigne tes secrets
 scripts\start-dashboard.bat
 ```
 
-Puis ouvre http://127.0.0.1:4777/
+Ouvre http://127.0.0.1:4777/ — au premier lancement, le **wizard
+d'introduction** te guide en 5 étapes : choix du thème, import auto de ta
+config Claude existante, création d'un premier workspace, raccourcis clavier.
 
 ---
 
 ## 🧭 Utilisation au quotidien
 
-Le dashboard est une SPA avec cinq onglets :
+Le dashboard a une sidebar fixe avec 6 sections principales :
 
-| Onglet | Ce qu'on y fait |
-|---|---|
-| **Workspaces** | Créer, dupliquer, lancer (`claude` s'ouvre dans le bon dossier), supprimer, exporter un workspace. Voir les sessions passées. |
-| **MCPs** | Registre central des MCPs. Assigner un MCP à N workspaces — les `.mcp.json` correspondants sont écrits automatiquement avec les `${VAR}` résolus. |
-| **Plugins** | Parcourir le marketplace officiel, installer en un clic, activer/désactiver par workspace via une matrice plugin × workspace. |
-| **Templates** | Voir la liste des templates disponibles avec aperçu du `CLAUDE.md`. |
-| **Outils** | Hooks & permissions globaux, skills, agents, commandes, cleanup. |
+| Onglet | Raccourci | Ce qu'on y fait |
+|---|---|---|
+| **Accueil** | `g h` | Vue d'ensemble : KPIs, grille des workspaces, sanity check, journal |
+| **MCPs** | `g m` | Registre central, ajout/édition, test, import bulk |
+| **Plugins** | `g p` | Marketplace, installés, **scope par workspace** |
+| **Skills** | `g k` | Création, édition multi-fichiers, copier vers workspace |
+| **Templates** | `g t` | Modèles avec édition GUI complète |
+| **Outils** | `g o` | Apparence, onboarding, hooks, env, backups, maintenance |
+| **Aide** | `g a` | Documentation utilisateur intégrée (12 sections) |
+
+Plus la **palette de recherche globale** : `/` ou `Ctrl+K`.
 
 ### Lancer un workspace
 
-1. Onglet **Workspaces** → bouton ▶ sur la ligne du workspace
-2. Un terminal s'ouvre dans le bon dossier, `claude` démarre, le `CLAUDE.md`
-   local est chargé automatiquement.
-3. Les MCPs assignés à ce workspace sont déjà présents dans `.mcp.json`.
+1. Page **Accueil** → bouton **Lancer** sur la carte
+2. Un terminal s'ouvre dans le dossier, `claude` démarre, le `CLAUDE.md`
+   local est chargé automatiquement
+3. Les MCPs assignés sont déjà dans `.mcp.json`
 
 ### Créer un workspace
 
-Onglet **Workspaces** → **+ Nouveau** :
-- Choisis un template (blank, dev-python, dev-node, audit, automation, …).
-- Remplis label / description / outils.
-- Le dossier est créé, le `CLAUDE.md` interpolé avec tes valeurs, le script de
-  lancement ajouté dans `scripts\`.
-
-### Éditer un workspace
-
-Bouton ✎ → édition du label, description, emoji, path. Bouton 📋 pour
-dupliquer, 🗑 pour supprimer.
-
-### Retrouver une session
-
-Ouvrir un workspace → onglet **Sessions** → liste des conversations Claude
-Code passées pour ce dossier (transcripts JSONL dans
-`~/.claude/projects/<hash>/`).
+3 façons :
+- **+ Nouveau** sur l'Accueil — création depuis template
+- **+ Dossier** — enregistrer un dossier déjà sur disque
+- **Importer config** — récupération depuis `~/.claude/projects/`
 
 ---
 
 ## 🔐 Le flux `.env.local` → `${VAR}` → `.mcp.json`
 
-1. Tu renseignes tes secrets dans `.env.local` (jamais committé, jamais
-   envoyé au navigateur).
+1. Tu renseignes tes secrets dans `.env.local` (jamais committé).
 2. Dans le dashboard, tu déclares un MCP avec des placeholders :
    ```json
    "env": { "OPNSENSE_API_KEY": "${OPNSENSE_API_KEY}" }
@@ -170,63 +206,126 @@ Code passées pour ce dossier (transcripts JSONL dans
 4. Claude Code lit ce `.mcp.json` local au démarrage — il ne voit jamais
    le placeholder.
 
+Va dans **Outils → Variables d'environnement** pour gérer le `.env.local`
+en GUI (filtre, groupement par préfixe, masquage des valeurs).
+
 ---
 
 ## 🔌 Ajouter un MCP
 
-Trois façons :
+**Page MCPs → + Nouveau MCP**. Le formulaire change selon le transport :
 
-**A. Formulaire** — onglet **MCPs** → **+ Nouveau MCP** → remplir type
-(`stdio` ou `http`), command, args, env, workspaces concernés.
+### stdio
+- `command` (npx, uvx, python…)
+- `args` (un par ligne)
+- `cwd` (working directory, optionnel, supporte `${VAR}`)
+- `env` (KEY=VALUE par ligne)
 
-**B. Import JSON** — onglet **MCPs** → **↧ Importer JSON** → coller un bloc
-`mcpServers` (format Claude Code standard). Pratique pour migrer depuis
-`~/.claude.json`.
+### http / sse
+- `url`
+- `headers` (Authorization=Bearer ${TOKEN}, etc.)
 
-**C. Bundle d'exemples** — ouvrir `mcp/import-mcps.json`, copier la partie
-`mcpServers`, la coller dans l'import. Tous les MCPs du lexique ci-dessous y
-sont prêts à l'emploi.
+Plus l'onglet **JSON brut** pour copier-coller un bloc complet (depuis un
+README de MCP par exemple), et le bouton **Importer** sur la page MCPs pour
+coller un format `{"mcpServers": {...}}` Claude Code standard.
 
-Après ajout, dans le panneau de scopes : coche les workspaces où le MCP doit
-être actif. Les `.mcp.json` sont régénérés immédiatement, avec les `${VAR}`
-résolus. Claude Code les lit au prochain démarrage du workspace.
+---
+
+## 🔄 Auto-update
+
+Quand tu pousses des commits sur le repo officiel, les utilisateurs voient
+automatiquement un **badge violet** dans leur sidebar. Clic → modale avec :
+- Version locale + branche tracking
+- Liste des commits à venir (sha + message + auteur + date relative)
+- Bouton **Appliquer la mise à jour** → `git pull --ff-only`
+- Détection automatique : si seuls les fichiers JS/CSS/HTML ont changé,
+  un simple F5 suffit. Si du Python a changé, message demande de
+  redémarrer `start-dashboard.bat`.
+
+Sécurité : refus si modifications locales non committées, commandes git
+hardcodées (pas d'injection possible).
+
+---
+
+## 🛠 Détection des conflits avec la config Claude globale
+
+Si des MCPs existent à la fois dans `~/.claude.json` ou
+`~/.claude/settings.json` **et** dans le registre Atelier, ils sont
+dupliqués (ça marche par précédence project > user > global, mais c'est
+fragile).
+
+**Page MCPs** affiche un bandeau jaune si des conflits sont détectés. Clic
+sur **Examiner** → modale avec :
+- **Doublons** (mêmes IDs des deux côtés) → bouton "Retirer du global"
+  (Atelier reste source de vérité, backup `.bak` créé)
+- **Orphelins** (uniquement dans Claude global) → bouton "Migrer" pour les
+  importer dans Atelier en un coup, ou poubelle si obsolètes
+
+---
+
+## 🎨 Thèmes
+
+**Outils → Apparence & assistance** propose 5 thèmes :
+
+| Thème | Style |
+|---|---|
+| Atelier | Sombre · violet & ocre (défaut) |
+| Atelier clair | Clair · violet profond |
+| Marine | Sombre · bleu profond |
+| Forêt | Sombre · vert émeraude |
+| Brique | Sombre · orange chaud |
+
+Application instantanée, persistance localStorage, transitions douces.
+
+---
+
+## ⌨️ Raccourcis clavier
+
+| Touche | Action |
+|---|---|
+| `/` ou `Ctrl+K` | Palette de recherche globale |
+| `g` puis `h/m/p/k/t/o/a` | Naviguer (home/MCPs/plugins/skills/templates/outils/aide) |
+| `n` | Nouveau workspace |
+| `m` | Nouveau MCP |
+| `s` | Sync tous les workspaces |
+| `Ctrl+S` | Sauvegarder un fichier (modales d'édition) |
+| `Esc` | Fermer modale ou palette |
+
+---
+
+## 🛡 Sécurité
+
+- `.env.local` est dans `.gitignore`.
+- Le serveur bind sur `127.0.0.1` uniquement.
+- Pas d'authentification — on suppose une seule personne sur la machine.
+- Validation `safe_id` (regex `[a-zA-Z0-9_-]{1,40}`) partout côté backend.
+- Path traversal bloqué via `Path.relative_to()` strict.
+- Subprocess sans `shell=True`, args en liste, encoding UTF-8 explicite.
+- Backups `.bak` avant toute écriture destructive (registry, settings, hooks).
+- `_MUTATION_LOCK` réentrant pour la cohérence concurrente.
+- Les valeurs résolues des `${VAR}` ne quittent jamais le serveur : le
+  navigateur voit le placeholder, pas la valeur.
+- Les `.mcp.json` des workspaces contiennent les secrets résolus — ils sont
+  gitignored par défaut.
 
 ---
 
 ## 📚 Lexique de MCPs prêts à l'emploi
 
-Tous les MCPs ci-dessous utilisent des `${VAR}` — à définir dans
-`.env.local` avant import.
+Bundle prêt dans `mcp/import-mcps.json` — copie la partie `mcpServers` dans
+**MCPs → Importer**. Les `${VAR}` à définir dans `.env.local` :
 
 ### 📁 filesystem — accès fichiers scopé
-
-Sert d'accès fichiers contrôlé pour Claude Code. **Toujours scoper à un
-dossier précis**, jamais `C:\` entier.
-
-**Prérequis** : aucun (téléchargé à la volée par `npx -y`).
 
 ```json
 "filesystem": {
   "type": "stdio",
   "command": "npx",
-  "args": [
-    "-y",
-    "@anthropic-ai/mcp-server-filesystem",
-    "C:\\claude-workspace\\workspaces"
-  ],
-  "env": {}
+  "args": ["-y", "@anthropic-ai/mcp-server-filesystem", "C:\\claude-workspace\\workspaces"]
 }
 ```
 
----
-
-### 🛡 opnsense — pilotage du firewall OPNsense
-
-Lecture/écriture de la config OPNsense via son API REST.
-
-**Prérequis** : package npm `@richard-stovall/opnsense-mcp-server`
-(installé à la volée par `npx`). Générer une API key + secret dans OPNsense :
-*System → Access → Users → ton user → API keys*.
+### 🛡 opnsense — pilotage du firewall
 
 `.env.local` :
 ```env
@@ -236,29 +335,7 @@ OPNSENSE_API_SECRET=...
 OPNSENSE_VERIFY_SSL=false
 ```
 
-```json
-"opnsense": {
-  "type": "stdio",
-  "command": "npx",
-  "args": ["-y", "@richard-stovall/opnsense-mcp-server"],
-  "env": {
-    "OPNSENSE_URL": "${OPNSENSE_URL}",
-    "OPNSENSE_API_KEY": "${OPNSENSE_API_KEY}",
-    "OPNSENSE_API_SECRET": "${OPNSENSE_API_SECRET}",
-    "OPNSENSE_VERIFY_SSL": "${OPNSENSE_VERIFY_SSL}"
-  }
-}
-```
-
----
-
 ### 🔀 n8n — workflows via supergateway
-
-n8n expose un endpoint MCP en HTTP streamable. Pour le consommer en stdio
-(format attendu par Claude Code), on utilise `supergateway` comme bridge.
-
-**Prérequis** : le plugin MCP activé côté n8n, puis le token JWT copié depuis
-l'UI n8n. Le package `supergateway` est téléchargé à la volée par `npx`.
 
 `.env.local` :
 ```env
@@ -266,26 +343,7 @@ N8N_URL=https://n8n.exemple.lan
 N8N_TOKEN=eyJhbGci...
 ```
 
-```json
-"n8n": {
-  "type": "stdio",
-  "command": "cmd",
-  "args": [
-    "/c", "npx", "-y", "supergateway",
-    "--streamableHttp", "${N8N_URL}/mcp-server/http",
-    "--header", "Authorization: Bearer ${N8N_TOKEN}"
-  ],
-  "env": {}
-}
-```
-
----
-
-### 📖 wikijs — lecture/écriture Wiki.js
-
-**Prérequis** : package npm `wikijs-mcp` (installé à la volée par `npx`).
-Générer un token dans Wiki.js : *Administration → API Access → New API Key*
-avec les droits `read:pages`, `write:pages`.
+### 📖 wikijs — Wiki.js read/write
 
 `.env.local` :
 ```env
@@ -293,121 +351,52 @@ WIKIJS_API_URL=https://wiki.exemple.com
 WIKIJS_TOKEN=eyJhbGci...
 ```
 
-```json
-"wikijs": {
-  "type": "stdio",
-  "command": "npx",
-  "args": ["-y", "wikijs-mcp", "server"],
-  "env": {
-    "WIKIJS_API_URL": "${WIKIJS_API_URL}",
-    "WIKIJS_TOKEN": "${WIKIJS_TOKEN}"
-  }
-}
-```
-
----
-
-### 🔬 binary-ninja — reverse engineering (pont local)
-
-**Prérequis** :
-- Binary Ninja installé.
-- Plugin `akrutsinger/binja_codemode_mcp` installé via le Plugin Manager de
-  Binary Ninja (communauté).
-- Python 3 disponible en CLI (`python3`).
-- Binary Ninja doit être **ouvert** avec un binaire chargé pour que le pont
-  réponde (le plugin écoute en local).
+### 🔬 binary-ninja — reverse engineering
 
 `.env.local` :
 ```env
 BINJA_MCP_URL=http://127.0.0.1:42069
 BINJA_MCP_KEY=binja-codemode-local
-BINJA_MCP_SCRIPT=C:/Users/Toi/AppData/Roaming/Binary Ninja/repositories/community/plugins/akrutsinger_binja_codemode_mcp/bridge/mcp_bridge.py
+BINJA_MCP_SCRIPT=C:/path/to/mcp_bridge.py
 ```
-
-```json
-"binary-ninja": {
-  "type": "stdio",
-  "command": "python3",
-  "args": ["${BINJA_MCP_SCRIPT}"],
-  "env": {
-    "BINJA_MCP_URL": "${BINJA_MCP_URL}",
-    "BINJA_MCP_KEY": "${BINJA_MCP_KEY}"
-  }
-}
-```
-
----
 
 ### 🐞 x64dbg — debugger via script Python
 
-**Prérequis** : x64dbg installé, script Python local qui expose le MCP
-(à fournir toi-même ou récupérer depuis un projet tiers). Le chemin Python
-pointe vers l'interpréteur embarqué de x64dbg si tu l'utilises.
-
 `.env.local` :
 ```env
-X64DBG_PYTHON=C:/Users/Toi/AppData/Local/Python/pythoncore-3.14-64/python.exe
-X64DBG_SCRIPT=C:/chemin/vers/x64dbg_mcp.py
+X64DBG_PYTHON=C:/path/to/python.exe
+X64DBG_SCRIPT=C:/path/to/x64dbg_mcp.py
 ```
+
+### 🏠 Home Assistant
 
 ```json
-"x64dbg": {
-  "type": "stdio",
-  "command": "${X64DBG_PYTHON}",
-  "args": ["${X64DBG_SCRIPT}"],
-  "env": {}
-}
+"homeassistant": { "type": "http", "url": "${HA_MCP_URL}" }
 ```
 
----
-
-### 🏠 Home Assistant — domotique (HTTP direct)
-
-Home Assistant expose nativement un endpoint MCP (add-on officiel).
-
-**Prérequis** : HA ≥ 2024.11, add-on *MCP Server* activé. Copier l'URL depuis
-l'onglet *Intégrations* → *MCP Server*.
-
-```json
-"homeassistant": {
-  "type": "http",
-  "url": "${HA_MCP_URL}"
-}
-```
+Voir le détail complet de chaque MCP dans `mcp/import-mcps.json`.
 
 ---
 
 ## ➕ Ajouter un workspace
 
-- **Dashboard** : bouton *+ Nouveau*, choisir un template, remplir
-  label/description/outils.
-- **CLI** : `scripts\new-workspace.bat` (interactif).
-- **Manuel** : voir `AJOUTER-WORKSPACE.md`.
+- **Dashboard** : bouton *+ Nouveau*, choisir un template
+- **CLI** : `scripts\new-workspace.bat` (interactif)
+- **Manuel** : voir `AJOUTER-WORKSPACE.md`
 
 ---
 
 ## 🧱 Ajouter un template
 
 1. `cp -r templates/blank templates/mon-template`
-2. Éditer `.template.json` (label, description, emoji).
-3. Éditer `CLAUDE.md` en utilisant les placeholders `{{name}}`, `{{label}}`,
-   `{{description}}`, `{{tools}}`, `{{date}}`, `{{emoji}}`.
-4. Recharger le dashboard — le template apparaît dans le sélecteur.
+2. Éditer `.template.json` (label, description, emoji)
+3. Éditer les fichiers en utilisant les placeholders
+4. Recharger le dashboard
 
-Détails complets dans `templates/README.md`.
+Ou directement depuis le GUI : **Templates → Éditer** sur une carte ouvre un
+éditeur multi-fichiers avec arborescence + sauvegarde par `Ctrl+S`.
 
----
-
-## 🛡 Sécurité
-
-- `.env.local` est dans `.gitignore` dès le départ.
-- Le serveur bind sur `127.0.0.1` uniquement — jamais exposé au LAN.
-- Pas d'authentification : on part du principe qu'une seule personne accède à
-  la machine. Sinon, ajoute un reverse-proxy avec auth.
-- Les valeurs résolues des `${VAR}` ne quittent jamais le serveur : le
-  navigateur voit le placeholder, pas la valeur.
-- Les `.mcp.json` des workspaces **contiennent les secrets résolus** — ils
-  sont déjà dans `.gitignore`, ne les commit jamais.
+Détails dans `templates/README.md`.
 
 ---
 

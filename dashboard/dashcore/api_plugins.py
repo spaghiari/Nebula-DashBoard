@@ -30,21 +30,11 @@ from dashcore.config import (
 )
 
 
-from dashcore.helpers import *
+from dashcore.helpers import (
+    _remove_dir_or_link, parse_skill_frontmatter, read_json,
+    resolve_cli, resolve_ws_dir, safe_id, write_json,
+)
 from dashcore.api_workspaces import list_workspaces, _workspace_settings_path
-
-
-def _remove_dir_or_link(p: Path) -> None:
-    if os.path.islink(p) or p.is_symlink():
-        p.unlink()
-    elif p.is_dir():
-        try:
-            shutil.rmtree(p)
-        except OSError:
-            # Junction point détecté tardivement (Windows)
-            p.unlink()
-    elif p.exists():
-        p.unlink()
 
 
 def list_plugins() -> dict:
@@ -195,48 +185,202 @@ def read_plugin_readme(marketplace_id: str, kind: str, plugin_id: str) -> tuple[
     return 200, {"content": content, "path": str(readme)}
 
 
+def _scan_plugin_dir(plugin_dir: Path, marketplace: str | None = None) -> dict:
+    """Lit les méta d'un dossier de plugin (priorité .claude-plugin/plugin.json)."""
+    candidates = [
+        plugin_dir / ".claude-plugin" / "plugin.json",
+        plugin_dir / "plugin.json",
+        plugin_dir / "manifest.json",
+        plugin_dir / "package.json",
+    ]
+    meta = {}
+    for p in candidates:
+        if p.exists():
+            meta = read_json(p, {}) or {}
+            break
+    try:
+        size_kb = sum(f.stat().st_size for f in plugin_dir.rglob("*") if f.is_file()) // 1024
+    except OSError:
+        size_kb = 0
+    author = meta.get("author")
+    if isinstance(author, dict):
+        author = author.get("name", "")
+    return {
+        "dir_name": plugin_dir.name,
+        "marketplace": marketplace,
+        "path": str(plugin_dir),
+        "name": meta.get("name") or plugin_dir.name,
+        "version": meta.get("version") or "",
+        "description": meta.get("description") or "",
+        "author": author or "",
+        "size_kb": size_kb,
+    }
+
+
+def _discover_all_installed(plugins_dir: Path) -> list[dict]:
+    """Discovery complète : marketplaces + plugins standalone à la racine.
+
+    Structure typique :
+    - ~/.claude/plugins/marketplaces/<mkt>/plugins/<plugin>/
+    - ~/.claude/plugins/marketplaces/<mkt>/external_plugins/<plugin>/
+    - ~/.claude/plugins/<plugin>/  (plugins installés sans marketplace)
+    """
+    out = []
+    if not plugins_dir.exists():
+        return out
+
+    # Marketplaces
+    mkt_root = plugins_dir / "marketplaces"
+    if mkt_root.exists():
+        for mkt in sorted(mkt_root.iterdir()):
+            if not mkt.is_dir():
+                continue
+            for sub in ("plugins", "external_plugins"):
+                kind_dir = mkt / sub
+                if not kind_dir.exists():
+                    continue
+                for p in sorted(kind_dir.iterdir()):
+                    if p.is_dir():
+                        info = _scan_plugin_dir(p, marketplace=mkt.name)
+                        info["kind"] = sub
+                        out.append(info)
+
+    # Plugins standalone (au cas où — non utilisé en pratique par Claude Code)
+    for entry in sorted(plugins_dir.iterdir()):
+        if not entry.is_dir() or entry.name == "marketplaces":
+            continue
+        # Détecte si c'est un plugin (présence d'un manifeste reconnaissable)
+        if any((entry / c).exists() for c in (".claude-plugin/plugin.json", "plugin.json")):
+            info = _scan_plugin_dir(entry, marketplace=None)
+            info["kind"] = "standalone"
+            out.append(info)
+
+    return out
+
+
+def _match_enabled_key(key: str, on_disk: list[dict]) -> dict | None:
+    """Associe une clé `enabledPlugins` (ex: 'code-review@claude-plugins-official') à un plugin trouvé."""
+    if "@" in key:
+        plug_id, mkt = key.split("@", 1)
+    else:
+        plug_id, mkt = key, None
+    for d in on_disk:
+        if d["dir_name"] != plug_id and d["name"] != plug_id:
+            continue
+        if mkt is None or d.get("marketplace") == mkt or d.get("marketplace") is None:
+            return d
+    # Fallback : match juste sur l'id, n'importe quel marketplace
+    for d in on_disk:
+        if d["dir_name"] == plug_id or d["name"] == plug_id:
+            return d
+    return None
+
+
 def list_installed_plugins() -> dict:
-    """Inspecte ~/.claude/plugins/ + cross-check avec enabledPlugins."""
+    """Source de vérité : ~/.claude/plugins/installed_plugins.json + settings.json.
+
+    Le fichier installed_plugins.json (maintenu par Claude Code) liste précisément
+    les plugins installés avec leur installPath, version et scope. On lit ce
+    fichier puis on enrichit avec les méta lues dans le manifeste.
+    """
     plugins_dir = CLAUDE_HOME / "plugins"
     settings = read_json(CLAUDE_SETTINGS, {}) or {}
     enabled = settings.get("enabledPlugins") or {}
 
-    on_disk = _discover_plugins_recursive(plugins_dir, max_depth=3)
+    installed_file = plugins_dir / "installed_plugins.json"
+    installed_data = read_json(installed_file, {}) or {}
+    installed_map = installed_data.get("plugins") or {}
+
     marketplaces = _discover_marketplaces(plugins_dir)
 
+    # Construit la liste des plugins installés
     cross = []
+    seen_keys = set()
+    for key, entries in installed_map.items():
+        seen_keys.add(key)
+        # Prend la première entrée (scope=user de préférence, sinon la première)
+        entry = next((e for e in entries if e.get("scope") == "user"), None) or (entries[0] if entries else {})
+        install_path = Path(entry.get("installPath", "")) if entry.get("installPath") else None
+        on_disk = bool(install_path and install_path.exists())
+
+        # Lit le manifeste pour description et autres
+        meta = {}
+        size_kb = 0
+        if on_disk:
+            for cand in (".claude-plugin/plugin.json", "plugin.json", "manifest.json"):
+                p = install_path / cand
+                if p.exists():
+                    meta = read_json(p, {}) or {}
+                    break
+            try:
+                size_kb = sum(f.stat().st_size for f in install_path.rglob("*") if f.is_file()) // 1024
+            except OSError:
+                size_kb = 0
+
+        # Marketplace extrait de la clé
+        mkt = key.split("@", 1)[1] if "@" in key else None
+        version = entry.get("version") or meta.get("version") or ""
+        if version == "unknown":
+            version = ""
+
+        cross.append({
+            "id": key,
+            "enabled": bool(enabled.get(key, True)),  # Présent dans installed_plugins.json = activé par défaut
+            "on_disk": on_disk,
+            "path": str(install_path) if install_path else None,
+            "marketplace": mkt,
+            "version": version,
+            "description": meta.get("description") or "",
+            "scope": entry.get("scope") or "",
+            "size_kb": size_kb,
+            "installed_at": entry.get("installedAt"),
+        })
+
+    # Plugins listés dans settings.json mais absents de installed_plugins.json (rare)
     for key, val in enabled.items():
-        short = key.split("@")[0]
-        found = next(
-            (d for d in on_disk
-             if key in d["dir_name"] or d["dir_name"] == short or d["name"] == short),
-            None,
-        )
+        if key in seen_keys:
+            continue
         cross.append({
             "id": key,
             "enabled": bool(val),
-            "on_disk": bool(found),
-            "path": found["path"] if found else None,
-            "version": found["version"] if found else "",
-            "size_kb": found["size_kb"] if found else 0,
+            "on_disk": False,
+            "path": None,
+            "marketplace": key.split("@", 1)[1] if "@" in key else None,
+            "version": "",
+            "description": "",
+            "scope": "",
+            "size_kb": 0,
+            "installed_at": None,
         })
 
-    orphans_on_disk = []
-    for d in on_disk:
-        referenced = any(
-            d["dir_name"] == key.split("@")[0] or d["name"] == key.split("@")[0] or d["dir_name"] in key
-            for key in enabled.keys()
-        )
-        if not referenced:
-            orphans_on_disk.append({"dir_name": d["dir_name"], "rel_path": d["rel_path"], "path": d["path"]})
+    # Dossiers orphelins dans cache/ qui ne sont plus référencés
+    orphans = []
+    cache_dir = plugins_dir / "cache"
+    if cache_dir.exists():
+        referenced_paths = {Path(c["path"]).resolve() for c in cross if c.get("path")}
+        for mkt_dir in cache_dir.iterdir():
+            if not mkt_dir.is_dir():
+                continue
+            for plugin_dir in mkt_dir.iterdir():
+                if not plugin_dir.is_dir():
+                    continue
+                # Le sous-dossier version
+                for version_dir in plugin_dir.iterdir():
+                    if not version_dir.is_dir():
+                        continue
+                    if version_dir.resolve() not in referenced_paths:
+                        orphans.append({
+                            "dir_name": f"{mkt_dir.name}/{plugin_dir.name}/{version_dir.name}",
+                            "rel_path": str(version_dir.relative_to(plugins_dir)),
+                            "path": str(version_dir),
+                        })
 
     return {
         "plugins_dir": str(plugins_dir),
         "dir_exists": plugins_dir.exists(),
-        "on_disk": on_disk,
         "enabled": enabled,
         "cross": cross,
-        "orphans_on_disk": orphans_on_disk,
+        "orphans_on_disk": orphans,
         "marketplaces": marketplaces,
     }
 
@@ -245,21 +389,22 @@ def uninstall_plugin(plugin_id: str, remove_files: bool = False) -> tuple[int, d
     if not plugin_id or "\\" in plugin_id or ".." in plugin_id:
         return 400, {"error": "plugin_id invalide"}
 
-    # Backup settings.json
-    if CLAUDE_SETTINGS.exists():
-        bak = CLAUDE_SETTINGS.with_suffix(".json.bak")
-        bak.write_text(CLAUDE_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
+    with _MUTATION_LOCK:
+        # Backup settings.json
+        if CLAUDE_SETTINGS.exists():
+            bak = CLAUDE_SETTINGS.with_suffix(".json.bak")
+            bak.write_text(CLAUDE_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
 
-    settings = read_json(CLAUDE_SETTINGS, {}) or {}
-    enabled = settings.get("enabledPlugins") or {}
-    removed_from_config = plugin_id in enabled
-    enabled.pop(plugin_id, None)
-    if enabled:
-        settings["enabledPlugins"] = enabled
-    else:
-        settings.pop("enabledPlugins", None)
-    CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    write_json(CLAUDE_SETTINGS, settings)
+        settings = read_json(CLAUDE_SETTINGS, {}) or {}
+        enabled = settings.get("enabledPlugins") or {}
+        removed_from_config = plugin_id in enabled
+        enabled.pop(plugin_id, None)
+        if enabled:
+            settings["enabledPlugins"] = enabled
+        else:
+            settings.pop("enabledPlugins", None)
+        CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+        write_json(CLAUDE_SETTINGS, settings)
 
     removed_dir = None
     if remove_files:
@@ -290,6 +435,7 @@ def claude_plugin_cli(args: list[str], timeout: int = 120) -> tuple[int, dict]:
         r = subprocess.run(
             [resolve_cli("claude"), "plugin"] + args,
             capture_output=True, text=True, timeout=timeout,
+            encoding="utf-8", errors="replace",
         )
         return 200, {
             "ok": r.returncode == 0,
@@ -446,6 +592,130 @@ def save_skill_content(scope: str, name: str, content: str) -> tuple[int, dict]:
     return 200, {"ok": True, "backup": str(bak)}
 
 
+_SKILL_PATH_RE = re.compile(r"^[a-zA-Z0-9_./-]{1,200}$")
+
+
+def _resolve_skill_file(scope: str, name: str, rel_path: str) -> tuple[Path | None, dict | None]:
+    """Valide scope/name/rel_path et renvoie le Path absolu sécurisé."""
+    parent = _skill_dir(scope)
+    if parent is None or not safe_id(name):
+        return None, {"error": "scope ou nom invalide"}
+    skill_dir = (parent / name).resolve()
+    if not skill_dir.exists():
+        return None, {"error": "skill introuvable"}
+    if not rel_path or not _SKILL_PATH_RE.match(rel_path):
+        return None, {"error": "chemin invalide (a-z, 0-9, _, -, /, ., max 200)"}
+    if ".." in rel_path.split("/"):
+        return None, {"error": "traversal interdit"}
+    target = (skill_dir / rel_path).resolve()
+    try:
+        target.relative_to(skill_dir)
+    except ValueError:
+        return None, {"error": "chemin hors du skill"}
+    return target, None
+
+
+def get_skill_detail(scope: str, name: str) -> tuple[int, dict]:
+    """Retourne le détail d'un skill : meta + arborescence des fichiers."""
+    parent = _skill_dir(scope)
+    if parent is None or not safe_id(name):
+        return 400, {"error": "scope ou nom invalide"}
+    skill_dir = parent / name
+    if not skill_dir.exists():
+        return 404, {"error": "skill introuvable"}
+    meta = parse_skill_frontmatter(skill_dir / "SKILL.md") if (skill_dir / "SKILL.md").exists() else {}
+    files = []
+    for entry in sorted(skill_dir.rglob("*")):
+        if not entry.is_file():
+            continue
+        # Ignore les .bak
+        if entry.suffix == ".bak":
+            continue
+        rel = entry.relative_to(skill_dir).as_posix()
+        try:
+            size = entry.stat().st_size
+        except OSError:
+            size = 0
+        files.append({"path": rel, "size": size})
+    return 200, {
+        "scope": scope,
+        "name": name,
+        "meta": meta,
+        "files": files,
+        "path": str(skill_dir),
+    }
+
+
+def get_skill_file(scope: str, name: str, rel_path: str) -> tuple[int, dict]:
+    target, err = _resolve_skill_file(scope, name, rel_path)
+    if err:
+        return 400, err
+    if not target.exists() or not target.is_file():
+        return 404, {"error": "fichier introuvable"}
+    try:
+        size = target.stat().st_size
+        if size > 512 * 1024:
+            return 200, {"path": rel_path, "size": size, "content": "", "binary": True, "error": "fichier > 512 Kio"}
+        data = target.read_bytes()
+        try:
+            return 200, {"path": rel_path, "size": size, "content": data.decode("utf-8"), "binary": False}
+        except UnicodeDecodeError:
+            return 200, {"path": rel_path, "size": size, "content": "", "binary": True}
+    except OSError as e:
+        return 500, {"error": str(e)}
+
+
+def write_skill_file(scope: str, name: str, rel_path: str, content: str) -> tuple[int, dict]:
+    target, err = _resolve_skill_file(scope, name, rel_path)
+    if err:
+        return 400, err
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if target.exists():
+            target.with_suffix(target.suffix + ".bak").write_bytes(target.read_bytes())
+        target.write_text(content, encoding="utf-8")
+        log.info("skill file written: %s/%s/%s", scope, name, rel_path)
+        return 200, {"ok": True, "path": rel_path, "size": target.stat().st_size}
+    except OSError as e:
+        return 500, {"error": str(e)}
+
+
+def delete_skill_file(scope: str, name: str, rel_path: str) -> tuple[int, dict]:
+    target, err = _resolve_skill_file(scope, name, rel_path)
+    if err:
+        return 400, err
+    # Refuse de supprimer SKILL.md (fichier obligatoire)
+    if rel_path == "SKILL.md":
+        return 400, {"error": "SKILL.md ne peut pas être supprimé (renommez le skill ou supprimez-le entièrement)"}
+    if not target.exists() or not target.is_file():
+        return 404, {"error": "fichier introuvable"}
+    try:
+        target.unlink()
+        # Nettoie dossiers parents vides
+        parent = target.parent
+        skill_dir = (_skill_dir(scope) / name).resolve()
+        while parent != skill_dir and parent.exists() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+        return 200, {"ok": True}
+    except OSError as e:
+        return 500, {"error": str(e)}
+
+
+def list_skill_workspace_usage(skill_name: str) -> list[str]:
+    """Liste les workspaces où ce skill est copié localement."""
+    if not safe_id(skill_name):
+        return []
+    out = []
+    # Import tardif pour éviter le cycle
+    from dashcore.api_workspaces import list_workspaces
+    for w in list_workspaces():
+        skill_path = resolve_ws_dir(w["id"]) / ".claude" / "skills" / skill_name
+        if skill_path.exists():
+            out.append(w["id"])
+    return out
+
+
 def copy_skill_to_workspace(payload: dict) -> tuple[int, dict]:
     name = (payload.get("name") or "").strip()
     ws_id = (payload.get("workspace") or "").strip()
@@ -584,20 +854,21 @@ def set_workspace_plugin(ws_id: str, plugin_id: str, enabled) -> tuple[int, dict
         return 400, {"error": "plugin_id invalide"}
 
     path = _workspace_settings_path(ws_id)
-    settings = read_json(path, {}) or {}
-    plugins = settings.setdefault("enabledPlugins", {})
-    if enabled is None:
-        # reset : retire l'override, revient au global
-        plugins.pop(plugin_id, None)
-    else:
-        plugins[plugin_id] = bool(enabled)
-    if not plugins:
-        settings.pop("enabledPlugins", None)
-    if settings:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        write_json(path, settings)
-    elif path.exists():
-        path.unlink()
+    with _MUTATION_LOCK:
+        settings = read_json(path, {}) or {}
+        plugins = settings.setdefault("enabledPlugins", {})
+        if enabled is None:
+            # reset : retire l'override, revient au global
+            plugins.pop(plugin_id, None)
+        else:
+            plugins[plugin_id] = bool(enabled)
+        if not plugins:
+            settings.pop("enabledPlugins", None)
+        if settings:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write_json(path, settings)
+        elif path.exists():
+            path.unlink()
     return 200, {"ok": True}
 
 

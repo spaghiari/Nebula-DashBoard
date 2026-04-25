@@ -34,6 +34,8 @@ from dashcore.helpers import (
 )
 from dashcore.api_workspaces import (
     list_templates, duplicate_template, delete_template,
+    get_template_detail, get_template_file, write_template_file,
+    delete_template_file, update_template_meta,
     create_workspace, update_workspace, delete_workspace, duplicate_workspace,
     read_workspace_config, write_workspace_file, export_workspace, launch_resume,
     list_sessions_for_workspace, read_session_messages,
@@ -43,7 +45,9 @@ from dashcore.api_workspaces import (
 from dashcore.api_mcps import (
     add_or_update_mcp, delete_mcp, sync_workspace_mcps, sync_all_workspaces,
     workspace_mcp_status, mcp_live_check, test_mcp, scan_claude_config,
+    find_global_mcp_conflicts, remove_mcp_from_claude_global, migrate_global_mcp_to_registry,
 )
+from dashcore.system_update import system_version_info, system_apply_update
 from dashcore.api_plugins import (
     list_plugins, list_marketplace_plugins, read_plugin_readme,
     list_installed_plugins, uninstall_plugin,
@@ -52,12 +56,373 @@ from dashcore.api_plugins import (
     list_skills_global, list_skills_for_workspace,
     create_skill, delete_skill, get_skill_content, save_skill_content,
     copy_skill_to_workspace,
+    get_skill_detail, get_skill_file, write_skill_file, delete_skill_file,
+    list_skill_workspace_usage,
     list_agents, list_commands,
     create_fileitem, delete_fileitem, get_fileitem_content, save_fileitem_content,
 )
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Helpers de handler — chaque fonction prend (query, body, *path_groups) et
+# renvoie soit (status, dict), soit ('raw', headers, bytes) pour les réponses
+# binaires (export ZIP).
+# ────────────────────────────────────────────────────────────────────────────
+
+# ── Workspaces ──────────────────────────────────────────────────────────────
+def h_get_workspaces(q, b):       return 200, read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+def h_get_ws_mcps(q, b, ws):      return workspace_mcp_status(ws)
+def h_get_ws_config(q, b, ws):    return read_workspace_config(ws)
+def h_get_ws_settings(q, b, ws):  return get_workspace_settings(ws)
+def h_get_ws_sessions(q, b, ws):  return 200, {"sessions": list_sessions_for_workspace(ws)}
+def h_get_ws_session(q, b, ws, f): return read_session_messages(ws, f)
+def h_get_ws_skills(q, b, ws):    return 200, list_skills_for_workspace(ws)
+def h_get_ws_plugins(q, b, ws):   return 200, {"plugins": get_workspace_plugins(ws)}
+def h_get_ws_mcp_check(q, b, ws): return mcp_live_check(ws)
+def h_get_ws_export(q, b, ws):
+    status, data = export_workspace(ws)
+    if status != 200:
+        return status, data
+    return 'raw', {
+        "Content-Type": "application/zip",
+        "Content-Disposition": f'attachment; filename="{ws}.zip"',
+    }, data
+
+def h_post_create_ws(q, b):              return create_workspace(b)
+def h_post_update_ws(q, b, ws):          return update_workspace(ws, b)
+def h_post_duplicate_ws(q, b):           return duplicate_workspace(b)
+def h_post_sync_mcps(q, b, ws):          return sync_workspace_mcps(ws)
+def h_post_save_settings(q, b, ws):      return save_workspace_settings(ws, b.get("content", "{}"))
+def h_post_patch_settings(q, b, ws, sec): return patch_workspace_settings(ws, sec, b.get("value"))
+def h_post_write_ws_file(q, b, ws):      return write_workspace_file(ws, b.get("filename", ""), b.get("content", ""))
+def h_post_set_ws_plugin(q, b, ws):      return set_workspace_plugin(ws, b.get("plugin_id", ""), b.get("enabled"))
+def h_post_launch(q, b, ws):
+    if not safe_id(ws): return 400, {"error": "id invalide"}
+    return launch_script(f"launch-{ws}.bat")
+def h_post_launch_resume(q, b, ws):      return launch_resume(ws)
+
+def h_del_ws(q, b, ws):
+    purge = (q.get("purge", [""])[0] or "").lower() in ("1", "true", "yes")
+    return delete_workspace(ws, purge=purge)
+
+# ── MCPs ────────────────────────────────────────────────────────────────────
+def h_get_mcps(q, b):           return 200, read_json(MCP_REGISTRY, {"version": "1.0", "mcps": []})
+def h_post_add_mcp(q, b):       return add_or_update_mcp(b)
+def h_post_test_mcp(q, b, mid): return test_mcp(mid)
+def h_post_sync_all(q, b):      return sync_all_workspaces()
+def h_del_mcp(q, b, mid):       return delete_mcp(mid)
+
+# ── Conflits Claude global ─────────────────────────────────────────────────
+def h_get_mcp_conflicts(q, b):  return 200, find_global_mcp_conflicts()
+def h_post_remove_global_mcp(q, b):
+    return remove_mcp_from_claude_global(b.get("id", ""), b.get("source", ""))
+def h_post_migrate_global_mcp(q, b):
+    return migrate_global_mcp_to_registry(
+        b.get("id", ""), b.get("source", ""),
+        b.get("workspaces") if isinstance(b.get("workspaces"), list) else None,
+    )
+
+def h_post_import_mcps(q, b):
+    """Import en lot : registre direct OU format Claude {mcpServers:{...}}."""
+    results = []
+    ws_override = b.get("workspaces", [])
+    if "id" in b:
+        entries = [b]
+    elif isinstance(b.get("mcps"), list):
+        entries = b["mcps"]
+    else:
+        entries = None
+
+    if entries is not None:
+        for cfg in entries:
+            mcp_id = cfg.get("id", "")
+            if not safe_id(mcp_id):
+                results.append({"id": mcp_id, "ok": False, "error": "id invalide"}); continue
+            mcp = dict(cfg)
+            if ws_override:
+                mcp["workspaces"] = ws_override
+            mcp.setdefault("status", "disponible")
+            s, r = add_or_update_mcp(mcp)
+            results.append({"id": mcp_id, "ok": s < 400, **r})
+        return 200, {"ok": True, "results": results}
+
+    servers = b.get("mcpServers") or b.get("servers") or {}
+    if not isinstance(servers, dict):
+        return 400, {"error": 'Format non reconnu. Coller soit un objet MCP direct (avec "id"), soit {"mcpServers":{...}}'}
+    for name, cfg in servers.items():
+        if not safe_id(name):
+            results.append({"id": name, "ok": False, "error": "id invalide"}); continue
+        mcp = {
+            "id": name,
+            "name": cfg.get("name", name),
+            "transport": cfg.get("transport") or cfg.get("type") or ("http" if cfg.get("url") else "stdio"),
+            "command": cfg.get("command", ""),
+            "args": cfg.get("args", []),
+            "env": cfg.get("env", {}),
+            "cwd": cfg.get("cwd", ""),
+            "url": cfg.get("url", ""),
+            "headers": cfg.get("headers", {}),
+            "workspaces": ws_override or cfg.get("workspaces", []),
+            "status": "disponible",
+        }
+        s, r = add_or_update_mcp(mcp)
+        results.append({"id": name, "ok": s < 400, **r})
+    return 200, {"ok": True, "results": results}
+
+# ── Templates ───────────────────────────────────────────────────────────────
+def h_get_templates(q, b):                  return 200, {"templates": list_templates()}
+def h_get_template_detail(q, b, tid):       return get_template_detail(tid)
+def h_get_template_file(q, b, tid):
+    rel = q.get("path", [""])[0]
+    return get_template_file(tid, rel)
+
+def h_post_dup_template(q, b):              return duplicate_template(b)
+def h_post_template_meta(q, b, tid):        return update_template_meta(tid, b)
+def h_post_template_file(q, b, tid):        return write_template_file(tid, b.get("path", ""), b.get("content", ""))
+
+def h_del_template(q, b, tid):              return delete_template(tid)
+def h_del_template_file(q, b, tid):
+    rel = q.get("path", [""])[0]
+    return delete_template_file(tid, rel)
+
+# ── Skills ──────────────────────────────────────────────────────────────────
+def h_get_skills(q, b):                     return 200, {"global": list_skills_global()}
+def h_get_skill_detail(q, b, scope, name):  return get_skill_detail(scope, name)
+def h_get_skill_content(q, b, scope, name): return get_skill_content(scope, name)
+def h_get_skill_file(q, b, scope, name):
+    rel = q.get("path", [""])[0]
+    return get_skill_file(scope, name, rel)
+def h_get_skill_usage(q, b, name):          return 200, {"workspaces": list_skill_workspace_usage(name)}
+
+def h_post_create_skill(q, b):              return create_skill(b)
+def h_post_copy_skill(q, b):                return copy_skill_to_workspace(b)
+def h_post_skill_content(q, b, scope, name): return save_skill_content(scope, name, b.get("content", ""))
+def h_post_skill_file(q, b, scope, name):   return write_skill_file(scope, name, b.get("path", ""), b.get("content", ""))
+
+def h_del_skill(q, b, scope, name):         return delete_skill(scope, name)
+def h_del_skill_file(q, b, scope, name):
+    rel = q.get("path", [""])[0]
+    return delete_skill_file(scope, name, rel)
+
+# ── Plugins ─────────────────────────────────────────────────────────────────
+def h_get_plugins(q, b):                    return 200, list_plugins()
+def h_get_plugins_installed(q, b):          return 200, list_installed_plugins()
+def h_get_marketplace(q, b, mid):           return 200, list_marketplace_plugins(mid)
+def h_get_marketplace_readme(q, b, mid, kind, pid): return read_plugin_readme(mid, kind, pid)
+
+def h_post_install_plugin(q, b):    return install_plugin_cli(b.get("spec", ""))
+def h_post_enable_plugin(q, b):     return enable_plugin_cli(b.get("plugin_id", ""))
+def h_post_disable_plugin(q, b):    return disable_plugin_cli(b.get("plugin_id", ""))
+def h_post_uninstall_plugin(q, b):  return uninstall_plugin_cli(b.get("plugin_id", ""))
+def h_post_uninstall_soft(q, b):    return uninstall_plugin(b.get("plugin_id", ""), remove_files=bool(b.get("remove_files")))
+
+# ── Agents & Commands ──────────────────────────────────────────────────────
+def h_get_agents(q, b):                  return 200, list_agents(None)
+def h_get_commands(q, b):                return 200, list_commands(None)
+def h_get_agents_ws(q, b, ws):           return 200, list_agents(ws)
+def h_get_commands_ws(q, b, ws):         return 200, list_commands(ws)
+def h_get_fileitem_content(q, b, kind, scope, name): return get_fileitem_content(kind, scope, name)
+
+def h_post_create_agent(q, b):           return create_fileitem("agents", b)
+def h_post_create_command(q, b):         return create_fileitem("commands", b)
+def h_post_fileitem_content(q, b, kind, scope, name): return save_fileitem_content(kind, scope, name, b.get("content", ""))
+
+def h_del_fileitem(q, b, kind, scope, name): return delete_fileitem(kind, scope, name)
+
+# ── Système (env, journal, backups, snippets, hooks, search, stats) ─────────
+def h_get_env(q, b):
+    env = load_env_local()
+    return 200, {"keys": sorted(env.keys()), "file": str(ENV_FILE), "exists": ENV_FILE.exists()}
+def h_get_env_values(q, b):
+    env = load_env_local()
+    return 200, {"values": env, "file": str(ENV_FILE), "exists": ENV_FILE.exists()}
+def h_get_snippets(q, b):
+    out = {}
+    if SNIPPETS_DIR.exists():
+        for f in SNIPPETS_DIR.glob("*.md"):
+            out[f.stem] = f.read_text(encoding="utf-8")
+    return 200, out
+def h_get_stats(q, b):           return 200, all_stats()
+def h_get_sanity(q, b):          return 200, sanity_check()
+def h_get_backups(q, b):         return 200, {"dir": str(BACKUPS_DIR), "items": list_backups()}
+def h_get_journal(q, b):         return 200, {"entries": read_journal()[-100:]}
+def h_get_hooks_global(q, b):    return 200, {"hooks": get_global_hooks()}
+def h_get_search(q, b):
+    return 200, global_search(q.get("q", [""])[0])
+def h_get_setup_scan(q, b):      return scan_claude_config()
+def h_get_system_version(q, b):
+    check = (q.get("check", ["0"])[0] or "0") == "1"
+    return 200, system_version_info(check_remote=check)
+def h_post_system_update(q, b):  return system_apply_update()
+
+def h_post_set_env(q, b):        return set_env_var(b.get("key", ""), b.get("value", ""))
+def h_post_open(q, b):           return open_target(b.get("target", ""))
+def h_post_backup(q, b):         return backup_claude_config()
+def h_post_cleanup_bats(q, b):   return 200, cleanup_orphan_bats()
+def h_post_journal(q, b):
+    text = (b.get("text", "") or "").strip()
+    if not text:
+        return 400, {"error": "texte vide"}
+    append_journal(text)
+    return 200, {"ok": True}
+def h_post_hooks_global(q, b):   return set_global_hooks(b.get("hooks") or {})
+
+def h_post_setup_import(q, b):
+    """Import combiné MCPs + workspaces (depuis le wizard d'onboarding)."""
+    mcps = b.get("mcps", [])
+    projects = b.get("projects", [])
+    mcp_results, ws_results = [], []
+    for mcp in mcps:
+        mcp.setdefault("status", "disponible")
+        s, r = add_or_update_mcp(mcp)
+        mcp_results.append({"id": mcp.get("id"), "ok": s < 400, **r})
+    for proj in projects:
+        requested = proj.get("id")
+        s, r = register_existing_workspace(proj)
+        ws_results.append({"requested_id": requested, "ok": s < 400, **r})
+    return 200, {"ok": True, "mcps": mcp_results, "workspaces": ws_results}
+
+def h_del_env(q, b, key):        return delete_env_var(key)
+def h_del_journal(q, b):
+    clear_journal()
+    return 200, {"ok": True}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Table de routes — l'ordre compte pour les regex qui se chevauchent (le plus
+# spécifique d'abord, ex. /content avant /<name>).
+# Format : (regex compilée, handler)
+# ────────────────────────────────────────────────────────────────────────────
+
+_ID = r"[a-zA-Z0-9_-]+"
+_SCOPE = r"global|workspace:[a-zA-Z0-9_-]+"
+_KIND_FILEITEM = r"agents|commands"
+
+ROUTES_GET = [
+    # Workspaces
+    (re.compile(rf"^/api/workspaces$"),                                                     h_get_workspaces),
+    (re.compile(rf"^/api/workspaces/({_ID})/mcps$"),                                        h_get_ws_mcps),
+    (re.compile(rf"^/api/workspaces/({_ID})/config$"),                                      h_get_ws_config),
+    (re.compile(rf"^/api/workspaces/({_ID})/settings$"),                                    h_get_ws_settings),
+    (re.compile(rf"^/api/workspaces/({_ID})/sessions$"),                                    h_get_ws_sessions),
+    (re.compile(rf"^/api/workspaces/({_ID})/sessions/([^/]+)$"),                            h_get_ws_session),
+    (re.compile(rf"^/api/workspaces/({_ID})/skills$"),                                      h_get_ws_skills),
+    (re.compile(rf"^/api/workspaces/({_ID})/plugins$"),                                     h_get_ws_plugins),
+    (re.compile(rf"^/api/workspaces/({_ID})/mcp-check$"),                                   h_get_ws_mcp_check),
+    (re.compile(rf"^/api/workspaces/({_ID})/export$"),                                      h_get_ws_export),
+    # MCPs
+    (re.compile(rf"^/api/mcps$"),                                                           h_get_mcps),
+    (re.compile(rf"^/api/mcps/conflicts$"),                                                 h_get_mcp_conflicts),
+    # Templates
+    (re.compile(rf"^/api/templates$"),                                                      h_get_templates),
+    (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_get_template_file),
+    (re.compile(rf"^/api/templates/({_ID})$"),                                              h_get_template_detail),
+    # Skills
+    (re.compile(rf"^/api/skills$"),                                                         h_get_skills),
+    (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/content$"),                              h_get_skill_content),
+    (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/file$"),                                 h_get_skill_file),
+    (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})$"),                                      h_get_skill_detail),
+    (re.compile(rf"^/api/skills/({_ID})/usage$"),                                           h_get_skill_usage),
+    # Plugins
+    (re.compile(rf"^/api/plugins$"),                                                        h_get_plugins),
+    (re.compile(rf"^/api/plugins/installed$"),                                              h_get_plugins_installed),
+    (re.compile(rf"^/api/plugins/marketplace/({_ID})/(plugins|external_plugins)/({_ID})/readme$"), h_get_marketplace_readme),
+    (re.compile(rf"^/api/plugins/marketplace/({_ID})$"),                                    h_get_marketplace),
+    # Agents & commands
+    (re.compile(rf"^/api/agents$"),                                                         h_get_agents),
+    (re.compile(rf"^/api/commands$"),                                                       h_get_commands),
+    (re.compile(rf"^/api/agents/workspace/({_ID})$"),                                       h_get_agents_ws),
+    (re.compile(rf"^/api/commands/workspace/({_ID})$"),                                     h_get_commands_ws),
+    (re.compile(rf"^/api/({_KIND_FILEITEM})/({_SCOPE})/({_ID})/content$"),                  h_get_fileitem_content),
+    # Système
+    (re.compile(rf"^/api/env$"),                                                            h_get_env),
+    (re.compile(rf"^/api/env/values$"),                                                     h_get_env_values),
+    (re.compile(rf"^/api/snippets$"),                                                       h_get_snippets),
+    (re.compile(rf"^/api/stats$"),                                                          h_get_stats),
+    (re.compile(rf"^/api/sanity-check$"),                                                   h_get_sanity),
+    (re.compile(rf"^/api/backups$"),                                                        h_get_backups),
+    (re.compile(rf"^/api/journal$"),                                                        h_get_journal),
+    (re.compile(rf"^/api/hooks/global$"),                                                   h_get_hooks_global),
+    (re.compile(rf"^/api/search$"),                                                         h_get_search),
+    (re.compile(rf"^/api/setup/scan$"),                                                     h_get_setup_scan),
+    (re.compile(rf"^/api/system/version$"),                                                 h_get_system_version),
+]
+
+ROUTES_POST = [
+    # Workspaces
+    (re.compile(rf"^/api/workspaces$"),                                                     h_post_create_ws),
+    (re.compile(rf"^/api/workspaces/duplicate$"),                                           h_post_duplicate_ws),
+    (re.compile(rf"^/api/workspaces/({_ID})/update$"),                                      h_post_update_ws),
+    (re.compile(rf"^/api/workspaces/({_ID})/sync-mcps$"),                                   h_post_sync_mcps),
+    (re.compile(rf"^/api/workspaces/({_ID})/settings$"),                                    h_post_save_settings),
+    (re.compile(rf"^/api/workspaces/({_ID})/settings/([a-zA-Z]+)$"),                        h_post_patch_settings),
+    (re.compile(rf"^/api/workspaces/({_ID})/file$"),                                        h_post_write_ws_file),
+    (re.compile(rf"^/api/workspaces/({_ID})/plugins$"),                                     h_post_set_ws_plugin),
+    (re.compile(rf"^/api/launch/({_ID})$"),                                                 h_post_launch),
+    (re.compile(rf"^/api/launch-resume/({_ID})$"),                                          h_post_launch_resume),
+    # MCPs
+    (re.compile(rf"^/api/mcps$"),                                                           h_post_add_mcp),
+    (re.compile(rf"^/api/mcps/import$"),                                                    h_post_import_mcps),
+    (re.compile(rf"^/api/mcps/conflicts/remove$"),                                          h_post_remove_global_mcp),
+    (re.compile(rf"^/api/mcps/conflicts/migrate$"),                                         h_post_migrate_global_mcp),
+    (re.compile(rf"^/api/mcps/({_ID})/test$"),                                              h_post_test_mcp),
+    (re.compile(rf"^/api/sync-all$"),                                                       h_post_sync_all),
+    # Templates
+    (re.compile(rf"^/api/templates/duplicate$"),                                            h_post_dup_template),
+    (re.compile(rf"^/api/templates/({_ID})/meta$"),                                         h_post_template_meta),
+    (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_post_template_file),
+    # Skills
+    (re.compile(rf"^/api/skills$"),                                                         h_post_create_skill),
+    (re.compile(rf"^/api/skills/copy$"),                                                    h_post_copy_skill),
+    (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/content$"),                              h_post_skill_content),
+    (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/file$"),                                 h_post_skill_file),
+    # Plugins
+    (re.compile(rf"^/api/plugins/install$"),                                                h_post_install_plugin),
+    (re.compile(rf"^/api/plugins/enable$"),                                                 h_post_enable_plugin),
+    (re.compile(rf"^/api/plugins/disable$"),                                                h_post_disable_plugin),
+    (re.compile(rf"^/api/plugins/uninstall$"),                                              h_post_uninstall_plugin),
+    (re.compile(rf"^/api/plugins/uninstall-soft$"),                                         h_post_uninstall_soft),
+    # Agents & commands
+    (re.compile(rf"^/api/agents$"),                                                         h_post_create_agent),
+    (re.compile(rf"^/api/commands$"),                                                       h_post_create_command),
+    (re.compile(rf"^/api/({_KIND_FILEITEM})/({_SCOPE})/({_ID})/content$"),                  h_post_fileitem_content),
+    # Système
+    (re.compile(rf"^/api/env$"),                                                            h_post_set_env),
+    (re.compile(rf"^/api/open$"),                                                           h_post_open),
+    (re.compile(rf"^/api/backup$"),                                                         h_post_backup),
+    (re.compile(rf"^/api/cleanup/orphan-bats$"),                                            h_post_cleanup_bats),
+    (re.compile(rf"^/api/journal$"),                                                        h_post_journal),
+    (re.compile(rf"^/api/hooks/global$"),                                                   h_post_hooks_global),
+    (re.compile(rf"^/api/setup/import$"),                                                   h_post_setup_import),
+    (re.compile(rf"^/api/system/update$"),                                                  h_post_system_update),
+]
+
+ROUTES_DELETE = [
+    (re.compile(rf"^/api/workspaces/({_ID})$"),                                             h_del_ws),
+    (re.compile(rf"^/api/mcps/({_ID})$"),                                                   h_del_mcp),
+    (re.compile(rf"^/api/env/(.+)$"),                                                       h_del_env),
+    (re.compile(rf"^/api/journal$"),                                                        h_del_journal),
+    (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_del_template_file),
+    (re.compile(rf"^/api/templates/({_ID})$"),                                              h_del_template),
+    (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/file$"),                                 h_del_skill_file),
+    (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})$"),                                      h_del_skill),
+    (re.compile(rf"^/api/({_KIND_FILEITEM})/({_SCOPE})/({_ID})$"),                          h_del_fileitem),
+]
+
+ROUTES_BY_METHOD = {
+    "GET": ROUTES_GET,
+    "POST": ROUTES_POST,
+    "DELETE": ROUTES_DELETE,
+}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Handler HTTP — dispatch via la table, fallback static pour les fichiers.
+# ────────────────────────────────────────────────────────────────────────────
+
 class Handler(BaseHTTPRequestHandler):
+    MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+
     def log_message(self, fmt, *args):
         log.info("%s %s", self.address_string(), fmt % args)
 
@@ -80,15 +445,21 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_raw(self, headers: dict, data: bytes):
+        self.send_response(200)
+        for k, v in headers.items():
+            self.send_header(k, v)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _send_file(self, path: Path):
         if not path.exists() or not path.is_file():
-            self._send_json(404, {"error": "not found"})
-            return
+            self._send_json(404, {"error": "not found"}); return
         try:
             path.resolve().relative_to(DASHBOARD_DIR.resolve())
         except ValueError:
-            self._send_json(403, {"error": "forbidden"})
-            return
+            self._send_json(403, {"error": "forbidden"}); return
         ct = STATIC_TYPES.get(path.suffix.lower(), "application/octet-stream")
         data = path.read_bytes()
         self.send_response(200)
@@ -98,7 +469,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _read_json_body(self):
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return None
+        if length < 0 or length > self.MAX_BODY_BYTES:
+            return None
         if length == 0:
             return {}
         raw = self.rfile.read(length)
@@ -107,395 +483,56 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             return None
 
-    def do_GET(self):
-        p = urlparse(self.path).path
+    def _dispatch(self, method: str, body=None):
+        parsed = urlparse(self.path)
+        path = parsed.path
+        query = parse_qs(parsed.query)
 
-        if p in ("/", "/index.html"):
+        for pat, handler in ROUTES_BY_METHOD.get(method, []):
+            mat = pat.match(path)
+            if not mat:
+                continue
+            try:
+                result = handler(query, body, *mat.groups())
+            except Exception:
+                log.exception("Erreur handler %s %s", method, path)
+                self._send_json(500, {"error": "internal error"}); return
+            # Réponse "raw" (export ZIP) : ('raw', headers_dict, bytes)
+            if isinstance(result, tuple) and len(result) == 3 and result[0] == 'raw':
+                self._send_raw(result[1], result[2]); return
+            # Réponse standard (status, payload)
+            status, payload = result
+            self._send_json(status, payload); return
+
+        # Aucune route ne correspond
+        if method == "GET":
+            self._serve_static(path); return
+        self._send_json(404, {"error": "route inconnue"})
+
+    def _serve_static(self, path: str):
+        if path in ("/", "/index.html"):
             self._send_file(DASHBOARD_DIR / "index.html"); return
+        rel = path.lstrip("/")
+        if not rel or ".." in rel.split("/") or "\\" in rel:
+            self._send_json(404, {"error": "not found"}); return
+        self._send_file(DASHBOARD_DIR / rel)
 
-        if p == "/api/workspaces":
-            self._send_json(200, read_json(WORKSPACES_JSON, {"version":"1.0","workspaces":[]})); return
-        if p == "/api/mcps":
-            self._send_json(200, read_json(MCP_REGISTRY, {"version":"1.0","mcps":[]})); return
-        if p == "/api/env":
-            env = load_env_local()
-            self._send_json(200, {"keys": sorted(env.keys()), "file": str(ENV_FILE), "exists": ENV_FILE.exists()}); return
-        if p == "/api/env/values":
-            env = load_env_local()
-            self._send_json(200, {"values": env, "file": str(ENV_FILE), "exists": ENV_FILE.exists()}); return
-        if p == "/api/snippets":
-            out = {}
-            if SNIPPETS_DIR.exists():
-                for f in SNIPPETS_DIR.glob("*.md"):
-                    out[f.stem] = f.read_text(encoding="utf-8")
-            self._send_json(200, out); return
-        if p.startswith("/api/workspaces/") and p.endswith("/mcps"):
-            ws_id = p.split("/")[3]
-            status, payload = workspace_mcp_status(ws_id)
-            self._send_json(status, payload); return
-
-        if p.startswith("/api/workspaces/") and p.endswith("/config"):
-            ws_id = p.split("/")[3]
-            status, payload = read_workspace_config(ws_id)
-            self._send_json(status, payload); return
-
-        if p == "/api/setup/scan":
-            s, r = scan_claude_config()
-            self._send_json(s, r); return
-
-        if p == "/api/stats":
-            self._send_json(200, all_stats()); return
-
-        if p == "/api/sanity-check":
-            self._send_json(200, sanity_check()); return
-
-        if p == "/api/backups":
-            self._send_json(200, {"dir": str(BACKUPS_DIR), "items": list_backups()}); return
-
-        if p == "/api/journal":
-            self._send_json(200, {"entries": read_journal()[-100:]}); return
-
-        if p == "/api/templates":
-            self._send_json(200, {"templates": list_templates()}); return
-
-        if p == "/api/plugins":
-            self._send_json(200, list_plugins()); return
-
-        if p == "/api/plugins/installed":
-            self._send_json(200, list_installed_plugins()); return
-
-        m = re.match(r"^/api/plugins/marketplace/([a-zA-Z0-9_-]+)$", p)
-        if m:
-            self._send_json(200, list_marketplace_plugins(m.group(1))); return
-
-        m = re.match(r"^/api/plugins/marketplace/([a-zA-Z0-9_-]+)/(plugins|external_plugins)/([a-zA-Z0-9_-]+)/readme$", p)
-        if m:
-            s, r = read_plugin_readme(m.group(1), m.group(2), m.group(3))
-            self._send_json(s, r); return
-
-        if p == "/api/skills":
-            self._send_json(200, {"global": list_skills_global()}); return
-
-        if p.startswith("/api/workspaces/") and p.endswith("/skills"):
-            ws_id = p.split("/")[3]
-            if not safe_id(ws_id):
-                self._send_json(400, {"error":"id invalide"}); return
-            self._send_json(200, list_skills_for_workspace(ws_id)); return
-
-        if p.startswith("/api/workspaces/") and p.endswith("/plugins"):
-            ws_id = p.split("/")[3]
-            if not safe_id(ws_id):
-                self._send_json(400, {"error":"id invalide"}); return
-            self._send_json(200, {"plugins": get_workspace_plugins(ws_id)}); return
-
-        m = re.match(r"^/api/skills/(global|workspace:[a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)/content$", p)
-        if m:
-            s, r = get_skill_content(m.group(1), m.group(2))
-            self._send_json(s, r); return
-
-        m = re.match(r"^/api/(agents|commands)(?:/workspace/([a-zA-Z0-9_-]+))?$", p)
-        if m:
-            kind = m.group(1)
-            ws = m.group(2)
-            data = list_agents(ws) if kind == "agents" else list_commands(ws)
-            self._send_json(200, data); return
-
-        m = re.match(r"^/api/(agents|commands)/(global|workspace:[a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)/content$", p)
-        if m:
-            s, r = get_fileitem_content(m.group(1), m.group(2), m.group(3))
-            self._send_json(s, r); return
-
-        if p.startswith("/api/workspaces/") and p.endswith("/settings"):
-            ws_id = p.split("/")[3]
-            s, r = get_workspace_settings(ws_id)
-            self._send_json(s, r); return
-
-        if p.startswith("/api/workspaces/") and p.endswith("/sessions"):
-            ws_id = p.split("/")[3]
-            self._send_json(200, {"sessions": list_sessions_for_workspace(ws_id)}); return
-
-        m = re.match(r"^/api/workspaces/([a-zA-Z0-9_-]+)/sessions/([^/]+)$", p)
-        if m:
-            s, r = read_session_messages(m.group(1), m.group(2))
-            self._send_json(s, r); return
-
-        if p == "/api/hooks/global":
-            self._send_json(200, {"hooks": get_global_hooks()}); return
-
-        if p.startswith("/api/search"):
-            qs = parse_qs(urlparse(self.path).query)
-            q = (qs.get("q", [""])[0])
-            self._send_json(200, global_search(q)); return
-
-        m = re.match(r"^/api/workspaces/([a-zA-Z0-9_-]+)/export$", p)
-        if m:
-            status, data = export_workspace(m.group(1))
-            if status != 200:
-                self._send_json(status, data); return
-            self.send_response(200)
-            self.send_header("Content-Type", "application/zip")
-            self.send_header("Content-Disposition", f'attachment; filename="{m.group(1)}.zip"')
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-            return
-
-        m = re.match(r"^/api/workspaces/([a-zA-Z0-9_-]+)/mcp-check$", p)
-        if m:
-            s, r = mcp_live_check(m.group(1))
-            self._send_json(s, r); return
-
-        safe = p.lstrip("/").replace("..", "")
-        self._send_file(DASHBOARD_DIR / safe)
+    def do_GET(self):
+        self._dispatch("GET")
 
     def do_POST(self):
-        p = urlparse(self.path).path
         body = self._read_json_body()
         if body is None:
-            self._send_json(400, {"error":"JSON invalide"}); return
-
-        if p.startswith("/api/launch/"):
-            ws_id = p[len("/api/launch/"):]
-            if not safe_id(ws_id):
-                self._send_json(400, {"error":"id invalide"}); return
-            ok, msg = launch_script(f"launch-{ws_id}.bat")
-            self._send_json(200 if ok else 500, {"ok": ok, "message": msg}); return
-
-        if p == "/api/env":
-            s, r = set_env_var((body or {}).get("key", ""), (body or {}).get("value", ""))
-            self._send_json(s, r); return
-
-        if p == "/api/workspaces":
-            s, r = create_workspace(body); self._send_json(s, r); return
-
-        if p.startswith("/api/workspaces/") and p.endswith("/update"):
-            ws_id = p.split("/")[3]
-            s, r = update_workspace(ws_id, body or {})
-            self._send_json(s, r); return
-
-        if p == "/api/mcps":
-            s, r = add_or_update_mcp(body); self._send_json(s, r); return
-
-        if p == "/api/mcps/import":
-            results = []
-            ws_override = body.get("workspaces", [])
-
-            # Format registre direct : objet avec "id" ou tableau d'objets
-            if "id" in body:
-                entries = [body]
-            elif isinstance(body.get("mcps"), list):
-                entries = body["mcps"]
-            else:
-                entries = None
-
-            if entries is not None:
-                for cfg in entries:
-                    mcp_id = cfg.get("id", "")
-                    if not safe_id(mcp_id):
-                        results.append({"id": mcp_id, "ok": False, "error": "id invalide"}); continue
-                    mcp = dict(cfg)
-                    if ws_override:
-                        mcp["workspaces"] = ws_override
-                    mcp.setdefault("status", "disponible")
-                    s, r = add_or_update_mcp(mcp)
-                    results.append({"id": mcp_id, "ok": s < 400, **r})
-                self._send_json(200, {"ok": True, "results": results}); return
-
-            # Format Claude : {"mcpServers": {"name": {...}}}
-            servers = body.get("mcpServers") or body.get("servers") or {}
-            if not isinstance(servers, dict):
-                self._send_json(400, {"error": "Format non reconnu. Coller soit un objet MCP direct (avec \"id\"), soit {\"mcpServers\":{...}}"}); return
-            for name, cfg in servers.items():
-                if not safe_id(name):
-                    results.append({"id": name, "ok": False, "error": "id invalide"}); continue
-                mcp = {
-                    "id": name,
-                    "name": cfg.get("name", name),
-                    "transport": cfg.get("transport") or cfg.get("type") or ("http" if cfg.get("url") else "stdio"),
-                    "command": cfg.get("command", ""),
-                    "args": cfg.get("args", []),
-                    "env": cfg.get("env", {}),
-                    "url": cfg.get("url", ""),
-                    "workspaces": ws_override or cfg.get("workspaces", []),
-                    "status": "disponible",
-                }
-                s, r = add_or_update_mcp(mcp)
-                results.append({"id": name, "ok": s < 400, **r})
-            self._send_json(200, {"ok": True, "results": results}); return
-
-        if p.startswith("/api/mcps/") and p.endswith("/test"):
-            mcp_id = p.split("/")[3]
-            s, r = test_mcp(mcp_id); self._send_json(s, r); return
-
-        if p.startswith("/api/workspaces/") and p.endswith("/sync-mcps"):
-            ws_id = p.split("/")[3]
-            s, r = sync_workspace_mcps(ws_id); self._send_json(s, r); return
-
-        if p == "/api/sync-all":
-            s, r = sync_all_workspaces(); self._send_json(s, r); return
-
-        if p == "/api/open":
-            key = (body or {}).get("target", "")
-            ok, msg = open_target(key)
-            self._send_json(200 if ok else 400, {"ok": ok, "message": msg}); return
-
-        if p == "/api/backup":
-            ok, msg = backup_claude_config()
-            self._send_json(200 if ok else 400, {"ok": ok, "message": msg}); return
-
-        if p == "/api/journal":
-            text = (body or {}).get("text", "").strip()
-            if not text:
-                self._send_json(400, {"error": "texte vide"}); return
-            append_journal(text)
-            self._send_json(200, {"ok": True}); return
-
-        if p == "/api/templates/duplicate":
-            s, r = duplicate_template(body or {})
-            self._send_json(s, r); return
-
-        if p == "/api/skills":
-            s, r = create_skill(body or {})
-            self._send_json(s, r); return
-
-        if p == "/api/skills/copy":
-            s, r = copy_skill_to_workspace(body or {})
-            self._send_json(s, r); return
-
-        m = re.match(r"^/api/skills/(global|workspace:[a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)/content$", p)
-        if m:
-            s, r = save_skill_content(m.group(1), m.group(2), (body or {}).get("content", ""))
-            self._send_json(s, r); return
-
-        if p.startswith("/api/workspaces/") and p.endswith("/plugins"):
-            ws_id = p.split("/")[3]
-            s, r = set_workspace_plugin(
-                ws_id,
-                (body or {}).get("plugin_id", ""),
-                (body or {}).get("enabled"),
-            )
-            self._send_json(s, r); return
-
-        if p.startswith("/api/launch-resume/"):
-            ws_id = p[len("/api/launch-resume/"):]
-            ok, msg = launch_resume(ws_id)
-            self._send_json(200 if ok else 500, {"ok": ok, "message": msg}); return
-
-        if p == "/api/workspaces/duplicate":
-            s, r = duplicate_workspace(body or {})
-            self._send_json(s, r); return
-
-        if p == "/api/agents":
-            s, r = create_fileitem("agents", body or {})
-            self._send_json(s, r); return
-        if p == "/api/commands":
-            s, r = create_fileitem("commands", body or {})
-            self._send_json(s, r); return
-
-        m = re.match(r"^/api/(agents|commands)/(global|workspace:[a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)/content$", p)
-        if m:
-            s, r = save_fileitem_content(m.group(1), m.group(2), m.group(3), (body or {}).get("content", ""))
-            self._send_json(s, r); return
-
-        if p.startswith("/api/workspaces/") and p.endswith("/settings"):
-            ws_id = p.split("/")[3]
-            s, r = save_workspace_settings(ws_id, (body or {}).get("content", "{}"))
-            self._send_json(s, r); return
-
-        m = re.match(r"^/api/workspaces/([a-zA-Z0-9_-]+)/file$", p)
-        if m:
-            s, r = write_workspace_file(m.group(1), (body or {}).get("filename", ""), (body or {}).get("content", ""))
-            self._send_json(s, r); return
-
-        m = re.match(r"^/api/workspaces/([a-zA-Z0-9_-]+)/settings/([a-zA-Z]+)$", p)
-        if m:
-            s, r = patch_workspace_settings(m.group(1), m.group(2), (body or {}).get("value"))
-            self._send_json(s, r); return
-
-        if p == "/api/hooks/global":
-            hooks = (body or {}).get("hooks") or {}
-            s, r = set_global_hooks(hooks)
-            self._send_json(s, r); return
-
-        if p == "/api/plugins/uninstall-soft":
-            pid = (body or {}).get("plugin_id", "")
-            rm = bool((body or {}).get("remove_files"))
-            s, r = uninstall_plugin(pid, remove_files=rm)
-            self._send_json(s, r); return
-
-        if p == "/api/plugins/install":
-            spec = (body or {}).get("spec", "")
-            s, r = install_plugin_cli(spec)
-            self._send_json(s, r); return
-
-        if p == "/api/plugins/enable":
-            pid = (body or {}).get("plugin_id", "")
-            s, r = enable_plugin_cli(pid)
-            self._send_json(s, r); return
-
-        if p == "/api/plugins/disable":
-            pid = (body or {}).get("plugin_id", "")
-            s, r = disable_plugin_cli(pid)
-            self._send_json(s, r); return
-
-        if p == "/api/plugins/uninstall":
-            pid = (body or {}).get("plugin_id", "")
-            s, r = uninstall_plugin_cli(pid)
-            self._send_json(s, r); return
-
-        if p == "/api/cleanup/orphan-bats":
-            self._send_json(200, cleanup_orphan_bats()); return
-
-        if p == "/api/setup/import":
-            mcps = (body or {}).get("mcps", [])
-            projects = (body or {}).get("projects", [])
-            mcp_results = []
-            ws_results = []
-            for mcp in mcps:
-                mcp.setdefault("status", "disponible")
-                s, r = add_or_update_mcp(mcp)
-                mcp_results.append({"id": mcp.get("id"), "ok": s < 400, **r})
-            for proj in projects:
-                requested = proj.get("id")
-                s, r = register_existing_workspace(proj)
-                ws_results.append({"requested_id": requested, "ok": s < 400, **r})
-            self._send_json(200, {"ok": True, "mcps": mcp_results, "workspaces": ws_results}); return
-
-        self._send_json(404, {"error":"route inconnue"})
+            self._send_json(400, {"error": "JSON invalide"}); return
+        self._dispatch("POST", body)
 
     def do_DELETE(self):
-        u = urlparse(self.path)
-        p = u.path
-        qs = {k: v[0] for k, v in parse_qs(u.query).items()}
-        if p.startswith("/api/workspaces/"):
-            ws_id = p[len("/api/workspaces/"):]
-            purge = qs.get("purge", "").lower() in ("1", "true", "yes")
-            s, r = delete_workspace(ws_id, purge=purge); self._send_json(s, r); return
-        if p.startswith("/api/mcps/"):
-            mcp_id = p[len("/api/mcps/"):]
-            s, r = delete_mcp(mcp_id); self._send_json(s, r); return
-        if p.startswith("/api/env/"):
-            key = p[len("/api/env/"):]
-            s, r = delete_env_var(key); self._send_json(s, r); return
-        if p == "/api/journal":
-            clear_journal()
-            self._send_json(200, {"ok": True}); return
-        if p.startswith("/api/templates/"):
-            tpl_id = p[len("/api/templates/"):]
-            s, r = delete_template(tpl_id); self._send_json(s, r); return
-        if p.startswith("/api/skills/"):
-            rest = p[len("/api/skills/"):]
-            m = re.match(r"^(global|workspace:[a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)$", rest)
-            if not m:
-                self._send_json(400, {"error": "format : /api/skills/<scope>/<name>"}); return
-            s, r = delete_skill(m.group(1), m.group(2))
-            self._send_json(s, r); return
-        m = re.match(r"^/api/(agents|commands)/(global|workspace:[a-zA-Z0-9_-]+)/([a-zA-Z0-9_-]+)$", p)
-        if m:
-            s, r = delete_fileitem(m.group(1), m.group(2), m.group(3))
-            self._send_json(s, r); return
-        self._send_json(404, {"error":"route inconnue"})
+        self._dispatch("DELETE")
 
+
+# ────────────────────────────────────────────────────────────────────────────
+# Lancement
+# ────────────────────────────────────────────────────────────────────────────
 
 def main():
     ap = argparse.ArgumentParser()

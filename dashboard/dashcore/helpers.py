@@ -91,113 +91,11 @@ def sanitize_bat(s: str) -> str:
     return BAT_UNSAFE.sub("", s or "").strip()
 
 
-def load_env_local() -> dict:
-    """Parse un .env.local simple (KEY=VALUE, lignes # ignorées)."""
-    env = {}
-    if not ENV_FILE.exists():
-        return env
-    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        k = k.strip()
-        v = v.strip().strip('"').strip("'")
-        if k:
-            env[k] = v
-    return env
-
-
-def set_env_var(key: str, value: str) -> tuple[int, dict]:
-    """Upsert une clé dans .env.local en préservant les commentaires existants."""
-    if not key or not ENV_KEY_RE.match(key):
-        return 400, {"error": "clé invalide (lettres, chiffres, underscore ; ne commence pas par un chiffre)"}
-    if "\n" in value or "\r" in value:
-        return 400, {"error": "la valeur contient un saut de ligne"}
-
-    with _MUTATION_LOCK:
-        ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
-        existing_lines = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
-        new_lines = []
-        found = False
-        for line in existing_lines:
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#") and "=" in stripped:
-                k = stripped.split("=", 1)[0].strip()
-                if k == key:
-                    new_lines.append(f"{key}={value}")
-                    found = True
-                    continue
-            new_lines.append(line)
-        if not found:
-            if new_lines and new_lines[-1].strip():
-                new_lines.append("")
-            new_lines.append(f"{key}={value}")
-        ENV_FILE.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-
-    log.info("env: set %s", key)
-    return 200, {"ok": True, "key": key}
-
-
-def delete_env_var(key: str) -> tuple[int, dict]:
-    """Retire une clé de .env.local (préserve le reste)."""
-    if not key or not ENV_KEY_RE.match(key):
-        return 400, {"error": "clé invalide"}
-    if not ENV_FILE.exists():
-        return 404, {"error": ".env.local absent"}
-
-    with _MUTATION_LOCK:
-        kept = []
-        removed = False
-        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#") and "=" in stripped:
-                k = stripped.split("=", 1)[0].strip()
-                if k == key:
-                    removed = True
-                    continue
-            kept.append(line)
-        if not removed:
-            return 404, {"error": f"clé absente : {key}"}
-        ENV_FILE.write_text("\n".join(kept) + "\n", encoding="utf-8")
-
-    log.info("env: delete %s", key)
-    return 200, {"ok": True, "key": key}
-
-
-def substitute_env(value, env: dict):
-    """Remplace récursivement ${VAR} dans strings / lists / dicts."""
-    if isinstance(value, str):
-        missing = []
-        def repl(m):
-            key = m.group(1)
-            if key in env:
-                return env[key]
-            if key in os.environ:
-                return os.environ[key]
-            missing.append(key)
-            return m.group(0)
-        out = ENV_VAR_PATTERN.sub(repl, value)
-        return out, missing
-    if isinstance(value, list):
-        all_missing = []
-        out = []
-        for v in value:
-            nv, miss = substitute_env(v, env)
-            out.append(nv)
-            all_missing.extend(miss)
-        return out, all_missing
-    if isinstance(value, dict):
-        all_missing = []
-        out = {}
-        for k, v in value.items():
-            nv, miss = substitute_env(v, env)
-            out[k] = nv
-            all_missing.extend(miss)
-        return out, all_missing
-    return value, []
+# Variables .env.local — implémentation déplacée dans dashcore/env_local.py
+# Re-exports pour compat ascendante
+from dashcore.env_local import (  # noqa: E402,F401
+    load_env_local, set_env_var, delete_env_var, substitute_env,
+)
 
 
 def port_free(host: str, port: int) -> bool:
@@ -217,38 +115,8 @@ def find_port(host: str, start: int) -> int:
     raise RuntimeError(f"Aucun port libre entre {start} et {start+19}")
 
 
-def launch_script(bat_name: str) -> tuple[bool, str]:
-    bat = SCRIPTS_DIR / bat_name
-    if not bat.exists():
-        return False, f"Script introuvable : {bat}"
-    try:
-        subprocess.Popen(
-            ["cmd", "/c", "start", "", str(bat)],
-            cwd=str(SCRIPTS_DIR),
-            creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
-            shell=False,
-        )
-        return True, f"Lancé : {bat.name}"
-    except Exception as e:
-        return False, f"Erreur : {e}"
-
-
-def list_workspaces() -> list[dict]:
-    data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
-    return data.get("workspaces", [])
-
-
-def cleanup_orphan_bats() -> dict:
-    """Retire les .bat qui ne correspondent à aucun workspace du registre."""
-    ws_ids = {w["id"] for w in list_workspaces()}
-    removed = []
-    for bat in SCRIPTS_DIR.glob("launch-*.bat"):
-        # extract id from "launch-<id>.bat"
-        wid = bat.stem[len("launch-"):]
-        if wid not in ws_ids:
-            bat.unlink()
-            removed.append(bat.name)
-    return {"removed": removed}
+# launch_script / list_workspaces / cleanup_orphan_bats
+# déplacés dans dashcore/workspace_io.py (re-exports en bas de fichier)
 
 
 def parse_skill_frontmatter(skill_md: Path) -> dict:
@@ -257,7 +125,7 @@ def parse_skill_frontmatter(skill_md: Path) -> dict:
     try:
         with skill_md.open("r", encoding="utf-8", errors="replace") as f:
             text = f.read(3000)
-    except Exception:
+    except OSError:
         return meta
     if not text.startswith("---"):
         return meta
@@ -280,6 +148,7 @@ def global_search(q: str) -> dict:
         return {"results": []}
     results = []
 
+    from dashcore.workspace_io import list_workspaces  # import tardif (cycle)
     for w in list_workspaces():
         hay = f"{w.get('id','')} {w.get('label','')} {w.get('description','')}".lower()
         if q in hay:
@@ -338,171 +207,9 @@ def apply_template(src_dir: Path, dst_dir: Path, vars: dict) -> list[str]:
     return created
 
 
-def project_dir_for_path(path: Path) -> Path | None:
-    """Trouve le dossier ~/.claude/projects/<encodé> qui correspond à `path`.
-
-    Claude encode le chemin en remplaçant `:` et `\\` par `-`. On encode
-    directement le path cible plutôt que d'essayer de décoder les noms
-    de dossier (décodage ambigu dès qu'un segment contient un `-`)."""
-    if not CLAUDE_PROJECTS.exists():
-        return None
-    target = str(path.resolve())
-    encoded = target.replace(":", "-").replace("\\", "-").replace("/", "-").replace(" ", "-")
-    candidate = CLAUDE_PROJECTS / encoded
-    if candidate.is_dir():
-        return candidate
-    enc_lower = encoded.lower()
-    for d in CLAUDE_PROJECTS.iterdir():
-        if d.is_dir() and d.name.lower() == enc_lower:
-            return d
-    return None
-
-
-def resolve_ws_dir(ws_id: str) -> Path:
-    """Retourne le chemin disque réel d'un workspace.
-
-    Cherche d'abord le path dans workspaces.json (workspaces importés peuvent
-    pointer hors de WORKSPACES_DIR). Fallback : WORKSPACES_DIR/ws_id.
-    Point d'accès UNIQUE — toute fonction qui touche au disque d'un workspace
-    DOIT passer par ici, sinon les workspaces importés sont cassés.
-    """
-    data = read_json(WORKSPACES_JSON, {"workspaces": []})
-    w = next((x for x in data.get("workspaces", []) if x.get("id") == ws_id), None)
-    if w and w.get("path"):
-        return Path(w["path"])
-    return WORKSPACES_DIR / ws_id
-
-
-def validate_ws_path(path: str) -> tuple[bool, str]:
-    """Valide un chemin saisi par l'utilisateur (import / update workspace).
-
-    Refuse : vide, relatif, UNC, caractères incompatibles avec un .bat.
-    Retourne (ok, message_erreur).
-    """
-    p = (path or "").strip()
-    if not p:
-        return False, "chemin vide"
-    if p.startswith("\\\\"):
-        return False, "chemins UNC non supportés"
-    pp = Path(p)
-    if not pp.is_absolute():
-        return False, "chemin absolu requis"
-    if BAT_UNSAFE.search(p):
-        return False, "caractères interdits dans le chemin (& | < > ^ \" %)"
-    return True, ""
-
-
-def write_launch_bat(ws_id: str, label: str, path: str) -> Path:
-    """Écrit le script de lancement Claude Code pour un workspace.
-
-    Centralise la génération — quatre sites l'utilisaient avec des copies
-    quasi-identiques (create, duplicate, update, import).
-    """
-    bat_path = SCRIPTS_DIR / f"launch-{ws_id}.bat"
-    safe_label = (label or ws_id).replace("\n", " ").replace("\r", " ")
-    bat_path.write_text(
-        f"@echo off\n"
-        f"echo.\n"
-        f"echo  +======================================+\n"
-        f"echo  ^|   Claude Code -- {safe_label}\n"
-        f"echo  +======================================+\n"
-        f"echo.\n"
-        f'cd /d "{path}"\n'
-        f"claude\n",
-        encoding="utf-8",
-    )
-    return bat_path
-
-
-def workspace_stats(ws: dict) -> dict:
-    pdir = project_dir_for_path(Path(ws["path"]))
-    if not pdir:
-        return {"sessions": 0, "messages": 0, "last": None, "input_tokens": 0, "output_tokens": 0}
-    sessions = 0
-    messages = 0
-    last_mtime = 0.0
-    inp = out = 0
-    for jsonl in pdir.glob("*.jsonl"):
-        sessions += 1
-        try:
-            mtime = jsonl.stat().st_mtime
-            if mtime > last_mtime:
-                last_mtime = mtime
-            with jsonl.open("r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if entry.get("type") in ("user", "assistant"):
-                        messages += 1
-                    usage = (entry.get("message") or {}).get("usage") or entry.get("usage") or {}
-                    inp += int(usage.get("input_tokens") or 0)
-                    out += int(usage.get("output_tokens") or 0)
-        except Exception:
-            continue
-    last_iso = dt.datetime.fromtimestamp(last_mtime).isoformat(timespec="seconds") if last_mtime else None
-    # Pricing approx Opus 4.7 : $15 / M input, $75 / M output
-    cost_usd = (inp / 1_000_000) * 15 + (out / 1_000_000) * 75
-    return {
-        "sessions": sessions,
-        "messages": messages,
-        "last": last_iso,
-        "input_tokens": inp,
-        "output_tokens": out,
-        "cost_usd": round(cost_usd, 4),
-    }
-
-
-def all_stats() -> dict:
-    out = {}
-    for w in list_workspaces():
-        out[w["id"]] = workspace_stats(w)
-    return out
-
-
-def sanity_check() -> dict:
-    """Compare registre ↔ .mcp.json effectivement écrits dans chaque workspace."""
-    # Import tardif pour éviter le cycle dashcore.helpers ↔ dashcore.api_mcps
-    from dashcore.api_mcps import mcp_applies_to, build_mcp_server_entry
-
-    env_local = load_env_local()
-    registry = read_json(MCP_REGISTRY, {"mcps": []}).get("mcps", [])
-    ws_list = list_workspaces()
-
-    findings = []
-    for w in ws_list:
-        ws_id = w["id"]
-        expected_ids = {
-            m["id"] for m in registry
-            if mcp_applies_to(m, ws_id) and m.get("status") != "désactivé"
-        }
-        mcp_path = Path(w["path"]) / ".mcp.json"
-        actual_ids = set()
-        if mcp_path.exists():
-            data = read_json(mcp_path, {})
-            actual_ids = set((data.get("mcpServers") or {}).keys())
-
-        missing_sync  = expected_ids - actual_ids  # dans le registre mais pas écrit
-        stale = actual_ids - expected_ids          # écrit mais plus dans le registre
-        if missing_sync or stale:
-            findings.append({
-                "workspace": ws_id,
-                "missing_sync": sorted(missing_sync),
-                "stale": sorted(stale),
-            })
-
-    # variables manquantes
-    missing_env = {}
-    for m in registry:
-        _, miss = build_mcp_server_entry(m, env_local)
-        if miss:
-            missing_env[m["id"]] = miss
-
-    return {"findings": findings, "missing_env": missing_env}
+# project_dir_for_path / resolve_ws_dir / validate_ws_path / write_launch_bat
+# / workspace_stats / all_stats / sanity_check
+# déplacés dans dashcore/workspace_io.py (re-exports en bas de fichier)
 
 
 def _remove_dir_or_link(p: Path) -> None:
@@ -527,46 +234,46 @@ OPEN_TARGETS = {
 }
 
 
-def open_target(key: str) -> tuple[bool, str]:
+def open_target(key: str) -> tuple[int, dict]:
     if key.startswith("workspace-claude-md:"):
         ws_id = key.split(":", 1)[1]
         if not safe_id(ws_id):
-            return False, "id invalide"
+            return 400, {"ok": False, "error": "id invalide"}
         p = resolve_ws_dir(ws_id) / "CLAUDE.md"
     elif key.startswith("workspace-dir:"):
         ws_id = key.split(":", 1)[1]
         if not safe_id(ws_id):
-            return False, "id invalide"
+            return 400, {"ok": False, "error": "id invalide"}
         p = resolve_ws_dir(ws_id)
     elif key.startswith("template:"):
         tpl_id = key.split(":", 1)[1]
         if not safe_id(tpl_id):
-            return False, "id invalide"
+            return 400, {"ok": False, "error": "id invalide"}
         p = TEMPLATES_DIR / tpl_id
     elif key.startswith("skill-global:"):
         name = key.split(":", 1)[1]
         if not safe_id(name):
-            return False, "nom invalide"
+            return 400, {"ok": False, "error": "nom invalide"}
         p = CLAUDE_HOME / "skills" / name
     elif key.startswith("skill-ws:"):
         parts = key.split(":")
         if len(parts) != 3 or not safe_id(parts[1]) or not safe_id(parts[2]):
-            return False, "format : skill-ws:<ws_id>:<name>"
+            return 400, {"ok": False, "error": "format : skill-ws:<ws_id>:<name>"}
         p = WORKSPACES_DIR / parts[1] / ".claude" / "skills" / parts[2]
     else:
         p = OPEN_TARGETS.get(key)
         if p is None:
-            return False, "cible inconnue"
+            return 400, {"ok": False, "error": "cible inconnue"}
 
     if not p.exists():
         # Fichier absent : propose notepad pour les cas où on veut le créer
         if key == "env-local":
             try:
                 subprocess.Popen(["notepad", str(p)])
-                return True, f"Notepad ouvert (fichier sera créé au save) : {p}"
-            except Exception as e:
-                return False, f"Erreur : {e}"
-        return False, f"Introuvable : {p}"
+                return 200, {"ok": True, "message": f"Notepad ouvert (fichier sera créé au save) : {p}"}
+            except OSError as e:
+                return 500, {"ok": False, "error": f"Erreur : {e}"}
+        return 404, {"ok": False, "error": f"Introuvable : {p}"}
     try:
         if sys.platform == "win32":
             try:
@@ -576,12 +283,12 @@ def open_target(key: str) -> tuple[bool, str]:
                 subprocess.Popen(["notepad", str(p)])
         else:
             subprocess.Popen(["xdg-open", str(p)])
-        return True, f"Ouvert : {p}"
-    except Exception as e:
-        return False, f"Erreur : {e}"
+        return 200, {"ok": True, "message": f"Ouvert : {p}"}
+    except OSError as e:
+        return 500, {"ok": False, "error": f"Erreur : {e}"}
 
 
-def backup_claude_config() -> tuple[bool, str]:
+def backup_claude_config() -> tuple[int, dict]:
     BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     copied = []
@@ -591,8 +298,8 @@ def backup_claude_config() -> tuple[bool, str]:
             shutil.copy2(src, dst)
             copied.append(dst.name)
     if not copied:
-        return False, "Aucun fichier à sauvegarder"
-    return True, "Sauvegardés : " + ", ".join(copied)
+        return 400, {"ok": False, "error": "Aucun fichier à sauvegarder"}
+    return 200, {"ok": True, "message": "Sauvegardés : " + ", ".join(copied)}
 
 
 def list_backups() -> list[dict]:
@@ -609,35 +316,18 @@ def list_backups() -> list[dict]:
     return out
 
 
-JOURNAL_ENTRY = re.compile(r"^## (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\s*$", re.MULTILINE)
+# ─────────────────────────────────────────────────────────────────────────
+# Re-exports : modules extraits, gardés ici pour compat ascendante.
+# (Importer depuis le module dédié quand on écrit du nouveau code.)
+# ─────────────────────────────────────────────────────────────────────────
 
-
-def read_journal() -> list[dict]:
-    if not JOURNAL_FILE.exists():
-        return []
-    text = JOURNAL_FILE.read_text(encoding="utf-8")
-    entries = []
-    parts = JOURNAL_ENTRY.split(text)
-    # parts = [preamble, ts1, body1, ts2, body2, ...]
-    for i in range(1, len(parts), 2):
-        ts = parts[i].strip()
-        body = parts[i+1].strip() if i+1 < len(parts) else ""
-        entries.append({"ts": ts, "text": body})
-    return entries
-
-
-def append_journal(text: str) -> None:
-    JOURNAL_FILE.parent.mkdir(parents=True, exist_ok=True)
-    ts = dt.datetime.now().isoformat(timespec="seconds")
-    header_needed = not JOURNAL_FILE.exists() or not JOURNAL_FILE.read_text(encoding="utf-8").startswith("# Journal")
-    with JOURNAL_FILE.open("a", encoding="utf-8") as f:
-        if header_needed:
-            f.write("# Journal\n\n")
-        f.write(f"## {ts}\n{text.strip()}\n\n")
-
-
-def clear_journal() -> None:
-    if JOURNAL_FILE.exists():
-        JOURNAL_FILE.unlink()
+from dashcore.journal import (  # noqa: E402,F401
+    read_journal, append_journal, clear_journal, JOURNAL_ENTRY,
+)
+from dashcore.workspace_io import (  # noqa: E402,F401
+    list_workspaces, cleanup_orphan_bats, project_dir_for_path,
+    resolve_ws_dir, validate_ws_path, write_launch_bat,
+    workspace_stats, all_stats, sanity_check, launch_script,
+)
 
 

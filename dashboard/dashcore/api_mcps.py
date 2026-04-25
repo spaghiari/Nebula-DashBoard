@@ -31,7 +31,10 @@ from dashcore.config import (
 )
 
 
-from dashcore.helpers import *
+from dashcore.helpers import (
+    load_env_local, read_json, resolve_cli, resolve_ws_dir, safe_id,
+    substitute_env, write_json,
+)
 from dashcore.api_workspaces import list_workspaces
 
 
@@ -45,6 +48,7 @@ def mcp_live_check(ws_id: str) -> tuple[int, dict]:
         r = subprocess.run(
             [resolve_cli("claude"), "mcp", "list"],
             cwd=w["path"], capture_output=True, text=True, timeout=10,
+            encoding="utf-8", errors="replace",
         )
         output = (r.stdout or "") + (r.stderr or "")
         # Parsing basique : lignes avec "name: ..."
@@ -104,7 +108,9 @@ def clean_mcp_payload(payload: dict) -> tuple[dict, str | None]:
         "command": _si((payload.get("command") or "").strip()),
         "args": _si_list(payload.get("args") or []),
         "env": payload.get("env") or {},
+        "cwd": _si((payload.get("cwd") or "").strip()),
         "url": (payload.get("url") or "").strip(),
+        "headers": payload.get("headers") or {},
         "workspaces": payload.get("workspaces") or [],
         "status": (payload.get("status") or "à configurer").strip(),
         "notes": (payload.get("notes") or "").strip(),
@@ -119,6 +125,8 @@ def clean_mcp_payload(payload: dict) -> tuple[dict, str | None]:
         return {}, "args doit être une liste"
     if not isinstance(clean["env"], dict):
         return {}, "env doit être un objet"
+    if not isinstance(clean["headers"], dict):
+        return {}, "headers doit être un objet"
     if not isinstance(clean["workspaces"], list):
         return {}, "workspaces doit être une liste"
 
@@ -152,20 +160,21 @@ def add_or_update_mcp(payload: dict) -> tuple[int, dict]:
     clean, err = clean_mcp_payload(payload)
     if err:
         return 400, {"error": err}
-    data = read_json(MCP_REGISTRY, {"version": "1.0", "mcps": []})
-    mcps = data.setdefault("mcps", [])
-    idx = next((i for i, m in enumerate(mcps) if m.get("id") == clean["id"]), None)
+    with _MUTATION_LOCK:
+        data = read_json(MCP_REGISTRY, {"version": "1.0", "mcps": []})
+        mcps = data.setdefault("mcps", [])
+        idx = next((i for i, m in enumerate(mcps) if m.get("id") == clean["id"]), None)
 
-    # Union des workspaces impactés (avant + après) pour ne rien oublier
-    before_scopes = _workspaces_affected_by_mcp(mcps[idx]) if idx is not None else set()
-    after_scopes = _workspaces_affected_by_mcp(clean)
-    affected = before_scopes | after_scopes
+        # Union des workspaces impactés (avant + après) pour ne rien oublier
+        before_scopes = _workspaces_affected_by_mcp(mcps[idx]) if idx is not None else set()
+        after_scopes = _workspaces_affected_by_mcp(clean)
+        affected = before_scopes | after_scopes
 
-    if idx is None:
-        mcps.append(clean)
-    else:
-        mcps[idx] = clean
-    write_json(MCP_REGISTRY, data)
+        if idx is None:
+            mcps.append(clean)
+        else:
+            mcps[idx] = clean
+        write_json(MCP_REGISTRY, data)
 
     synced = _auto_sync(affected)
     return 200, {"ok": True, "id": clean["id"], "synced": sorted(synced.keys())}
@@ -174,14 +183,15 @@ def add_or_update_mcp(payload: dict) -> tuple[int, dict]:
 def delete_mcp(mcp_id: str) -> tuple[int, dict]:
     if not safe_id(mcp_id):
         return 400, {"error": "id invalide"}
-    data = read_json(MCP_REGISTRY, {"version": "1.0", "mcps": []})
-    existing = next((m for m in data.get("mcps", []) if m.get("id") == mcp_id), None)
-    if existing is None:
-        return 404, {"error": "MCP absent"}
+    with _MUTATION_LOCK:
+        data = read_json(MCP_REGISTRY, {"version": "1.0", "mcps": []})
+        existing = next((m for m in data.get("mcps", []) if m.get("id") == mcp_id), None)
+        if existing is None:
+            return 404, {"error": "MCP absent"}
 
-    affected = _workspaces_affected_by_mcp(existing)
-    data["mcps"] = [m for m in data.get("mcps", []) if m.get("id") != mcp_id]
-    write_json(MCP_REGISTRY, data)
+        affected = _workspaces_affected_by_mcp(existing)
+        data["mcps"] = [m for m in data.get("mcps", []) if m.get("id") != mcp_id]
+        write_json(MCP_REGISTRY, data)
     synced = _auto_sync(affected)
     return 200, {"ok": True, "synced": sorted(synced.keys())}
 
@@ -202,6 +212,11 @@ def build_mcp_server_entry(mcp: dict, env_local: dict) -> tuple[dict, list[str]]
         entry["type"] = transport
         entry["url"] = url
         missing_total.extend(miss)
+        # Headers HTTP/SSE (Authorization, X-API-Key, etc.) avec interpolation ${VAR}
+        headers_dict, miss_h = substitute_env(mcp.get("headers", {}), env_local)
+        if headers_dict:
+            entry["headers"] = headers_dict
+        missing_total.extend(miss_h)
     else:
         cmd, miss = substitute_env(mcp.get("command", ""), env_local)
         args, miss2 = substitute_env(mcp.get("args", []), env_local)
@@ -213,7 +228,11 @@ def build_mcp_server_entry(mcp: dict, env_local: dict) -> tuple[dict, list[str]]
         entry["command"] = cmd
         if args:
             entry["args"] = args
-        missing_total.extend(miss + miss2)
+        # cwd : working directory du process MCP (avec interpolation ${VAR})
+        cwd_val, miss_cwd = substitute_env(mcp.get("cwd", ""), env_local)
+        if cwd_val:
+            entry["cwd"] = cwd_val
+        missing_total.extend(miss + miss2 + miss_cwd)
 
     env_dict, miss3 = substitute_env(mcp.get("env", {}), env_local)
     if env_dict:
@@ -274,6 +293,8 @@ def workspace_mcp_status(ws_id: str) -> tuple[int, dict]:
 
 
 def test_mcp(mcp_id: str) -> tuple[int, dict]:
+    if not safe_id(mcp_id):
+        return 400, {"error": "id invalide"}
     registry = read_json(MCP_REGISTRY, {"mcps": []})
     mcp = next((m for m in registry.get("mcps", []) if m.get("id") == mcp_id), None)
     if not mcp:
@@ -308,20 +329,19 @@ def test_mcp(mcp_id: str) -> tuple[int, dict]:
 
     # Résolution Windows : shutil.which gère .cmd/.bat/.exe
     resolved = shutil.which(cmd)
-    if resolved:
-        cmd = resolved
-    full = [cmd] + list(args)
+    if not resolved:
+        return 200, {"ok": False, "message": f"Commande introuvable : {cmd} (npx sur Windows est 'npx.cmd' — vérifie que Node.js est dans le PATH)"}
+    full = [resolved] + list(args)
     try:
         start = time.time()
-        # shell=True pour que Windows résolve .cmd/.bat correctement si pas déjà résolu
-        use_shell = sys.platform == "win32" and not resolved
+        # shell=False systématique : args en liste, pas d'interprétation shell
         p = subprocess.Popen(
-            full if not use_shell else subprocess.list2cmdline(full),
+            full,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            shell=use_shell,
+            shell=False,
         )
         try:
-            out, err = p.communicate(timeout=2.5)
+            _out, err = p.communicate(timeout=2.5)
             code = p.returncode
             msg = f"exit={code} ({time.time()-start:.1f}s)"
             if err:
@@ -330,8 +350,6 @@ def test_mcp(mcp_id: str) -> tuple[int, dict]:
         except subprocess.TimeoutExpired:
             p.kill()
             return 200, {"ok": True, "message": "Processus démarré (timeout 2.5s) — probablement OK pour un serveur MCP stdio"}
-    except FileNotFoundError:
-        return 200, {"ok": False, "message": f"Commande introuvable : {cmd} (npx sur Windows est 'npx.cmd' — normalement détecté, vérifie que Node.js est dans le PATH)"}
     except Exception as e:
         return 200, {"ok": False, "message": f"Erreur : {e}"}
 
@@ -409,6 +427,156 @@ def _decode_project_path(name: str) -> tuple[str, bool]:
     return drive + "\\".join(parts), False
 
 
+CLAUDE_GLOBAL_SOURCES = (
+    USER_HOME / ".claude.json",
+    CLAUDE_SETTINGS,
+    CLAUDE_HOME / "settings.local.json",
+)
+
+
+def find_global_mcp_conflicts() -> dict:
+    """Détecte les MCPs présents à la fois dans la config Claude globale et dans le registre Atelier.
+
+    Pour chaque MCP du registre, on regarde s'il existe une entrée homonyme dans
+    `~/.claude.json`, `~/.claude/settings.json` ou `~/.claude/settings.local.json`.
+    Les doublons créent une config zombie : Atelier sync vers le `.mcp.json` du
+    workspace, mais l'entrée globale reste et peut diverger silencieusement.
+    """
+    registry = read_json(MCP_REGISTRY, {"mcps": []}).get("mcps", [])
+    registry_ids = {m["id"]: m for m in registry}
+
+    conflicts = []
+    for src in CLAUDE_GLOBAL_SOURCES:
+        if not src.exists():
+            continue
+        try:
+            data = read_json(src, {})
+        except Exception:
+            continue
+        servers = (data.get("mcpServers") or {})
+        if not isinstance(servers, dict):
+            continue
+        for name, cfg in servers.items():
+            if name in registry_ids:
+                conflicts.append({
+                    "id": name,
+                    "source": str(src),
+                    "source_label": src.name,
+                    "registry_status": registry_ids[name].get("status", "à configurer"),
+                    "registry_workspaces": registry_ids[name].get("workspaces", []),
+                    "global_command": cfg.get("command", ""),
+                    "global_url": cfg.get("url", ""),
+                    "global_transport": cfg.get("type") or cfg.get("transport") or ("http" if cfg.get("url") else "stdio"),
+                })
+
+    # MCPs uniquement dans la config globale (jamais importés dans Atelier)
+    orphans = []
+    for src in CLAUDE_GLOBAL_SOURCES:
+        if not src.exists():
+            continue
+        try:
+            data = read_json(src, {})
+        except Exception:
+            continue
+        servers = (data.get("mcpServers") or {})
+        if not isinstance(servers, dict):
+            continue
+        for name, cfg in servers.items():
+            if name not in registry_ids:
+                orphans.append({
+                    "id": name,
+                    "source": str(src),
+                    "source_label": src.name,
+                    "transport": cfg.get("type") or cfg.get("transport") or ("http" if cfg.get("url") else "stdio"),
+                    "command": cfg.get("command", ""),
+                    "url": cfg.get("url", ""),
+                })
+
+    return {
+        "conflicts": conflicts,
+        "orphans": orphans,
+        "sources": [str(s) for s in CLAUDE_GLOBAL_SOURCES if s.exists()],
+    }
+
+
+def remove_mcp_from_claude_global(mcp_id: str, source: str) -> tuple[int, dict]:
+    """Retire un MCP d'un fichier de config Claude globale (avec backup automatique)."""
+    if not safe_id(mcp_id):
+        return 400, {"error": "id invalide"}
+    # Vérifie que le source est bien un des fichiers autorisés (anti-traversal)
+    src_path = Path(source).resolve()
+    allowed = [s.resolve() for s in CLAUDE_GLOBAL_SOURCES]
+    if src_path not in allowed:
+        return 400, {"error": "source non autorisée"}
+    if not src_path.exists():
+        return 404, {"error": "fichier introuvable"}
+
+    with _MUTATION_LOCK:
+        try:
+            data = read_json(src_path, {}) or {}
+        except Exception as e:
+            return 500, {"error": f"lecture impossible : {e}"}
+        servers = data.get("mcpServers") or {}
+        if mcp_id not in servers:
+            return 404, {"error": f"MCP '{mcp_id}' absent de {src_path.name}"}
+        # Backup
+        bak = src_path.with_suffix(src_path.suffix + ".bak")
+        bak.write_text(src_path.read_text(encoding="utf-8"), encoding="utf-8")
+        # Retrait
+        del servers[mcp_id]
+        if servers:
+            data["mcpServers"] = servers
+        else:
+            data.pop("mcpServers", None)
+        write_json(src_path, data)
+        log.info("global mcp cleanup: removed %s from %s", mcp_id, src_path.name)
+        return 200, {"ok": True, "backup": str(bak)}
+
+
+def migrate_global_mcp_to_registry(mcp_id: str, source: str, workspaces: list | None = None) -> tuple[int, dict]:
+    """Importe un MCP de la config globale dans le registre Atelier puis le retire de la source.
+
+    Pour les "orphelins" — MCPs présents dans ~/.claude/settings.json mais pas
+    dans le registre. Évite la double action import + cleanup manuel.
+    """
+    if not safe_id(mcp_id):
+        return 400, {"error": "id invalide"}
+    src_path = Path(source).resolve()
+    allowed = [s.resolve() for s in CLAUDE_GLOBAL_SOURCES]
+    if src_path not in allowed:
+        return 400, {"error": "source non autorisée"}
+    if not src_path.exists():
+        return 404, {"error": "fichier introuvable"}
+
+    data = read_json(src_path, {}) or {}
+    servers = data.get("mcpServers") or {}
+    if mcp_id not in servers:
+        return 404, {"error": f"MCP '{mcp_id}' absent de {src_path.name}"}
+    cfg = servers[mcp_id]
+
+    payload = {
+        "id": mcp_id,
+        "name": cfg.get("name", mcp_id),
+        "transport": cfg.get("transport") or cfg.get("type") or ("http" if cfg.get("url") else "stdio"),
+        "command": cfg.get("command", ""),
+        "args": cfg.get("args", []),
+        "env": cfg.get("env", {}),
+        "cwd": cfg.get("cwd", ""),
+        "url": cfg.get("url", ""),
+        "headers": cfg.get("headers", {}),
+        "workspaces": workspaces or [],
+        "status": "disponible",
+    }
+    s, r = add_or_update_mcp(payload)
+    if s >= 400:
+        return s, r
+    # Retire de la source seulement après import OK
+    s2, r2 = remove_mcp_from_claude_global(mcp_id, source)
+    if s2 >= 400:
+        return s2, {"warning": "MCP importé mais nettoyage source échoué", **r2}
+    return 200, {"ok": True, "imported": mcp_id, "removed_from": str(src_path.name)}
+
+
 def scan_claude_config() -> tuple[int, dict]:
     """Scanne ~/.claude/ pour détecter MCPs et projets existants.
 
@@ -432,11 +600,13 @@ def scan_claude_config() -> tuple[int, dict]:
             result["mcps"].append({
                 "id": name,
                 "name": name,
-                "transport": cfg.get("transport") or ("http" if cfg.get("url") else "stdio"),
+                "transport": cfg.get("transport") or cfg.get("type") or ("http" if cfg.get("url") else "stdio"),
                 "command": cfg.get("command", ""),
                 "args": cfg.get("args", []),
                 "env": cfg.get("env", {}),
+                "cwd": cfg.get("cwd", ""),
                 "url": cfg.get("url", ""),
+                "headers": cfg.get("headers", {}),
                 "already_registered": name in existing_ids,
             })
 
