@@ -22,6 +22,33 @@ GIT_TIMEOUT_FETCH = 20
 GIT_TIMEOUT_QUICK = 5
 GIT_TIMEOUT_PULL = 60
 
+# Fichiers connus comme contenant des données utilisateur — leurs modifications
+# locales ne doivent PAS bloquer un git pull (le pull n'écrasera pas ces
+# fichiers tant que les commits distants n'y touchent pas).
+USER_DATA_FILES = frozenset({
+    "mcp/registry.json",
+    "mcp/registry.json.bak",
+    "dashboard/data/workspaces.json",
+    "memory/journal.md",
+})
+
+
+def _filter_user_data(status_lines: list[str]) -> list[str]:
+    """Retire les lignes `git status --porcelain` qui concernent des données utilisateur."""
+    out = []
+    for line in status_lines:
+        if len(line) < 4:
+            continue
+        # Format porcelain : "XY path" (2 chars de status + space + path)
+        path = line[3:].strip().replace("\\", "/")
+        # Strip les guillemets si chemin contient des espaces
+        if path.startswith('"') and path.endswith('"'):
+            path = path[1:-1]
+        if path in USER_DATA_FILES:
+            continue
+        out.append(line)
+    return out
+
 
 def _git(*args: str, timeout: int = GIT_TIMEOUT_QUICK) -> tuple[int, str, str]:
     """Lance une commande git dans ROOT et retourne (returncode, stdout, stderr)."""
@@ -77,8 +104,12 @@ def system_version_info(check_remote: bool = False) -> dict:
     rc2, last_msg, _ = _git("log", "-1", "--pretty=%s")
 
     # Détecte les changements locaux non committés (porcelain est silencieux si propre)
+    # Les fichiers de données utilisateur (registry.json, workspaces.json...) sont
+    # filtrés — leurs modifications sont attendues et ne bloquent pas l'update.
     rc3, status, _ = _git("status", "--porcelain")
-    dirty = bool(status.strip())
+    raw_lines = status.splitlines() if status.strip() else []
+    significant_lines = _filter_user_data(raw_lines)
+    dirty = bool(significant_lines)
 
     info = {
         "available": True,
@@ -88,7 +119,7 @@ def system_version_info(check_remote: bool = False) -> dict:
         "head": head_sha if rc == 0 else "?",
         "head_message": last_msg if rc2 == 0 else "",
         "dirty": dirty,
-        "dirty_files": status.splitlines()[:10] if dirty else [],
+        "dirty_files": significant_lines[:10] if dirty else [],
         "behind": 0,
         "commits": [],
         "fetched": False,
@@ -146,14 +177,19 @@ def system_apply_update() -> tuple[int, dict]:
     if not upstream:
         return 400, {"ok": False, "error": "Aucune branche distante trackée"}
 
-    # Refus si modifications locales non committées (sauf .env.local etc. qui sont gitignored)
+    # Refus si modifications locales non committées qui ne sont PAS des fichiers
+    # de données utilisateur. Les data files (registry, workspaces.json...) sont
+    # filtrés car leurs changements sont normaux et ne risquent rien lors d'un
+    # git pull --ff-only tant que les commits distants n'y touchent pas.
     rc_st, status, _ = _git("status", "--porcelain")
     if rc_st == 0 and status.strip():
-        return 409, {
-            "ok": False,
-            "error": "Modifications locales non committées détectées. Commit ou stash avant l'update.",
-            "dirty_files": status.splitlines()[:10],
-        }
+        significant = _filter_user_data(status.splitlines())
+        if significant:
+            return 409, {
+                "ok": False,
+                "error": "Modifications locales non committées détectées. Commit ou stash avant l'update.",
+                "dirty_files": significant[:10],
+            }
 
     # Snapshot du HEAD avant pull pour détecter les fichiers changés
     rc_b, head_before, _ = _git("rev-parse", "HEAD")
