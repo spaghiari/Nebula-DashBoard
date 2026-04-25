@@ -233,9 +233,10 @@ coller un format `{"mcpServers": {...}}` Claude Code standard.
 
 ## 🔄 Auto-update
 
-Quand tu pousses des commits sur le repo officiel, les utilisateurs voient
-automatiquement un **badge violet** dans leur sidebar. Clic → modale avec :
-- Version locale + branche tracking
+Quand tu pousses des commits sur la branche `main` du repo, les utilisateurs
+voient automatiquement un **badge violet** dans leur sidebar au prochain
+démarrage (vérification toutes les 6 h en cache). Clic → modale avec :
+- Version locale (sha court) et tracking branch
 - Liste des commits à venir (sha + message + auteur + date relative)
 - Bouton **Appliquer la mise à jour** → `git pull --ff-only`
 - Détection automatique : si seuls les fichiers JS/CSS/HTML ont changé,
@@ -244,6 +245,21 @@ automatiquement un **badge violet** dans leur sidebar. Clic → modale avec :
 
 Sécurité : refus si modifications locales non committées, commandes git
 hardcodées (pas d'injection possible).
+
+### Workflow mainteneur (pour pousser une mise à jour)
+
+Pas de pipeline CI, pas de MR — push direct sur `main` :
+
+```cmd
+cd C:\claude-workspace-export
+:: (sync depuis ton install perso si besoin via le script)
+git add .
+git commit -m "feat: ..."
+git push origin main
+```
+
+Tous les utilisateurs verront la mise à jour à leur prochain démarrage du
+dashboard.
 
 ---
 

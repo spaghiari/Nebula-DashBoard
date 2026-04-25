@@ -1674,35 +1674,34 @@ async function modalSystemUpdate() {
     return;
   }
 
-  // ───── Header avec version locale ─────
-  const head = el('div');
-  head.innerHTML = `
-    <div class="update-version-header">
-      <div>
-        <div class="dim mono" style="font-size:10.5px;letter-spacing:0.16em;text-transform:uppercase">Version locale</div>
-        <div class="row" style="gap:var(--sp-2);margin-top:4px">
-          <span class="mono" style="font-size:14px;font-weight:600">${escapeHtml(info.head)}</span>
-          ${info.branch ? `<span class="badge mono">${escapeHtml(info.branch)}</span>` : ''}
-          ${info.dirty ? '<span class="badge badge-warn">modifs locales</span>' : ''}
+  // ───── Header avec version locale (uniquement si updates dispos ou modifs locales) ─────
+  if (info.behind > 0 || (info.dirty && info.behind > 0)) {
+    const head = el('div');
+    head.innerHTML = `
+      <div class="update-version-header">
+        <div>
+          <div class="dim mono" style="font-size:10.5px;letter-spacing:0.16em;text-transform:uppercase">Version locale</div>
+          <div class="row" style="gap:var(--sp-2);margin-top:4px">
+            <span class="mono" style="font-size:14px;font-weight:600">${escapeHtml(info.head)}</span>
+            ${info.branch ? `<span class="badge mono">${escapeHtml(info.branch)}</span>` : ''}
+          </div>
+          ${info.head_message ? `<div class="dim" style="font-size:12px;margin-top:4px">${escapeHtml(info.head_message)}</div>` : ''}
         </div>
-        ${info.head_message ? `<div class="dim" style="font-size:12px;margin-top:4px">${escapeHtml(info.head_message)}</div>` : ''}
+        ${info.upstream ? `<div class="dim mono" style="font-size:11px;text-align:right">Tracking<br>${escapeHtml(info.upstream)}</div>` : ''}
       </div>
-      ${info.upstream ? `<div class="dim mono" style="font-size:11px;text-align:right">Tracking<br>${escapeHtml(info.upstream)}</div>` : ''}
-    </div>
-  `;
-  body.appendChild(head);
+    `;
+    body.appendChild(head);
+  }
 
   // ───── Si déjà à jour ─────
   if (info.behind === 0) {
-    body.appendChild(el('div', 'callout', `<div>${I.check} <strong>Tu es à jour.</strong> Aucune mise à jour disponible sur la branche <code class="mono">${escapeHtml(info.upstream || 'origin')}</code>.</div>`));
-    if (info.dirty) {
-      body.appendChild(el('div', 'callout callout-warn', `
-        <div>
-          <strong>Modifications locales détectées</strong> (${info.dirty_files.length}+ fichiers). Elles seront préservées tant qu'elles ne sont pas committées.
-          <ul class="help-list" style="margin-top:6px">${info.dirty_files.slice(0, 8).map(f => `<li class="mono" style="font-size:11px">${escapeHtml(f)}</li>`).join('')}</ul>
-        </div>
-      `));
-    }
+    body.appendChild(el('div', 'update-uptodate', `
+      ${I.check}
+      <div>
+        <strong>Tu es à jour</strong>
+        <span class="dim">Branche <code class="mono">${escapeHtml(info.upstream || 'origin')}</code></span>
+      </div>
+    `));
     return;
   }
 
