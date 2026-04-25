@@ -30,7 +30,11 @@ from dashcore.config import (
 )
 
 
-from dashcore.helpers import *
+from dashcore.helpers import (
+    _remove_dir_or_link, apply_template, list_workspaces,
+    project_dir_for_path, read_json, resolve_ws_dir, safe_id, safe_path,
+    sanitize_bat, validate_ws_path, write_json, write_launch_bat,
+)
 
 
 def list_templates() -> list[dict]:
@@ -92,6 +96,136 @@ def delete_template(tpl_id: str) -> tuple[int, dict]:
     return 200, {"ok": True}
 
 
+# Caractères interdits dans un chemin de fichier de template (sécurité)
+_TPL_PATH_RE = re.compile(r"^[a-zA-Z0-9_./-]{1,200}$")
+
+
+def _resolve_template_file(tpl_id: str, rel_path: str) -> tuple[Path, dict | None]:
+    """Valide tpl_id + rel_path et renvoie le Path absolu sécurisé.
+
+    Retourne (path, error_dict). En cas d'erreur, path est None.
+    Garantit que le chemin résolu reste dans TEMPLATES_DIR/tpl_id.
+    """
+    if not safe_id(tpl_id):
+        return None, {"error": "id invalide"}
+    if not rel_path or not _TPL_PATH_RE.match(rel_path):
+        return None, {"error": "chemin invalide (a-z, 0-9, _, -, /, ., max 200)"}
+    if ".." in rel_path.split("/"):
+        return None, {"error": "traversal interdit"}
+    base = (TEMPLATES_DIR / tpl_id).resolve()
+    if not base.exists():
+        return None, {"error": "template introuvable"}
+    target = (base / rel_path).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return None, {"error": "chemin hors du template"}
+    return target, None
+
+
+def get_template_detail(tpl_id: str) -> tuple[int, dict]:
+    """Retourne le détail complet d'un template : meta + arborescence des fichiers."""
+    if not safe_id(tpl_id):
+        return 400, {"error": "id invalide"}
+    base = TEMPLATES_DIR / tpl_id
+    if not base.exists():
+        return 404, {"error": "Template introuvable"}
+    meta = read_json(base / ".template.json", {}) or {}
+    files = []
+    for entry in sorted(base.rglob("*")):
+        if not entry.is_file():
+            continue
+        if entry.name == ".template.json":
+            continue
+        rel = entry.relative_to(base).as_posix()
+        try:
+            size = entry.stat().st_size
+        except OSError:
+            size = 0
+        files.append({"path": rel, "size": size})
+    return 200, {
+        "id": tpl_id,
+        "label": meta.get("label") or tpl_id,
+        "description": meta.get("description") or "",
+        "emoji": meta.get("emoji") or "📦",
+        "files": files,
+        "path": str(base),
+    }
+
+
+def get_template_file(tpl_id: str, rel_path: str) -> tuple[int, dict]:
+    target, err = _resolve_template_file(tpl_id, rel_path)
+    if err:
+        return 400, err
+    if not target.exists() or not target.is_file():
+        return 404, {"error": "fichier introuvable"}
+    try:
+        size = target.stat().st_size
+        if size > 512 * 1024:
+            return 200, {"path": rel_path, "size": size, "content": "", "binary": True, "truncated": False, "error": "fichier > 512 Kio non éditable"}
+        data = target.read_bytes()
+        try:
+            content = data.decode("utf-8")
+            binary = False
+        except UnicodeDecodeError:
+            content = ""
+            binary = True
+        return 200, {"path": rel_path, "size": size, "content": content, "binary": binary}
+    except OSError as e:
+        return 500, {"error": str(e)}
+
+
+def write_template_file(tpl_id: str, rel_path: str, content: str) -> tuple[int, dict]:
+    target, err = _resolve_template_file(tpl_id, rel_path)
+    if err:
+        return 400, err
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Backup si existant
+        if target.exists():
+            target.with_suffix(target.suffix + ".bak").write_bytes(target.read_bytes())
+        target.write_text(content, encoding="utf-8")
+        log.info("template file written: %s / %s", tpl_id, rel_path)
+        return 200, {"ok": True, "path": rel_path, "size": target.stat().st_size}
+    except OSError as e:
+        return 500, {"error": str(e)}
+
+
+def delete_template_file(tpl_id: str, rel_path: str) -> tuple[int, dict]:
+    target, err = _resolve_template_file(tpl_id, rel_path)
+    if err:
+        return 400, err
+    if not target.exists() or not target.is_file():
+        return 404, {"error": "fichier introuvable"}
+    try:
+        target.unlink()
+        # Nettoie les dossiers parents vides
+        parent = target.parent
+        base = (TEMPLATES_DIR / tpl_id).resolve()
+        while parent != base and parent.exists() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+        return 200, {"ok": True}
+    except OSError as e:
+        return 500, {"error": str(e)}
+
+
+def update_template_meta(tpl_id: str, payload: dict) -> tuple[int, dict]:
+    """Met à jour label/description/emoji dans .template.json."""
+    if not safe_id(tpl_id):
+        return 400, {"error": "id invalide"}
+    base = TEMPLATES_DIR / tpl_id
+    if not base.exists():
+        return 404, {"error": "template introuvable"}
+    with _MUTATION_LOCK:
+        meta = read_json(base / ".template.json", {}) or {}
+        if "label" in payload: meta["label"] = (payload.get("label") or tpl_id).strip()
+        if "description" in payload: meta["description"] = (payload.get("description") or "").strip()
+        if "emoji" in payload: meta["emoji"] = (payload.get("emoji") or "📦").strip()
+        write_json(base / ".template.json", meta)
+    return 200, {"ok": True, "meta": meta}
+
+
 def get_workspace_settings(ws_id: str) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
@@ -133,21 +267,22 @@ def patch_workspace_settings(ws_id: str, key: str, value) -> tuple[int, dict]:
         return 400, {"error": f"clé non gérée : {key}"}
 
     path = _workspace_settings_path(ws_id)
-    settings = read_json(path, {}) or {}
-    if value is None or (isinstance(value, (dict, list)) and not value):
-        settings.pop(key, None)
-    else:
-        settings[key] = value
+    with _MUTATION_LOCK:
+        settings = read_json(path, {}) or {}
+        if value is None or (isinstance(value, (dict, list)) and not value):
+            settings.pop(key, None)
+        else:
+            settings[key] = value
 
-    if path.exists():
-        bak = path.with_suffix(".json.bak")
-        bak.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+        if path.exists():
+            bak = path.with_suffix(".json.bak")
+            bak.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
 
-    if settings:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        write_json(path, settings)
-    elif path.exists():
-        path.unlink()
+        if settings:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write_json(path, settings)
+        elif path.exists():
+            path.unlink()
     return 200, {"ok": True}
 
 
@@ -157,16 +292,17 @@ def get_global_hooks() -> dict:
 
 
 def set_global_hooks(hooks: dict) -> tuple[int, dict]:
-    settings = read_json(CLAUDE_SETTINGS, {}) or {}
-    if CLAUDE_SETTINGS.exists():
-        bak = CLAUDE_SETTINGS.with_suffix(".json.bak")
-        bak.write_text(CLAUDE_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
-    if hooks:
-        settings["hooks"] = hooks
-    else:
-        settings.pop("hooks", None)
-    CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-    write_json(CLAUDE_SETTINGS, settings)
+    with _MUTATION_LOCK:
+        settings = read_json(CLAUDE_SETTINGS, {}) or {}
+        if CLAUDE_SETTINGS.exists():
+            bak = CLAUDE_SETTINGS.with_suffix(".json.bak")
+            bak.write_text(CLAUDE_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
+        if hooks:
+            settings["hooks"] = hooks
+        else:
+            settings.pop("hooks", None)
+        CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
+        write_json(CLAUDE_SETTINGS, settings)
     return 200, {"ok": True}
 
 
@@ -189,8 +325,10 @@ def list_sessions_for_workspace(ws_id: str) -> list[dict]:
                     line = line.strip()
                     if not line:
                         continue
-                    try: entry = json.loads(line)
-                    except: continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
                     if entry.get("type") == "user" and first_msg is None:
                         msg = entry.get("message") or {}
                         content = msg.get("content")
@@ -214,7 +352,8 @@ def list_sessions_for_workspace(ws_id: str) -> list[dict]:
                 "input_tokens": inp,
                 "output_tokens": out_tokens,
             })
-        except Exception:
+        except OSError as e:
+            log.warning("session illisible %s : %s", jsonl, e)
             continue
     return out
 
@@ -294,38 +433,39 @@ def duplicate_workspace(payload: dict) -> tuple[int, dict]:
     write_launch_bat(new_id, label, str(dst))
 
     # registre
-    data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
-    src_entry = next((w for w in data.get("workspaces", []) if w.get("id") == source), None)
-    data.setdefault("workspaces", []).append({
-        "id": new_id,
-        "label": label,
-        "emoji": emoji,
-        "description": description,
-        "path": str(dst),
-        "template": (src_entry or {}).get("template", "clone"),
-    })
-    write_json(WORKSPACES_JSON, data)
+    with _MUTATION_LOCK:
+        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        src_entry = next((w for w in data.get("workspaces", []) if w.get("id") == source), None)
+        data.setdefault("workspaces", []).append({
+            "id": new_id,
+            "label": label,
+            "emoji": emoji,
+            "description": description,
+            "path": str(dst),
+            "template": (src_entry or {}).get("template", "clone"),
+        })
+        write_json(WORKSPACES_JSON, data)
     return 201, {"ok": True, "id": new_id}
 
 
-def launch_resume(ws_id: str) -> tuple[bool, str]:
+def launch_resume(ws_id: str) -> tuple[int, dict]:
     if not safe_id(ws_id):
-        return False, "id invalide"
+        return 400, {"ok": False, "error": "id invalide"}
     w = next((x for x in list_workspaces() if x["id"] == ws_id), None)
     if not w:
-        return False, "workspace absent"
+        return 404, {"ok": False, "error": "workspace absent"}
     path = w.get("path", "")
     if not safe_path(path):
-        return False, "chemin de workspace invalide"
+        return 400, {"ok": False, "error": "chemin de workspace invalide"}
     try:
         # /k garde la fenêtre ouverte après exécution (utile si claude -c termine ou échoue)
         subprocess.Popen(
             ["cmd", "/c", "start", "", "cmd", "/k", f'cd /d "{path}" && claude -c'],
             creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
         )
-        return True, f"Reprise session : {ws_id}"
-    except Exception as e:
-        return False, f"Erreur : {e}"
+        return 200, {"ok": True, "message": f"Reprise session : {ws_id}"}
+    except OSError as e:
+        return 500, {"ok": False, "error": f"Erreur : {e}"}
 
 
 _resolve_ws_dir = resolve_ws_dir  # alias rétro-compat (centralisé dans helpers.py)
@@ -388,44 +528,46 @@ def create_workspace(payload: dict) -> tuple[int, dict]:
     created = apply_template(tpl_dir, ws_dir, vars)
     write_launch_bat(ws_id, label, str(ws_dir))
 
-    data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
-    data.setdefault("workspaces", []).append({
-        "id": ws_id,
-        "label": label,
-        "emoji": emoji,
-        "description": desc,
-        "path": str(ws_dir),
-        "template": template,
-    })
-    write_json(WORKSPACES_JSON, data)
+    with _MUTATION_LOCK:
+        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        data.setdefault("workspaces", []).append({
+            "id": ws_id,
+            "label": label,
+            "emoji": emoji,
+            "description": desc,
+            "path": str(ws_dir),
+            "template": template,
+        })
+        write_json(WORKSPACES_JSON, data)
     return 201, {"ok": True, "id": ws_id, "template": template, "files": created}
 
 
 def update_workspace(ws_id: str, payload: dict) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
-    data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
-    ws_list = data.get("workspaces", [])
-    idx = next((i for i, w in enumerate(ws_list) if w.get("id") == ws_id), None)
-    if idx is None:
-        return 404, {"error": "workspace absent du registre"}
+    with _MUTATION_LOCK:
+        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        ws_list = data.get("workspaces", [])
+        idx = next((i for i, w in enumerate(ws_list) if w.get("id") == ws_id), None)
+        if idx is None:
+            return 404, {"error": "workspace absent du registre"}
 
-    entry = ws_list[idx]
-    if "label" in payload:
-        entry["label"] = sanitize_bat(payload.get("label") or "") or ws_id
-    if "description" in payload:
-        entry["description"] = (payload.get("description") or "").strip()
-    if "emoji" in payload:
-        entry["emoji"] = (payload.get("emoji") or "📁").strip()
-    if "path" in payload:
-        new_path = (payload.get("path") or "").strip()
-        if new_path:
-            ok, err = validate_ws_path(new_path)
-            if not ok:
-                return 400, {"error": f"chemin invalide : {err}"}
-            entry["path"] = str(Path(new_path)).rstrip("\\/")
-    ws_list[idx] = entry
-    write_json(WORKSPACES_JSON, data)
+        entry = ws_list[idx]
+        if "label" in payload:
+            entry["label"] = sanitize_bat(payload.get("label") or "") or ws_id
+        if "description" in payload:
+            entry["description"] = (payload.get("description") or "").strip()
+        if "emoji" in payload:
+            entry["emoji"] = (payload.get("emoji") or "📁").strip()
+        if "path" in payload:
+            new_path = (payload.get("path") or "").strip()
+            if new_path:
+                ok, err = validate_ws_path(new_path)
+                if not ok:
+                    return 400, {"error": f"chemin invalide : {err}"}
+                entry["path"] = str(Path(new_path)).rstrip("\\/")
+        ws_list[idx] = entry
+        write_json(WORKSPACES_JSON, data)
     write_launch_bat(ws_id, entry["label"], entry["path"])
     return 200, {"ok": True, "workspace": entry}
 
@@ -433,12 +575,13 @@ def update_workspace(ws_id: str, payload: dict) -> tuple[int, dict]:
 def delete_workspace(ws_id: str, purge: bool = False) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
-    data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
-    before = len(data.get("workspaces", []))
-    data["workspaces"] = [w for w in data.get("workspaces", []) if w.get("id") != ws_id]
-    registered = len(data["workspaces"]) != before
-    if registered:
-        write_json(WORKSPACES_JSON, data)
+    with _MUTATION_LOCK:
+        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        before = len(data.get("workspaces", []))
+        data["workspaces"] = [w for w in data.get("workspaces", []) if w.get("id") != ws_id]
+        registered = len(data["workspaces"]) != before
+        if registered:
+            write_json(WORKSPACES_JSON, data)
 
     bat = SCRIPTS_DIR / f"launch-{ws_id}.bat"
     if bat.exists():
@@ -547,30 +690,31 @@ def register_existing_workspace(payload: dict) -> tuple[int, dict]:
     path_norm = str(Path(path)).rstrip("\\/")
     path_exists = Path(path_norm).exists()
 
-    data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
-    data.setdefault("workspaces", [])
+    with _MUTATION_LOCK:
+        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        data.setdefault("workspaces", [])
 
-    if any(w.get("path", "").lower() == path_norm.lower() for w in data["workspaces"]):
-        return 409, {"error": f"Chemin déjà enregistré : {path_norm}"}
+        if any(w.get("path", "").lower() == path_norm.lower() for w in data["workspaces"]):
+            return 409, {"error": f"Chemin déjà enregistré : {path_norm}"}
 
-    # Auto-suffix si l'ID est déjà pris
-    ws_id = requested_id
-    suffix = 2
-    while any(w["id"] == ws_id for w in data["workspaces"]):
-        ws_id = f"{requested_id}-{suffix}"
-        suffix += 1
-        if suffix > 99:
-            return 409, {"error": f"Trop de conflits d'ID pour : {requested_id}"}
+        # Auto-suffix si l'ID est déjà pris
+        ws_id = requested_id
+        suffix = 2
+        while any(w["id"] == ws_id for w in data["workspaces"]):
+            ws_id = f"{requested_id}-{suffix}"
+            suffix += 1
+            if suffix > 99:
+                return 409, {"error": f"Trop de conflits d'ID pour : {requested_id}"}
 
-    data["workspaces"].append({
-        "id": ws_id,
-        "label": label,
-        "emoji": (payload.get("emoji") or "📁").strip(),
-        "description": (payload.get("description") or "").strip(),
-        "path": path_norm,
-        "template": "imported",
-    })
-    write_json(WORKSPACES_JSON, data)
+        data["workspaces"].append({
+            "id": ws_id,
+            "label": label,
+            "emoji": (payload.get("emoji") or "📁").strip(),
+            "description": (payload.get("description") or "").strip(),
+            "path": path_norm,
+            "template": "imported",
+        })
+        write_json(WORKSPACES_JSON, data)
 
     try:
         write_launch_bat(ws_id, label, path_norm)
