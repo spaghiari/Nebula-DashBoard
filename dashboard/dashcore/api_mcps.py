@@ -589,7 +589,7 @@ def scan_claude_config() -> tuple[int, dict]:
     existing_ids = {m["id"] for m in read_json(MCP_REGISTRY, {"mcps": []}).get("mcps", [])}
     seen: set[str] = set()
 
-    for sf in (CLAUDE_SETTINGS, CLAUDE_HOME / "settings.local.json"):
+    for sf in CLAUDE_GLOBAL_SOURCES:
         if not sf.exists():
             continue
         servers = (read_json(sf, {}).get("mcpServers") or {})
