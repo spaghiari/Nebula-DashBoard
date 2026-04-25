@@ -29,7 +29,11 @@ USER_DATA_FILES = frozenset({
     "mcp/registry.json",
     "mcp/registry.json.bak",
     "dashboard/data/workspaces.json",
+    "dashboard/data/ui_state.json",
     "memory/journal.md",
+    # Fichiers de config locale non committés (ne bloquent pas git pull)
+    ".gitlab-ci.yml",
+    ".gitignore",
 })
 
 
