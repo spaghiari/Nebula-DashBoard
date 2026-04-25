@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import threading
 from pathlib import Path
@@ -9,7 +10,10 @@ from pathlib import Path
 HOST = "127.0.0.1"
 DEFAULT_PORT = 4777
 
-ROOT = Path(r"C:\claude-workspace")
+# ROOT = racine de l'installation Atelier (parent du dossier `dashboard/`).
+# Auto-détecté à partir de l'emplacement de ce fichier : <ROOT>/dashboard/dashcore/config.py
+# Override possible via la variable d'env ATELIER_ROOT pour les tests.
+ROOT = Path(os.environ.get("ATELIER_ROOT") or Path(__file__).resolve().parents[2])
 USER_HOME = Path.home()
 CLAUDE_HOME = USER_HOME / ".claude"
 CLAUDE_JSON = USER_HOME / ".claude.json"

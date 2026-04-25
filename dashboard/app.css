@@ -1556,6 +1556,34 @@ body {
 .update-badge-icon svg { width: 14px; height: 14px; }
 
 /* Modale d'update */
+.update-uptodate {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  background: linear-gradient(135deg, var(--ok-soft), transparent 70%);
+  border: 1px solid rgba(52, 211, 153, 0.25);
+  border-left: 3px solid var(--ok);
+  border-radius: var(--r-md);
+  font-size: 14px;
+}
+.update-uptodate svg {
+  width: 20px; height: 20px;
+  color: var(--ok);
+  flex-shrink: 0;
+}
+.update-uptodate strong {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+}
+.update-uptodate .dim {
+  display: block;
+  font-size: 12px;
+  margin-top: 2px;
+  color: var(--text-muted);
+}
+
 .update-version-header {
   display: flex;
   align-items: flex-start;
@@ -1828,10 +1856,12 @@ body {
   color: var(--text-muted);
 }
 .firstrun-checklist li svg {
-  width: 14px; height: 14px;
+  width: 14px;
+  height: 14px;
   color: var(--accent);
   flex-shrink: 0;
 }
+.firstrun-checklist li svg + span { display: inline; }
 
 /* Step header générique */
 .firstrun-step-header {
@@ -2167,7 +2197,8 @@ body {
 
 .callout {
   display: flex;
-  gap: var(--sp-3);
+  align-items: flex-start;
+  gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4);
   background: var(--accent-soft);
   border: 1px solid rgba(167, 139, 250, 0.25);
@@ -2177,6 +2208,15 @@ body {
   line-height: 1.55;
   color: var(--text-muted);
   margin: var(--sp-3) 0;
+}
+.callout > svg {
+  width: 16px; height: 16px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.callout svg {
+  width: 14px; height: 14px;
+  vertical-align: -2px;
 }
 .callout strong { color: var(--text); }
 .callout-warn {
