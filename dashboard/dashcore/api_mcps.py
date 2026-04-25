@@ -589,13 +589,10 @@ def scan_claude_config() -> tuple[int, dict]:
     existing_ids = {m["id"] for m in read_json(MCP_REGISTRY, {"mcps": []}).get("mcps", [])}
     seen: set[str] = set()
 
-    for sf in CLAUDE_GLOBAL_SOURCES:
-        if not sf.exists():
-            continue
-        servers = (read_json(sf, {}).get("mcpServers") or {})
+    def _collect_servers(servers: dict) -> None:
         for name, cfg in servers.items():
             if name in seen:
-                continue
+                return
             seen.add(name)
             result["mcps"].append({
                 "id": name,
@@ -609,6 +606,26 @@ def scan_claude_config() -> tuple[int, dict]:
                 "headers": cfg.get("headers", {}),
                 "already_registered": name in existing_ids,
             })
+
+    # Sources globales : settings.json, settings.local.json, .claude.json (niveau racine)
+    for sf in CLAUDE_GLOBAL_SOURCES:
+        if not sf.exists():
+            continue
+        servers = (read_json(sf, {}).get("mcpServers") or {})
+        if isinstance(servers, dict):
+            _collect_servers(servers)
+
+    # .claude.json : MCPs déclarés par projet (projects.<path>.mcpServers)
+    if CLAUDE_JSON.exists():
+        try:
+            projects_data = (read_json(CLAUDE_JSON, {}).get("projects") or {})
+            if isinstance(projects_data, dict):
+                for proj_cfg in projects_data.values():
+                    servers = (proj_cfg.get("mcpServers") or {}) if isinstance(proj_cfg, dict) else {}
+                    if isinstance(servers, dict):
+                        _collect_servers(servers)
+        except Exception:
+            pass
 
     # ── Projets ───────────────────────────────────────────────────────────────
     if not CLAUDE_PROJECTS.exists():
