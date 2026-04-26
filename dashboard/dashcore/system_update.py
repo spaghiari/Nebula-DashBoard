@@ -49,6 +49,12 @@ def _filter_user_data(status_lines: list[str]) -> list[str]:
     for line in status_lines:
         if not line.strip():
             continue
+        # Untracked (`??`) ne bloque jamais `git pull --ff-only` tant qu'aucun
+        # commit distant n'introduit un fichier au même chemin. Si conflit réel,
+        # git pull échouera explicitement et on remontera son erreur. Pas de
+        # raison de bloquer en amont sur les fichiers locaux du client.
+        if line.startswith("??"):
+            continue
         # Normalise les backslashes Windows en forward slashes
         normalized = line.replace("\\", "/")
         # Match par substring : si un fichier utilisateur apparait dans la

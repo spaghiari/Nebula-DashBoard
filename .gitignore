@@ -42,3 +42,6 @@ Thumbs.db
 
 # Configuration IDE de Claude Code (par projet)
 .claude/settings.local.json
+
+# Outils de dev local-only (preflight, checklist) — jamais en remote
+/dashboard/tools/
