@@ -148,6 +148,7 @@ const STATE = {
   filter: { mcp: '' },
   loading: true,
   pagePollers: [],   // setInterval ids actifs sur la page courante (cleared à chaque navigation)
+  uiState: null,     // {theme, onboarded} chargé depuis /api/ui-state au démarrage
 };
 
 // Enregistre un poller à nettoyer lors du prochain changement de page
@@ -790,11 +791,71 @@ async function loadSessions(wsId, host) {
         <span class="badge">${escapeHtml(s.file.slice(0, 8))}</span>
       `;
       row.addEventListener('click', () => modalSession(wsId, s.file));
+      attachSessionPreview(row, wsId, s.file);
       host.appendChild(row);
     }
   } catch (e) {
     host.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`;
   }
+}
+
+// Cache des previews déjà fetched pour éviter les re-fetch (clé: `${wsId}:${file}`)
+const _sessionPreviewCache = new Map();
+
+function attachSessionPreview(row, wsId, file) {
+  let timer = null;
+  let tooltip = null;
+  const cacheKey = `${wsId}:${file}`;
+
+  const hide = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (tooltip) { tooltip.remove(); tooltip = null; }
+  };
+
+  const showTooltip = (messages) => {
+    if (tooltip) tooltip.remove();
+    tooltip = el('div', 'session-preview-tooltip');
+    if (!messages || !messages.length) {
+      tooltip.innerHTML = '<div class="dim">(aucun message)</div>';
+    } else {
+      const items = messages.slice(0, 3).map(m => {
+        const role = m.role || m.type || '?';
+        const text = String(m.text || m.content || '').slice(0, 220);
+        const more = String(m.text || m.content || '').length > 220 ? '…' : '';
+        const roleClass = role === 'user' ? 'preview-user' : role === 'assistant' ? 'preview-assistant' : 'preview-other';
+        return `<div class="preview-msg ${roleClass}">
+          <div class="preview-role">${escapeHtml(role)}</div>
+          <div class="preview-text">${escapeHtml(text)}${more}</div>
+        </div>`;
+      }).join('');
+      const total = messages.length;
+      tooltip.innerHTML = `${items}${total > 3 ? `<div class="preview-more">+${total - 3} message(s) — clic pour ouvrir</div>` : ''}`;
+    }
+    document.body.appendChild(tooltip);
+    // Position : à droite de la row si possible, sinon à gauche
+    const r = row.getBoundingClientRect();
+    const tw = 380;
+    const left = (r.right + tw + 16 < window.innerWidth) ? r.right + 8 : Math.max(8, r.left - tw - 8);
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${Math.max(8, Math.min(window.innerHeight - 200, r.top))}px`;
+  };
+
+  row.addEventListener('mouseenter', () => {
+    timer = setTimeout(async () => {
+      if (_sessionPreviewCache.has(cacheKey)) {
+        showTooltip(_sessionPreviewCache.get(cacheKey));
+        return;
+      }
+      try {
+        const r = await API.get(`/api/workspaces/${wsId}/sessions/${file}`);
+        const msgs = r.messages || [];
+        _sessionPreviewCache.set(cacheKey, msgs);
+        showTooltip(msgs);
+      } catch { /* silencieux : pas de tooltip si erreur réseau */ }
+    }, 500);
+  });
+  row.addEventListener('mouseleave', hide);
+  row.addEventListener('click', hide);  // hide avant d'ouvrir le modal
 }
 
 async function modalSession(wsId, filename) {
@@ -1290,9 +1351,11 @@ function modalNewMCP(existing = null) {
    FIRST-RUN WIZARD — assistant de premier lancement
    ================================================================ */
 function markOnboarded() {
+  if (STATE.uiState) STATE.uiState.onboarded = true;
   API.post('/api/ui-state', { onboarded: true }).catch(() => {});
 }
 function resetOnboarded() {
+  if (STATE.uiState) STATE.uiState.onboarded = false;
   API.post('/api/ui-state', { onboarded: false }).catch(() => {});
 }
 
@@ -3689,6 +3752,89 @@ function modalDuplicateTemplate(src) {
 /* ================================================================
    PAGE: TOOLS
    ================================================================ */
+// Construit la card "Démarrage" : checklist d'onboarding + actions d'import.
+// Toujours accessible depuis Outils → A. Démarrage, pas seulement au premier lancement.
+function buildOnboardingChecklist() {
+  const card = el('div', 'card onboarding-checklist');
+  card.innerHTML = `<p class="muted" style="margin:0 0 var(--sp-3) 0;font-size:13px">Récap des étapes de mise en route. Coche-les en cliquant sur l'action correspondante — toujours accessible ici.</p>`;
+
+  // Détection de l'état de chaque étape — non-bloquant si une donnée manque
+  const onboardedDone = !!(STATE.uiState && STATE.uiState.onboarded);
+  const themePicked = (function() {
+    try { return !!localStorage.getItem('atelier-theme'); } catch { return false; }
+  })();
+  const hasMcps = (STATE.mcps || []).length > 0;
+  const hasWorkspaces = (STATE.workspaces || []).length > 0;
+  const hasScopedMcps = Object.values(STATE.wsMcps || {}).some(x => (x.active || []).length > 0);
+  const hasPlugins = (STATE.plugins && STATE.plugins.count > 0) || false;
+
+  const steps = [
+    { done: onboardedDone, label: 'Wizard d\'introduction',
+      desc: 'Présentation des fonctions clés (thème, import…).',
+      action: { label: 'Rejouer', fn: () => { resetOnboarded(); startFirstRunWizard(); } } },
+    { done: themePicked, label: 'Thème choisi',
+      desc: 'Personnalise l\'ambiance visuelle.',
+      action: { label: 'Choisir', fn: () => { document.querySelector('.theme-grid')?.scrollIntoView({ behavior: 'smooth', block: 'center' }); } } },
+    { done: hasMcps, label: 'Au moins 1 MCP au registre',
+      desc: 'Scanne ta config Claude Code existante OU ajoute manuellement.',
+      action: { label: 'Scanner ~/.claude/', fn: () => modalSetupWizard() } },
+    { done: hasWorkspaces, label: 'Au moins 1 workspace',
+      desc: 'Crée-en un nouveau ou enregistre un dossier existant.',
+      action: { label: 'Enregistrer un dossier', fn: () => modalRegisterExisting() } },
+    { done: hasScopedMcps, label: 'MCPs scopés à un workspace',
+      desc: 'Assigne tes MCPs aux workspaces concernés (page MCP).',
+      action: { label: 'Aller aux MCPs', fn: () => { location.hash = '#/mcps'; } } },
+    { done: hasPlugins, label: 'Au moins 1 plugin actif',
+      desc: 'Active des plugins (code-review, frontend-design…) selon tes besoins.',
+      action: { label: 'Voir plugins', fn: () => { location.hash = '#/plugins'; } } },
+  ];
+
+  const list = el('div', 'checklist');
+  for (const s of steps) {
+    const row = el('div', 'checklist-row' + (s.done ? ' is-done' : ''));
+    row.innerHTML = `
+      <div class="checklist-marker">${s.done ? I.check : '<span class="checklist-circle"></span>'}</div>
+      <div class="checklist-body">
+        <div class="checklist-label">${escapeHtml(s.label)}</div>
+        <div class="checklist-desc">${escapeHtml(s.desc)}</div>
+      </div>
+    `;
+    if (s.action && !s.done) {
+      const b = btn(s.action.label, 'btn-sm');
+      b.addEventListener('click', s.action.fn);
+      row.appendChild(b);
+    } else if (s.action && s.done) {
+      const b = btn(s.action.label, 'btn-sm btn-ghost');
+      b.addEventListener('click', s.action.fn);
+      row.appendChild(b);
+    }
+    list.appendChild(row);
+  }
+  card.appendChild(list);
+
+  // Compteur de progression
+  const doneCount = steps.filter(s => s.done).length;
+  const progress = el('div', 'checklist-progress');
+  progress.innerHTML = `
+    <div class="checklist-progress-bar"><div class="checklist-progress-fill" style="width:${(doneCount / steps.length) * 100}%"></div></div>
+    <div class="checklist-progress-text">${doneCount} / ${steps.length} étape${steps.length > 1 ? 's' : ''} ${doneCount === steps.length ? '✓ tout est prêt' : 'complétée' + (doneCount > 1 ? 's' : '')}</div>
+  `;
+  card.appendChild(progress);
+
+  // Actions complémentaires (import JSON, conflits)
+  const extra = el('div', 'row');
+  extra.style.cssText = 'margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border)';
+  const onbMcp = btn('Coller du JSON MCP', 'btn-sm btn-ghost', I.code);
+  onbMcp.addEventListener('click', () => modalImportMCPs());
+  const onbConflicts = btn('Conflits Claude global', 'btn-sm btn-ghost', I.alert);
+  onbConflicts.title = 'Détecter et nettoyer les MCPs en doublon avec ~/.claude/';
+  onbConflicts.addEventListener('click', () => modalGlobalConflicts());
+  extra.append(onbMcp, onbConflicts);
+  card.appendChild(extra);
+
+  return card;
+}
+
 async function renderTools() {
   setBreadcrumbs([{ label: 'Outils' }]);
   setTopbarActions([]);
@@ -3706,8 +3852,12 @@ async function renderTools() {
 
   const stack = el('div', 'tools-stack');
 
+  // Démarrage — checklist progressive (toujours visible, accessible à tout moment)
+  stack.appendChild(el('div', 'section-label', '<span class="num">A.</span> Démarrage'));
+  stack.appendChild(buildOnboardingChecklist());
+
   // Apparence — sélecteur de thème
-  stack.appendChild(el('div', 'section-label', '<span class="num">A.</span> Apparence & assistance'));
+  stack.appendChild(el('div', 'section-label', '<span class="num">B.</span> Apparence & assistance'));
   const themeCard = el('div', 'card');
   themeCard.innerHTML = `<p class="muted" style="margin:0 0 var(--sp-3);font-size:13px">Choisis l'ambiance visuelle de ton dashboard. Le choix est mémorisé localement.</p>`;
   const themeGrid = el('div', 'theme-grid');
@@ -3773,23 +3923,7 @@ async function renderTools() {
 
   stack.appendChild(themeCard);
 
-  // Onboarding / Import
-  stack.appendChild(el('div', 'section-label', '<span class="num">B.</span> Onboarding'));
-  const onbCard = el('div', 'card');
-  onbCard.innerHTML = `<p class="muted" style="margin:0 0 var(--sp-3) 0;font-size:13px">Récupère MCPs et projets d'une installation Claude Code existante (ou enregistre un dossier déjà sur disque).</p>`;
-  const onbRow = el('div', 'row');
-  const onbScan = btn('Scanner ~/.claude/', 'btn-primary', I.download);
-  onbScan.addEventListener('click', () => modalSetupWizard());
-  const onbReg = btn('Enregistrer un dossier', 'btn', I.folder);
-  onbReg.addEventListener('click', () => modalRegisterExisting());
-  const onbMcp = btn('Coller du JSON MCP', 'btn-ghost', I.code);
-  onbMcp.addEventListener('click', () => modalImportMCPs());
-  const onbConflicts = btn('Conflits Claude global', 'btn-ghost', I.alert);
-  onbConflicts.title = 'Détecter et nettoyer les MCPs en doublon avec ~/.claude/';
-  onbConflicts.addEventListener('click', () => modalGlobalConflicts());
-  onbRow.append(onbScan, onbReg, onbMcp, onbConflicts);
-  onbCard.appendChild(onbRow);
-  stack.appendChild(onbCard);
+  // (la section Onboarding originale a été fusionnée dans "A. Démarrage" ci-dessus)
 
   // Quick open
   stack.appendChild(el('div', 'section-label', '<span class="num">C.</span> Accès rapide'));
@@ -4428,6 +4562,7 @@ function init() {
     // Charger l'état UI depuis le serveur (source de vérité)
     let uiState = null;
     try { uiState = await API.get('/api/ui-state'); } catch {}
+    STATE.uiState = uiState;
 
     // Synchroniser le thème serveur → local si différent du cache LS
     if (uiState?.theme && uiState.theme !== getCurrentTheme()) {
