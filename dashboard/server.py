@@ -49,7 +49,7 @@ from dashcore.api_mcps import (
     list_mcp_recipes, ensure_local_recipes_file, diagnose_mcp,
     add_or_update_local_recipe, delete_local_recipe,
 )
-from dashcore.system_update import system_version_info, system_apply_update
+from dashcore.system_update import system_version_info, system_apply_update, system_reset_to_upstream
 from dashcore.api_ui_state import get_ui_state, patch_ui_state
 from dashcore.api_plugins import (
     list_plugins, list_marketplace_plugins, read_plugin_readme,
@@ -266,6 +266,7 @@ def h_get_system_version(q, b):
     check = (q.get("check", ["0"])[0] or "0") == "1"
     return 200, system_version_info(check_remote=check)
 def h_post_system_update(q, b):  return system_apply_update()
+def h_post_system_reset(q, b):   return system_reset_to_upstream()
 
 def h_post_set_env(q, b):        return set_env_var(b.get("key", ""), b.get("value", ""))
 def h_post_open(q, b):           return open_target(b.get("target", ""))
@@ -413,6 +414,7 @@ ROUTES_POST = [
     (re.compile(rf"^/api/setup/import$"),                                                   h_post_setup_import),
     (re.compile(rf"^/api/ui-state$"),                                                       h_post_ui_state),
     (re.compile(rf"^/api/system/update$"),                                                  h_post_system_update),
+    (re.compile(rf"^/api/system/reset$"),                                                   h_post_system_reset),
 ]
 
 ROUTES_DELETE = [

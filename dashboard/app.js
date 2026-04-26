@@ -2467,6 +2467,53 @@ async function modalSystemUpdate() {
       toastErr(r.error || 'Échec');
       applyBtn.disabled = false;
       applyBtn.innerHTML = `${I.download}<span>Réessayer</span>`;
+
+      // Affiche un panneau d'erreur enrichi : hint + bouton reset si pertinent
+      const errPanel = el('div', 'callout callout-warn');
+      errPanel.style.marginTop = 'var(--sp-3)';
+      errPanel.innerHTML = `
+        <div>
+          <strong>${escapeHtml(r.error || 'Échec')}</strong>
+          ${r.hint ? `<p style="margin:var(--sp-2) 0 0">${escapeHtml(r.hint)}</p>` : ''}
+          ${r.stash_applied ? '<p class="dim" style="margin:var(--sp-2) 0 0;font-size:11.5px">ℹ Tes modifs locales ont été stashées (préservées dans `git stash list`).</p>' : ''}
+          ${r.stash_pop_warning ? `<p class="text-warn" style="margin:var(--sp-2) 0 0;font-size:11.5px">⚠ ${escapeHtml(r.stash_pop_warning)}</p>` : ''}
+          ${r.stderr ? `<details style="margin-top:var(--sp-2)"><summary style="cursor:pointer;font-size:11px;color:var(--text-muted)">Détail technique</summary><pre class="mono" style="font-size:10.5px;background:var(--bg);padding:var(--sp-2);border-radius:4px;margin-top:6px;white-space:pre-wrap;max-height:160px;overflow:auto">${escapeHtml(r.stderr)}</pre></details>` : ''}
+        </div>
+      `;
+      body.appendChild(errPanel);
+
+      if (r.can_reset_to_upstream) {
+        const resetBox = el('div');
+        resetBox.style.cssText = 'margin-top:var(--sp-3);padding:var(--sp-3);background:var(--surface-2);border:1px dashed var(--border);border-radius:8px';
+        resetBox.innerHTML = `
+          <div style="font-size:12px;font-weight:500;margin-bottom:4px">🔄 Escape hatch : forcer l'alignement</div>
+          <div class="dim" style="font-size:11.5px;margin-bottom:var(--sp-2)">
+            Réinitialise ton dépôt local sur la version distante (<code class="mono">git reset --hard origin/main</code>).
+            <strong>Tes modifs locales seront stashées</strong> (récupérables via <code class="mono">git stash pop</code>).
+            Données utilisateur (registry, workspaces, .env.local) préservées via .gitignore.
+          </div>
+        `;
+        const resetBtn = btn('Réinitialiser à la version distante', 'btn-sm btn-danger', I.refresh);
+        resetBtn.addEventListener('click', () => {
+          confirmDialog(
+            'Forcer l\'alignement sur la version distante ? Tes modifs locales seront stashées (récupérables via `git stash pop` plus tard).',
+            async () => {
+              resetBtn.disabled = true;
+              resetBtn.innerHTML = `<div class="spinner" style="width:12px;height:12px"></div><span>Reset en cours…</span>`;
+              try {
+                const rr = await API.post('/api/system/reset', {});
+                if (!rr.ok) { toastErr(rr.error || 'Échec'); return; }
+                toastOk(rr.message || 'Reset OK');
+                // Reload page après reset (cas .py changé) ou refresh badge
+                setTimeout(() => location.reload(), 1500);
+              } catch (e) { toastErr(e.message); }
+            },
+            { danger: true }
+          );
+        });
+        resetBox.appendChild(resetBtn);
+        body.appendChild(resetBox);
+      }
       return;
     }
     // Succès

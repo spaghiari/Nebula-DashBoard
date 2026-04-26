@@ -180,18 +180,57 @@ def system_version_info(check_remote: bool = False) -> dict:
     return info
 
 
+def _check_stale_lock() -> tuple[bool, str]:
+    """Détecte un .git/index.lock orphelin (process git crashé). Retourne (removed, message)."""
+    lock = ROOT / ".git" / "index.lock"
+    if not lock.exists():
+        return False, ""
+    try:
+        age = time.time() - lock.stat().st_mtime
+    except OSError:
+        return False, ""
+    if age > 60:  # > 1 min : très probablement orphelin
+        try:
+            lock.unlink()
+            log.warning("Removed stale .git/index.lock (%ds old)", int(age))
+            return True, f"Lock orphelin retiré (âge: {int(age)}s)"
+        except OSError as e:
+            return False, f"Lock orphelin détecté mais retrait échoué: {e}"
+    return False, f"Lock actif (âge: {int(age)}s) — un autre git tourne ?"
+
+
+def _diagnose_pull_failure(pull_err: str, pull_out: str) -> str | None:
+    """Retourne un hint humain selon l'erreur git observée."""
+    blob = (pull_err + " " + pull_out).lower()
+    if "non-fast-forward" in blob or "diverged" in blob or "rejected" in blob:
+        return ("Ton dépôt local a des commits que le distant n'a pas (branche divergée). "
+                "Utilise « Réinitialiser à la version distante » pour forcer l'alignement "
+                "(tes modifs seront sauvées dans `git stash list`).")
+    if "could not resolve host" in blob or "failed to connect" in blob or "could not read from remote" in blob:
+        return "Connexion au serveur git impossible. Vérifie ta connexion internet."
+    if "authentication failed" in blob or "permission denied" in blob or "could not read username" in blob:
+        return "Authentification git échouée. Vérifie tes identifiants ou ta clé SSH."
+    if "fatal: refusing to merge unrelated histories" in blob:
+        return "Histoires git non-liées. Cas rare — utilise « Réinitialiser à la version distante »."
+    if "no space left" in blob:
+        return "Disque plein."
+    return None
+
+
 def system_apply_update() -> tuple[int, dict]:
-    """Applique la mise à jour via git pull, sans JAMAIS bloquer pour des modifs locales.
+    """Applique la mise à jour via git pull. JAMAIS bloquant pour des modifs locales.
 
-    Stratégie : tente le pull direct ; en cas d'échec dû à des modifications
-    locales, fait un `git stash --include-untracked` automatique, ré-essaie,
-    puis `git stash pop` pour restaurer. Si le pop échoue (vrai conflit),
-    on rapporte l'incident mais on ne perd jamais de données (le stash
-    reste dans la pile, l'utilisateur peut faire `git stash list` + `pop`
-    manuellement plus tard).
-
-    Le but : auto-update qui marche TOUJOURS pour le cas commun (modifs
-    locales sur des fichiers que les commits distants ne touchent pas).
+    Stratégie défense en profondeur :
+    1. Pré-check : retire un index.lock orphelin (si > 60s)
+    2. Si dirty (status non vide), pré-stash systématique (--include-untracked)
+       avec timestamp pour ne pas collisionner avec les autres autostash
+    3. Pull --ff-only (peut maintenant pas planter sur dirty)
+    4. Si on a stashé : pop pour restaurer. Si pop conflit → modifs préservées
+       dans la pile, warning explicite, l'utilisateur peut récupérer via CLI
+    5. Si pull échoue malgré ça : on hint sur le mode de panne (réseau,
+       diverged, auth…) et on suggère le reset hard si pertinent
+    6. Aucune perte de données possible : le stash reste tant qu'il n'est
+       pas explicitement drop
     """
     if not _is_git_repo():
         return 400, {"ok": False, "error": "Pas un dépôt git"}
@@ -200,44 +239,62 @@ def system_apply_update() -> tuple[int, dict]:
     if not upstream:
         return 400, {"ok": False, "error": "Aucune branche distante trackée"}
 
-    # Snapshot du HEAD avant pull pour détecter les fichiers changés
-    rc_b, head_before, _ = _git("rev-parse", "HEAD")
+    # 1. Lock orphelin
+    lock_removed, lock_msg = _check_stale_lock()
+    if lock_msg and not lock_removed:
+        # Lock actif récent : on ne touche pas, on rapporte
+        return 423, {"ok": False, "error": lock_msg, "hint": "Réessaye dans quelques secondes."}
 
-    # Tentative 1 : pull direct (cas le plus courant — pas de modif locale gênante)
-    rc_p, pull_out, pull_err = _git("pull", "--ff-only", timeout=GIT_TIMEOUT_PULL)
+    # 2. Snapshot HEAD + pré-stash systématique si dirty
+    rc_b, head_before, _ = _git("rev-parse", "HEAD")
+    rc_st, status, _ = _git("status", "--porcelain")
+    has_local_changes = bool(status.strip())
+
     stash_applied = False
     stash_pop_warning = None
+    stash_label = f"atelier-autostash-{int(time.time())}"
 
-    # Si le pull échoue à cause de modifs locales, on stash et on retente
-    if rc_p != 0 and ("would be overwritten" in (pull_err + pull_out).lower()
-                      or "untracked working tree files" in (pull_err + pull_out).lower()
-                      or "your local changes" in (pull_err + pull_out).lower()):
-        rc_s, _, stash_err = _git("stash", "push", "--include-untracked", "-m", f"atelier-autostash-{int(time.time())}", timeout=GIT_TIMEOUT_QUICK)
+    if has_local_changes:
+        rc_s, _, stash_err = _git(
+            "stash", "push", "--include-untracked", "-m", stash_label,
+            timeout=GIT_TIMEOUT_QUICK,
+        )
         if rc_s == 0:
             stash_applied = True
-            log.info("auto-stash effectué avant git pull (modifs locales détectées)")
-            # Tentative 2 : pull après stash
-            rc_p, pull_out, pull_err = _git("pull", "--ff-only", timeout=GIT_TIMEOUT_PULL)
-            # Quoi qu'il arrive, on tente de re-appliquer le stash
-            rc_pop, _pop_out, pop_err = _git("stash", "pop", timeout=GIT_TIMEOUT_QUICK)
-            if rc_pop != 0:
-                stash_pop_warning = (
-                    "Tes modifications locales sont préservées dans `git stash` "
-                    "(visibles via `git stash list`). Conflit lors du pop : " + pop_err[:200]
-                )
-                log.warning("git stash pop a échoué : %s", pop_err)
+            log.info("Pre-pull stash effectué (%d entrées status, label=%s)",
+                     len(status.splitlines()), stash_label)
         else:
-            log.warning("git stash a échoué : %s", stash_err)
+            # Stash a échoué — on continue quand même, peut-être que pull marchera
+            log.warning("git stash a échoué (continuons quand même) : %s", stash_err)
 
-    # Si le pull a finalement échoué, on rapporte
+    # 3. Pull --ff-only sur état propre (ou presque)
+    rc_p, pull_out, pull_err = _git("pull", "--ff-only", timeout=GIT_TIMEOUT_PULL)
+
+    # 4. Si on a stashé, toujours essayer le pop (même si pull a échoué :
+    #    on veut restaurer l'état local plutôt que laisser le user en limbo)
+    if stash_applied:
+        rc_pop, _pop_out, pop_err = _git("stash", "pop", timeout=GIT_TIMEOUT_QUICK)
+        if rc_pop != 0:
+            stash_pop_warning = (
+                f"Conflit lors de la restauration de tes modifs (`git stash pop`). "
+                f"Elles sont SAUVES dans la pile (`git stash list` → label '{stash_label}'). "
+                f"Pour les récupérer : `git stash pop` manuel quand tu auras résolu le conflit. "
+                f"Détail: {pop_err[:300]}"
+            )
+            log.warning("git stash pop a échoué (label=%s) : %s", stash_label, pop_err)
+
+    # 5. Pull a échoué : on diagnostique et on rapporte
     if rc_p != 0:
+        hint = _diagnose_pull_failure(pull_err, pull_out)
         return 500, {
             "ok": False,
             "error": "git pull a échoué",
             "stderr": pull_err,
             "stdout": pull_out,
+            "hint": hint,
             "stash_applied": stash_applied,
             "stash_pop_warning": stash_pop_warning,
+            "can_reset_to_upstream": True,
         }
 
     rc_a, head_after, _ = _git("rev-parse", "HEAD")
@@ -270,5 +327,70 @@ def system_apply_update() -> tuple[int, dict]:
             "Mise à jour appliquée. Redémarre le dashboard pour activer les changements."
             if needs_restart
             else "Mise à jour appliquée. Recharge la page (F5) pour voir les changements."
+        ),
+    }
+
+
+def system_reset_to_upstream() -> tuple[int, dict]:
+    """Escape hatch : force l'alignement sur la branche distante (git reset --hard).
+
+    À utiliser uniquement quand `system_apply_update` échoue à cause d'une
+    branche divergée, d'un état corrompu, ou d'un fichier qui résiste au
+    stash. Pré-stash systématique pour ne JAMAIS perdre les modifs locales.
+
+    Données utilisateur (registry, workspaces.json, .env.local…) préservées
+    via .gitignore et skip-worktree — non touchées par reset --hard.
+    """
+    if not _is_git_repo():
+        return 400, {"ok": False, "error": "Pas un dépôt git"}
+    upstream = _tracking_branch()
+    if not upstream:
+        return 400, {"ok": False, "error": "Aucune branche distante trackée"}
+
+    # Lock orphelin
+    _check_stale_lock()
+
+    # 1. Stash de sauvegarde (au cas où, label horodaté)
+    rc_st, status, _ = _git("status", "--porcelain")
+    stash_label = f"atelier-pre-reset-{int(time.time())}"
+    stash_applied = False
+    if status.strip():
+        rc_s, _, _ = _git("stash", "push", "--include-untracked", "-m", stash_label,
+                          timeout=GIT_TIMEOUT_QUICK)
+        if rc_s == 0:
+            stash_applied = True
+            log.info("Pre-reset stash effectué (label=%s)", stash_label)
+
+    # 2. Fetch
+    rc_f, _, fetch_err = _git("fetch", "--quiet", timeout=GIT_TIMEOUT_FETCH)
+    if rc_f != 0:
+        return 500, {"ok": False, "error": "git fetch a échoué", "stderr": fetch_err}
+
+    # 3. Reset --hard sur upstream
+    rc_b, head_before, _ = _git("rev-parse", "HEAD")
+    rc_r, _, reset_err = _git("reset", "--hard", upstream)
+    if rc_r != 0:
+        return 500, {"ok": False, "error": "git reset --hard a échoué",
+                     "stderr": reset_err, "stash_applied": stash_applied}
+
+    rc_a, head_after, _ = _git("rev-parse", "HEAD")
+    rc_d, diff_out, _ = _git("diff", "--name-only", head_before, head_after)
+    changed_files = diff_out.splitlines() if rc_d == 0 else []
+    needs_restart = any(f.endswith(".py") for f in changed_files)
+
+    log.warning("system reset to upstream: %s → %s (%d fichiers, restart=%s)",
+                head_before[:7], head_after[:7], len(changed_files), needs_restart)
+
+    return 200, {
+        "ok": True,
+        "from": head_before[:7],
+        "to": head_after[:7],
+        "files_changed": changed_files,
+        "needs_restart": needs_restart,
+        "stash_applied": stash_applied,
+        "stash_label": stash_label if stash_applied else None,
+        "message": (
+            f"Repo réinitialisé sur {upstream}. "
+            + (f"Tes modifs sont sauvegardées dans `git stash list` (label: {stash_label})." if stash_applied else "")
         ),
     }
