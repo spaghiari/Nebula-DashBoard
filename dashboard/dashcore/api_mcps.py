@@ -156,6 +156,34 @@ def _auto_sync(workspace_ids: set) -> dict:
     return results
 
 
+def compute_mcp_status(mcp: dict) -> str:
+    """Calcule le statut d'un MCP à partir de son état réel.
+
+    - "désactivé" : choix explicite manuel — respecté tel quel
+    - "à configurer" : pas de command (stdio) ou pas d'url (http/sse)
+    - "disponible" : config complète
+
+    Le statut "connecté" n'est plus retourné ici (demanderait un test live).
+    Le bouton "Diag" sur la MCP card permet une vérif live à la demande.
+    """
+    if mcp.get("status") == "désactivé":
+        return "désactivé"
+    transport = mcp.get("transport", "stdio")
+    if transport == "stdio" and not (mcp.get("command") or "").strip():
+        return "à configurer"
+    if transport in ("http", "sse") and not (mcp.get("url") or "").strip():
+        return "à configurer"
+    return "disponible"
+
+
+def list_mcps_with_computed_status() -> dict:
+    """Lit le registre et override status par la valeur calculée."""
+    data = read_json(MCP_REGISTRY, {"version": "1.0", "mcps": []})
+    for m in data.get("mcps", []):
+        m["status"] = compute_mcp_status(m)
+    return data
+
+
 def add_or_update_mcp(payload: dict) -> tuple[int, dict]:
     clean, err = clean_mcp_payload(payload)
     if err:

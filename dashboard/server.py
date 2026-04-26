@@ -47,7 +47,7 @@ from dashcore.api_mcps import (
     workspace_mcp_status, mcp_live_check, test_mcp, scan_claude_config,
     find_global_mcp_conflicts, remove_mcp_from_claude_global, migrate_global_mcp_to_registry,
     list_mcp_recipes, ensure_local_recipes_file, diagnose_mcp,
-    add_or_update_local_recipe, delete_local_recipe,
+    add_or_update_local_recipe, delete_local_recipe, list_mcps_with_computed_status,
 )
 from dashcore.system_update import system_version_info, system_apply_update, system_reset_to_upstream
 from dashcore.api_ui_state import get_ui_state, patch_ui_state
@@ -109,7 +109,7 @@ def h_del_ws(q, b, ws):
     return delete_workspace(ws, purge=purge)
 
 # ── MCPs ────────────────────────────────────────────────────────────────────
-def h_get_mcps(q, b):           return 200, read_json(MCP_REGISTRY, {"version": "1.0", "mcps": []})
+def h_get_mcps(q, b):           return 200, list_mcps_with_computed_status()
 def h_get_mcp_recipes(q, b):    return list_mcp_recipes()
 def h_post_ensure_local_recipes(q, b):
     p = ensure_local_recipes_file()

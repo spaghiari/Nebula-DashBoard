@@ -391,6 +391,58 @@ window.addEventListener('hashchange', route);
 /* ================================================================
    PAGE: HOME
    ================================================================ */
+// Bandeau "Mise en route" sur Home — affiché tant que la checklist n'est pas complète.
+// Retourne null si tout est OK (≥6/6 étapes faites) → la home reste épurée pour les users avancés.
+function buildHomeQuickstart() {
+  // Mêmes 6 critères que dans buildOnboardingChecklist (Outils → A. Démarrage)
+  const onboardedDone = !!(STATE.uiState && STATE.uiState.onboarded);
+  const themePicked = (function() {
+    try { return !!localStorage.getItem('atelier-theme'); } catch { return false; }
+  })();
+  const hasMcps = (STATE.mcps || []).length > 0;
+  const hasWorkspaces = (STATE.workspaces || []).length > 0;
+  const hasScopedMcps =
+    (STATE.mcps || []).some(m => (m.workspaces || []).length > 0) ||
+    Object.values(STATE.wsMcps || {}).some(x => (x.active || []).length > 0);
+  const hasPlugins = (STATE.plugins && STATE.plugins.count > 0) || false;
+
+  const steps = [
+    { done: onboardedDone, label: 'Wizard d\'introduction', cta: { label: 'Rejouer', fn: () => { resetOnboarded(); startFirstRunWizard(); } } },
+    { done: themePicked,   label: 'Thème choisi',          cta: { label: 'Choisir', fn: () => { location.hash = '#/tools'; } } },
+    { done: hasMcps,       label: 'Au moins 1 MCP',        cta: { label: 'Scanner ~/.claude/', fn: () => modalSetupWizard() } },
+    { done: hasWorkspaces, label: 'Au moins 1 workspace',  cta: { label: 'Enregistrer un dossier', fn: () => modalRegisterExisting() } },
+    { done: hasScopedMcps, label: 'MCPs scopés',           cta: { label: 'Aller aux MCPs', fn: () => { location.hash = '#/mcps'; } } },
+    { done: hasPlugins,    label: '1 plugin actif',        cta: { label: 'Voir plugins', fn: () => { location.hash = '#/plugins'; } } },
+  ];
+  const doneCount = steps.filter(s => s.done).length;
+  if (doneCount >= steps.length) return null;  // Tout OK → pas de bandeau
+
+  const nextStep = steps.find(s => !s.done);
+  const card = el('div', 'home-quickstart');
+  card.innerHTML = `
+    <div class="home-quickstart-head">
+      <div>
+        <div class="home-quickstart-title">🚀 Mise en route — ${doneCount} / ${steps.length}</div>
+        <div class="home-quickstart-sub">Continue la configuration : <strong>${escapeHtml(nextStep.label)}</strong></div>
+      </div>
+      <div class="home-quickstart-actions"></div>
+    </div>
+    <div class="home-quickstart-bar"><div class="home-quickstart-fill" style="width:${(doneCount / steps.length) * 100}%"></div></div>
+    <div class="home-quickstart-steps">
+      ${steps.map(s => `<span class="home-quickstart-step ${s.done ? 'is-done' : ''}" title="${escapeHtml(s.label)}">${s.done ? '✓' : '○'} ${escapeHtml(s.label)}</span>`).join('')}
+    </div>
+  `;
+
+  const actions = card.querySelector('.home-quickstart-actions');
+  const ctaBtn = btn(nextStep.cta.label, 'btn-sm btn-primary');
+  ctaBtn.addEventListener('click', nextStep.cta.fn);
+  const moreBtn = btn('Voir checklist complète', 'btn-sm btn-ghost');
+  moreBtn.addEventListener('click', () => { location.hash = '#/tools'; });
+  actions.append(ctaBtn, moreBtn);
+
+  return card;
+}
+
 async function renderHome() {
   setBreadcrumbs([{ label: 'Accueil' }]);
   const newWsBtn = btn('Nouveau workspace', 'btn-primary', I.plus);
@@ -422,6 +474,10 @@ async function renderHome() {
       <p class="page-subtitle">Pilotage des workspaces, MCPs, plugins et skills Claude Code.</p>
     </div>
   `));
+
+  // Bandeau "Mise en route" si la checklist d'onboarding n'est pas à 100 %
+  const quickstart = buildHomeQuickstart();
+  if (quickstart) page.appendChild(quickstart);
 
   // KPI row
   const stats = await safe('/api/stats', {});
@@ -1908,8 +1964,15 @@ function modalNewMCP(existing = null) {
       };
     }
     try {
-      await API.post('/api/mcps', payload);
-      toastOk(isEdit ? 'MCP mis à jour' : 'MCP créé');
+      const resp = await API.post('/api/mcps', payload);
+      // Affiche les workspaces synchronisés automatiquement (auto-sync backend)
+      const synced = resp.synced || [];
+      const verb = isEdit ? 'mis à jour' : 'créé';
+      if (synced.length === 0) {
+        toastOk(`MCP ${verb}`);
+      } else {
+        toastOk(`MCP ${verb} et synchronisé vers ${synced.length} workspace(s) : ${synced.slice(0, 3).join(', ')}${synced.length > 3 ? '…' : ''}`);
+      }
       close(); STATE.loading = true; route();
     } catch (e) { toastErr(e.message); }
   });
