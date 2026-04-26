@@ -147,9 +147,19 @@ const STATE = {
   journalCount: 0,
   filter: { mcp: '' },
   loading: true,
+  pagePollers: [],   // setInterval ids actifs sur la page courante (cleared à chaque navigation)
 };
 
-/* === TOAST ======================================================= */
+// Enregistre un poller à nettoyer lors du prochain changement de page
+function registerPagePoller(intervalId) {
+  STATE.pagePollers.push(intervalId);
+}
+function clearPagePollers() {
+  for (const id of STATE.pagePollers) clearInterval(id);
+  STATE.pagePollers = [];
+}
+
+/* === TOAST / SNACKBAR ============================================ */
 function toast(msg, type = 'info', duration = 3000) {
   const root = $('#toast-root');
   const el = document.createElement('div');
@@ -164,6 +174,34 @@ function toast(msg, type = 'info', duration = 3000) {
 }
 const toastErr = (msg) => toast(msg, 'error');
 const toastOk = (msg) => toast(msg, 'success');
+
+// Snackbar : toast avec un bouton d'action (ex: UNDO sur suppression)
+function snackbar(msg, { actionLabel, onAction, type = 'success', duration = 8000 } = {}) {
+  const root = $('#toast-root');
+  const el = document.createElement('div');
+  el.className = `toast toast-${type} toast-action`;
+  const icon = type === 'error' ? I.alert : type === 'success' ? I.success : I.info;
+  let timer = null;
+  const close = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    el.classList.add('toast-out');
+    setTimeout(() => el.remove(), 200);
+  };
+  el.innerHTML = `<span class="toast-icon">${icon}</span><div class="toast-content">${escapeHtml(msg)}</div>`;
+  if (actionLabel && typeof onAction === 'function') {
+    const btnEl = document.createElement('button');
+    btnEl.className = 'toast-action-btn';
+    btnEl.type = 'button';
+    btnEl.textContent = actionLabel;
+    btnEl.addEventListener('click', () => {
+      close();
+      try { onAction(); } catch (e) { toastErr(e.message); }
+    });
+    el.appendChild(btnEl);
+  }
+  root.appendChild(el);
+  timer = setTimeout(close, duration);
+}
 
 /* === MODAL ======================================================= */
 function openModal({ title, body, footer = null, wide = false, onClose = null, closeOnBackdrop = false }) {
@@ -323,6 +361,7 @@ async function loadAll() {
 
 /* === ROUTER ====================================================== */
 async function route() {
+  clearPagePollers();
   updateActiveNav();
   if (STATE.loading) await loadAll();
   const hash = location.hash || '#/';
@@ -1056,6 +1095,27 @@ async function renderMCPs() {
   filterStatus.addEventListener('change', renderList);
   filterTransport.addEventListener('change', renderList);
   renderList();
+
+  // Auto-refresh des MCPs toutes les 30s tant que la page est active.
+  // Le poller est nettoyé automatiquement via clearPagePollers() au changement de page.
+  const liveDot = el('span', 'live-dot');
+  liveDot.title = 'Auto-refresh actif (toutes les 30s)';
+  liveDot.style.cssText = 'display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--success,#10b981);margin-left:8px;vertical-align:middle;animation:pulse 2s ease-in-out infinite';
+  const eyebrow = page.querySelector('.page-eyebrow');
+  if (eyebrow) eyebrow.appendChild(liveDot);
+
+  const pollerId = setInterval(async () => {
+    try {
+      const r = await API.get('/api/mcps');
+      const next = r.mcps || [];
+      // Re-render seulement si le contenu a changé (évite reflow inutile)
+      if (JSON.stringify(next) !== JSON.stringify(STATE.mcps)) {
+        STATE.mcps = next;
+        renderList();
+      }
+    } catch { /* silencieux : un blip réseau ne doit pas spammer */ }
+  }, 30000);
+  registerPagePoller(pollerId);
 
   c.appendChild(page);
 }
@@ -4030,19 +4090,59 @@ function modalDuplicateWorkspace(w) {
 function modalDeleteWorkspace(w) {
   const body = el('div');
   body.innerHTML = `
-    <p style="margin-top:0">Action irréversible — confirme l'ID du workspace pour valider.</p>
-    <div class="field"><label class="field-label">Tape <code class="mono">${escapeHtml(w.id)}</code> pour confirmer</label><input class="input mono" name="confirm" autocomplete="off"></div>
-    <label class="row" style="cursor:pointer;font-size:13px"><input type="checkbox" name="purge"> <span>Supprimer aussi le dossier sur disque (purge)</span></label>
+    <p style="margin-top:0;color:var(--text-muted);font-size:13px">
+      <strong>Soft delete</strong> retire le workspace du registre — annulable 10s. Le dossier sur disque est préservé.<br>
+      <strong>Purge</strong> supprime aussi le dossier sur disque — irréversible, demande de taper l'ID.
+    </p>
+    <label class="row" style="cursor:pointer;font-size:13px;margin-top:var(--sp-2)"><input type="checkbox" name="purge"> <span>Purger : supprimer aussi le dossier sur disque</span></label>
+    <div class="field" style="display:none;margin-top:var(--sp-3)" data-purge-confirm>
+      <label class="field-label">Tape <code class="mono">${escapeHtml(w.id)}</code> pour confirmer la purge</label>
+      <input class="input mono" name="confirm" autocomplete="off">
+    </div>
   `;
-  const cancel = btn('Annuler', 'btn-ghost');
+  const purgeCb = body.querySelector('[name=purge]');
+  const purgeRow = body.querySelector('[data-purge-confirm]');
   const del = btn('Supprimer', 'btn-danger', I.trash);
+  purgeCb.addEventListener('change', () => {
+    purgeRow.style.display = purgeCb.checked ? '' : 'none';
+    del.textContent = purgeCb.checked ? 'Purger (irréversible)' : 'Supprimer (annulable)';
+  });
+  const cancel = btn('Annuler', 'btn-ghost');
   const { close } = openModal({ title: 'Supprimer le workspace', body, footer: [cancel, del] });
   cancel.addEventListener('click', close);
   del.addEventListener('click', async () => {
-    if (body.querySelector('[name=confirm]').value !== w.id) { toastErr('ID incorrect'); return; }
-    const purge = body.querySelector('[name=purge]').checked;
-    try { await API.del(`/api/workspaces/${w.id}${purge ? '?purge=true' : ''}`); toastOk('Supprimé'); close(); STATE.loading = true; location.hash = '#/'; }
-    catch (e) { toastErr(e.message); }
+    const purge = purgeCb.checked;
+    if (purge && body.querySelector('[name=confirm]').value !== w.id) {
+      toastErr('ID incorrect — saisis l\'ID exact pour purger');
+      return;
+    }
+    // Snapshot des metadata pour permettre l'undo (soft delete uniquement)
+    const snapshot = {
+      id: w.id, path: w.path, label: w.label || w.id,
+      emoji: w.emoji || '', description: w.description || '',
+    };
+    try {
+      await API.del(`/api/workspaces/${w.id}${purge ? '?purge=true' : ''}`);
+      close();
+      STATE.loading = true;
+      location.hash = '#/';
+      if (purge) {
+        toastOk(`Workspace '${w.id}' purgé (dossier supprimé)`);
+      } else {
+        snackbar(`Workspace '${w.id}' supprimé du registre`, {
+          actionLabel: 'ANNULER',
+          duration: 10000,
+          onAction: async () => {
+            try {
+              await API.post('/api/setup/import', { mcps: [], projects: [snapshot] });
+              toastOk(`Workspace '${w.id}' restauré`);
+              STATE.loading = true;
+              location.hash = `#/workspace/${w.id}`;
+            } catch (e) { toastErr(`Restauration KO : ${e.message}`); }
+          },
+        });
+      }
+    } catch (e) { toastErr(e.message); }
   });
 }
 
@@ -4343,6 +4443,13 @@ function init() {
     setTimeout(() => {
       checkForUpdates().then(renderUpdateBadge).catch(() => {});
     }, 1500);
+
+    // Re-check périodique (toutes les 30 min) sans force, donc respecte
+    // l'anti-spam UPDATE_CHECK_INTERVAL_MS pour le fetch distant.
+    // Ce poller global n'est PAS géré par clearPagePollers (volontaire).
+    setInterval(() => {
+      checkForUpdates().then(renderUpdateBadge).catch(() => {});
+    }, 30 * 60 * 1000);
   });
 }
 
