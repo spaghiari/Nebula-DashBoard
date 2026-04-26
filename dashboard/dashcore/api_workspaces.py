@@ -458,9 +458,11 @@ def launch_resume(ws_id: str) -> tuple[int, dict]:
     if not safe_path(path):
         return 400, {"ok": False, "error": "chemin de workspace invalide"}
     try:
-        # /k garde la fenêtre ouverte après exécution (utile si claude -c termine ou échoue)
+        # /D définit le répertoire de démarrage du nouveau cmd (évite le double-quotage
+        # mal géré par list2cmdline quand on enchaîne `cd /d "path" && ...`).
+        # /k garde la fenêtre ouverte après exécution (utile si claude -c termine ou échoue).
         subprocess.Popen(
-            ["cmd", "/c", "start", "", "cmd", "/k", f'cd /d "{path}" && claude -c'],
+            ["cmd", "/c", "start", "", "/D", path, "cmd", "/k", "claude -c"],
             creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
         )
         return 200, {"ok": True, "message": f"Reprise session : {ws_id}"}
