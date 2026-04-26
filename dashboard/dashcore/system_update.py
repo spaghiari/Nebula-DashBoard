@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from dashcore.config import ROOT, log
@@ -180,10 +181,17 @@ def system_version_info(check_remote: bool = False) -> dict:
 
 
 def system_apply_update() -> tuple[int, dict]:
-    """Applique la mise à jour via git pull.
+    """Applique la mise à jour via git pull, sans JAMAIS bloquer pour des modifs locales.
 
-    Détecte si des fichiers Python ont changé pour signaler qu'un redémarrage
-    du serveur est nécessaire. Les fichiers JS/CSS/HTML sont rechargés au F5.
+    Stratégie : tente le pull direct ; en cas d'échec dû à des modifications
+    locales, fait un `git stash --include-untracked` automatique, ré-essaie,
+    puis `git stash pop` pour restaurer. Si le pop échoue (vrai conflit),
+    on rapporte l'incident mais on ne perd jamais de données (le stash
+    reste dans la pile, l'utilisateur peut faire `git stash list` + `pop`
+    manuellement plus tard).
+
+    Le but : auto-update qui marche TOUJOURS pour le cas commun (modifs
+    locales sur des fichiers que les commits distants ne touchent pas).
     """
     if not _is_git_repo():
         return 400, {"ok": False, "error": "Pas un dépôt git"}
@@ -192,31 +200,44 @@ def system_apply_update() -> tuple[int, dict]:
     if not upstream:
         return 400, {"ok": False, "error": "Aucune branche distante trackée"}
 
-    # Refus si modifications locales non committées qui ne sont PAS des fichiers
-    # de données utilisateur. Les data files (registry, workspaces.json...) sont
-    # filtrés car leurs changements sont normaux et ne risquent rien lors d'un
-    # git pull --ff-only tant que les commits distants n'y touchent pas.
-    rc_st, status, _ = _git("status", "--porcelain")
-    if rc_st == 0 and status.strip():
-        significant = _filter_user_data(status.splitlines())
-        if significant:
-            return 409, {
-                "ok": False,
-                "error": "Modifications locales non committées détectées. Commit ou stash avant l'update.",
-                "dirty_files": significant[:10],
-            }
-
     # Snapshot du HEAD avant pull pour détecter les fichiers changés
     rc_b, head_before, _ = _git("rev-parse", "HEAD")
 
-    # Pull
+    # Tentative 1 : pull direct (cas le plus courant — pas de modif locale gênante)
     rc_p, pull_out, pull_err = _git("pull", "--ff-only", timeout=GIT_TIMEOUT_PULL)
+    stash_applied = False
+    stash_pop_warning = None
+
+    # Si le pull échoue à cause de modifs locales, on stash et on retente
+    if rc_p != 0 and ("would be overwritten" in (pull_err + pull_out).lower()
+                      or "untracked working tree files" in (pull_err + pull_out).lower()
+                      or "your local changes" in (pull_err + pull_out).lower()):
+        rc_s, _, stash_err = _git("stash", "push", "--include-untracked", "-m", f"atelier-autostash-{int(time.time())}", timeout=GIT_TIMEOUT_QUICK)
+        if rc_s == 0:
+            stash_applied = True
+            log.info("auto-stash effectué avant git pull (modifs locales détectées)")
+            # Tentative 2 : pull après stash
+            rc_p, pull_out, pull_err = _git("pull", "--ff-only", timeout=GIT_TIMEOUT_PULL)
+            # Quoi qu'il arrive, on tente de re-appliquer le stash
+            rc_pop, _pop_out, pop_err = _git("stash", "pop", timeout=GIT_TIMEOUT_QUICK)
+            if rc_pop != 0:
+                stash_pop_warning = (
+                    "Tes modifications locales sont préservées dans `git stash` "
+                    "(visibles via `git stash list`). Conflit lors du pop : " + pop_err[:200]
+                )
+                log.warning("git stash pop a échoué : %s", pop_err)
+        else:
+            log.warning("git stash a échoué : %s", stash_err)
+
+    # Si le pull a finalement échoué, on rapporte
     if rc_p != 0:
         return 500, {
             "ok": False,
             "error": "git pull a échoué",
             "stderr": pull_err,
             "stdout": pull_out,
+            "stash_applied": stash_applied,
+            "stash_pop_warning": stash_pop_warning,
         }
 
     rc_a, head_after, _ = _git("rev-parse", "HEAD")
@@ -243,6 +264,8 @@ def system_apply_update() -> tuple[int, dict]:
         "to": head_after[:7],
         "files_changed": changed_files,
         "needs_restart": needs_restart,
+        "stash_applied": stash_applied,
+        "stash_pop_warning": stash_pop_warning,
         "message": (
             "Mise à jour appliquée. Redémarre le dashboard pour activer les changements."
             if needs_restart

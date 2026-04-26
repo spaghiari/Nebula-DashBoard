@@ -2431,21 +2431,21 @@ async function modalSystemUpdate() {
   }
   body.appendChild(commitList);
 
-  // Avertissement modifs locales
+  // Modifs locales : INFO seulement (auto-stash gère le pull). Plus jamais bloquant.
   if (info.dirty) {
-    body.appendChild(el('div', 'callout callout-warn', `
+    body.appendChild(el('div', 'callout callout-info', `
       <div>
-        <strong>Mise à jour bloquée :</strong> tu as ${info.dirty_files.length}+ modification(s) locale(s) non committée(s). Commit ou stash d'abord.
+        <strong>ℹ ${info.dirty_files.length}+ modification(s) locale(s)</strong> détectée(s).
+        Atelier va automatiquement les <code class="mono">stash</code> avant le pull et les <code class="mono">pop</code> après — pas besoin de commit/stash manuel.
         <ul class="help-list" style="margin-top:6px">${info.dirty_files.slice(0, 6).map(f => `<li class="mono" style="font-size:11px">${escapeHtml(f)}</li>`).join('')}</ul>
       </div>
     `));
-    return;
   }
 
   // Action button
   body.appendChild(el('div', 'callout callout-info', `
     <div>
-      Atelier va exécuter <code class="mono">git pull --ff-only</code>. Tes données personnelles (registre, workspaces, .env.local) sont préservées via <code class="mono">.gitignore</code>.
+      Atelier va exécuter <code class="mono">git pull --ff-only</code> (avec auto-stash si nécessaire). Tes données personnelles (registre, workspaces, .env.local) sont préservées via <code class="mono">.gitignore</code>.
     </div>
   `));
 
@@ -2475,6 +2475,8 @@ async function modalSystemUpdate() {
         <div>
           ${I.check} <strong>Mise à jour appliquée</strong> · <span class="mono">${escapeHtml(r.from)}</span> → <span class="mono">${escapeHtml(r.to)}</span>
           <p style="margin:var(--sp-2) 0 0">${escapeHtml(r.message)}</p>
+          ${r.stash_applied ? '<p class="dim" style="margin:var(--sp-2) 0 0;font-size:11.5px">ℹ Tes modifs locales ont été stashées puis re-appliquées automatiquement.</p>' : ''}
+          ${r.stash_pop_warning ? `<p class="text-warn" style="margin:var(--sp-2) 0 0;font-size:11.5px">⚠ ${escapeHtml(r.stash_pop_warning)}</p>` : ''}
         </div>
       </div>
       <div class="section-label" style="margin-top:var(--sp-4)"><span class="num">▾</span> ${(r.files_changed || []).length} fichier(s) modifié(s)</div>
