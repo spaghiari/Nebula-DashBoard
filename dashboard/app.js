@@ -1597,7 +1597,10 @@ function modalNewMCP(existing = null) {
 
       <!-- Commun -->
       <div class="field"><label class="field-label">Env <span class="dim" style="font-weight:400">— KEY=VALUE par ligne, supporte <code class="mono">\${VAR}</code></span></label><textarea class="textarea" name="env" rows="3" placeholder="OPENAI_API_KEY=\${OPENAI_API_KEY}&#10;DEBUG=1">${escapeHtml(kvToText(m.env))}</textarea></div>
-      <div class="field"><label class="field-label">Workspaces ciblés <span class="dim" style="font-weight:400">— <code class="mono">*</code> pour tous, sinon liste séparée par virgule</span></label><input class="input mono" name="workspaces" value="${escapeHtml((m.workspaces || []).join(','))}" placeholder="dev,homeassistant ou *"></div>
+      <div class="field">
+        <label class="field-label">Workspaces ciblés <span class="dim" style="font-weight:400">— où ce MCP doit être disponible</span></label>
+        <div class="ws-checklist" data-name="workspaces"></div>
+      </div>
       <div class="field-row">
         <div class="field"><label class="field-label">Auteur</label><input class="input" name="author" value="${escapeHtml(m.author || '')}"></div>
         <div class="field"><label class="field-label">Notes</label><input class="input" name="notes" value="${escapeHtml(m.notes || '')}"></div>
@@ -1615,6 +1618,47 @@ function modalNewMCP(existing = null) {
   body.querySelector('[name=transport]').addEventListener('change', updateTransportFields);
   updateTransportFields();
   body.querySelector('[name=raw]').value = JSON.stringify(m, null, 2);
+
+  // Construit la liste de checkboxes pour les workspaces ciblés
+  const wsHost = body.querySelector('[data-name=workspaces]');
+  const currentWs = new Set(m.workspaces || []);
+  const allWs = STATE.workspaces || [];
+  const allChecked = currentWs.has('*');
+
+  const wsAllLabel = el('label', 'ws-check ws-check-all');
+  wsAllLabel.innerHTML = `<input type="checkbox" data-ws-all ${allChecked ? 'checked' : ''}>
+    <span><strong>★ Tous les workspaces</strong> <span class="dim">(${allWs.length})</span></span>`;
+  wsHost.appendChild(wsAllLabel);
+
+  if (!allWs.length) {
+    wsHost.appendChild(el('div', 'dim', '<small>Aucun workspace défini — crée-en un d\'abord.</small>'));
+  }
+
+  for (const w of allWs) {
+    const lbl = el('label', 'ws-check');
+    const checked = allChecked || currentWs.has(w.id);
+    lbl.innerHTML = `<input type="checkbox" data-ws="${escapeHtml(w.id)}" ${checked ? 'checked' : ''} ${allChecked ? 'disabled' : ''}>
+      <span>${w.emoji ? w.emoji + ' ' : ''}<strong>${escapeHtml(w.id)}</strong>${w.label && w.label !== w.id ? ` <span class="dim">— ${escapeHtml(w.label)}</span>` : ''}</span>`;
+    wsHost.appendChild(lbl);
+  }
+
+  // Logique : "Tous" coché → désactive les autres ; un autre coché → décoche "Tous"
+  const wsAllInput = wsHost.querySelector('[data-ws-all]');
+  wsAllInput.addEventListener('change', () => {
+    const isAll = wsAllInput.checked;
+    wsHost.querySelectorAll('[data-ws]').forEach(cb => {
+      cb.disabled = isAll;
+      if (isAll) cb.checked = true;
+    });
+  });
+  wsHost.querySelectorAll('[data-ws]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      if (cb.checked && wsAllInput.checked) {
+        // Si on décoche un workspace pendant que "Tous" est actif, désactive "Tous"
+      }
+      // Si tous les ws individuels sont cochés ET pas de "Tous", on laisse l'utilisateur décider
+    });
+  });
   for (const tab of body.querySelectorAll('.tab')) {
     tab.addEventListener('click', () => {
       body.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -1646,7 +1690,12 @@ function modalNewMCP(existing = null) {
     } else {
       const get = (n) => body.querySelector(`[name=${n}]`).value;
       const argsRaw = get('args').split('\n').map(s => s.trim()).filter(Boolean);
-      const wsRaw = get('workspaces').split(',').map(s => s.trim()).filter(Boolean);
+      // Lit les workspaces depuis les checkboxes : ["*"] si "Tous", sinon liste des ids cochés
+      const wsHost = body.querySelector('[data-name=workspaces]');
+      const wsAllChecked = wsHost.querySelector('[data-ws-all]')?.checked;
+      const wsRaw = wsAllChecked
+        ? ['*']
+        : Array.from(wsHost.querySelectorAll('[data-ws]:checked')).map(cb => cb.dataset.ws);
       payload = {
         id: get('id').trim(),
         name: get('name').trim() || get('id').trim(),
@@ -4106,7 +4155,10 @@ function buildOnboardingChecklist() {
   })();
   const hasMcps = (STATE.mcps || []).length > 0;
   const hasWorkspaces = (STATE.workspaces || []).length > 0;
-  const hasScopedMcps = Object.values(STATE.wsMcps || {}).some(x => (x.active || []).length > 0);
+  // Coché si AU MOINS un MCP a une intention de scope (registry.workspaces) OU est déjà sync
+  const hasScopedMcps =
+    (STATE.mcps || []).some(m => (m.workspaces || []).length > 0) ||
+    Object.values(STATE.wsMcps || {}).some(x => (x.active || []).length > 0);
   const hasPlugins = (STATE.plugins && STATE.plugins.count > 0) || false;
 
   const steps = [

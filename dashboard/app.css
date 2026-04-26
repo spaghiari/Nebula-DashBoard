@@ -1170,6 +1170,43 @@ body {
   word-break: break-word;
 }
 
+/* Workspace checklist (formulaire MCP : choix des workspaces ciblés) */
+.ws-checklist {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px;
+  padding: var(--sp-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.ws-check {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color var(--d-fast) var(--ease), background var(--d-fast) var(--ease);
+}
+.ws-check:hover { border-color: var(--accent); }
+.ws-check input[type=checkbox] {
+  width: 14px; height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ws-check input[type=checkbox]:disabled { cursor: not-allowed; }
+.ws-check span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-check-all {
+  grid-column: 1 / -1;
+  background: var(--accent-soft);
+  border-color: rgba(167, 139, 250, 0.3);
+}
+
 /* === COMMAND PALETTE ========================================== */
 .palette-overlay {
   position: fixed; inset: 0;
