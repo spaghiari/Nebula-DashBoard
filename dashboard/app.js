@@ -1222,6 +1222,9 @@ function mcpCard(m) {
     catch (e) { toastErr(e.message); }
     finally { test.disabled = false; }
   });
+  const diag = btn('Diag', 'btn-sm btn-ghost', I.alert);
+  diag.title = 'Diagnostic complet : binaire, env, dernier test, vue Claude, erreurs récentes';
+  diag.addEventListener('click', () => modalDiagnoseMcp(m.id));
   const ed = btn('Modifier', 'btn-sm btn-ghost', I.edit);
   ed.addEventListener('click', () => modalNewMCP(m));
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
@@ -1230,9 +1233,113 @@ function mcpCard(m) {
     try { await API.del(`/api/mcps/${m.id}`); toastOk('Supprimé'); STATE.loading = true; route(); }
     catch (e) { toastErr(e.message); }
   }, { danger: true }));
-  footer.append(test, ed, rm);
+  footer.append(test, diag, ed, rm);
   card.appendChild(footer);
   return card;
+}
+
+// ── Diagnostic MCP : agrégation de checks pour comprendre pourquoi ça plante ─
+async function modalDiagnoseMcp(mcpId) {
+  const body = el('div');
+  body.innerHTML = `<div class="page-loader"><div class="spinner"></div><span>Diagnostic en cours…</span></div>`;
+  const close = btn('Fermer', 'btn-ghost');
+  const retest = btn('Relancer le test', 'btn-sm btn-primary', I.refresh);
+  const { close: doClose } = openModal({
+    title: `Diagnostic — ${mcpId}`, body, footer: [retest, close], wide: true,
+  });
+  close.addEventListener('click', doClose);
+
+  const fetchAndRender = async () => {
+    body.innerHTML = `<div class="page-loader"><div class="spinner"></div><span>Diagnostic en cours…</span></div>`;
+    let d;
+    try { d = await API.get(`/api/mcps/${mcpId}/diagnose`); }
+    catch (e) {
+      body.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`;
+      return;
+    }
+    body.innerHTML = '';
+
+    // Header avec statut global
+    const overallOk = d.test && d.test.ok;
+    const head = el('div', 'diag-header' + (overallOk ? ' is-ok' : ' is-fail'));
+    head.innerHTML = `
+      <div style="display:flex;align-items:center;gap:var(--sp-2)">
+        <span class="diag-status-dot"></span>
+        <strong style="font-size:14px">${overallOk ? '✓ Connexion OK' : '✗ Échec de connexion'}</strong>
+      </div>
+      <div class="dim" style="font-size:11.5px;margin-top:4px">${escapeHtml(d.test?.message || '(pas de message)')}</div>
+    `;
+    body.appendChild(head);
+
+    // Section : Binaire
+    const binSec = el('div', 'diag-section');
+    const bin = d.binary || {};
+    const binOk = bin.found || bin.url_resolved;
+    binSec.innerHTML = `
+      <div class="diag-section-title">${binOk ? '✓' : '✗'} Binaire / Endpoint</div>
+      <div class="diag-row"><span class="diag-key">Commande</span><code class="mono">${escapeHtml(bin.command || '?')}</code></div>
+      ${bin.path ? `<div class="diag-row"><span class="diag-key">Résolu</span><code class="mono">${escapeHtml(bin.path)}</code></div>` : ''}
+      ${bin.hint ? `<div class="diag-hint">${escapeHtml(bin.hint)}</div>` : ''}
+    `;
+    body.appendChild(binSec);
+
+    // Section : Variables d'env
+    const env = d.env || {};
+    const envSec = el('div', 'diag-section');
+    const envOk = env.all_resolved;
+    const envEntries = Object.entries(env.vars || {});
+    envSec.innerHTML = `
+      <div class="diag-section-title">${envOk ? '✓' : '⚠'} Variables d'environnement</div>
+      ${envEntries.length === 0 ? '<div class="dim" style="font-size:12px">Aucune variable d\'env requise.</div>' :
+        envEntries.map(([k, v]) => `<div class="diag-row"><span class="diag-key mono">${escapeHtml(k)}</span><span class="${v.startsWith('manquante') ? 'diag-bad' : 'diag-ok'}">${escapeHtml(v)}</span></div>`).join('')}
+      ${env.missing_env_vars?.length ? `<div class="diag-hint">Variables manquantes dans <code class="mono">.env.local</code> : ${env.missing_env_vars.map(v => `<code class="mono">${escapeHtml(v)}</code>`).join(', ')}</div>` : ''}
+    `;
+    body.appendChild(envSec);
+
+    // Section : CWD
+    if (d.cwd?.defined) {
+      const cwdSec = el('div', 'diag-section');
+      cwdSec.innerHTML = `
+        <div class="diag-section-title">${d.cwd.exists ? '✓' : '✗'} Working directory</div>
+        <div class="diag-row"><span class="diag-key">Path</span><code class="mono">${escapeHtml(d.cwd.path)}</code></div>
+        <div class="diag-row"><span class="diag-key">Existe</span><span class="${d.cwd.exists ? 'diag-ok' : 'diag-bad'}">${d.cwd.exists ? 'oui' : 'NON — chemin introuvable sur disque'}</span></div>
+      `;
+      body.appendChild(cwdSec);
+    }
+
+    // Section : Vue Claude CLI
+    const cv = d.claude_view || {};
+    const cvSec = el('div', 'diag-section');
+    cvSec.innerHTML = `
+      <div class="diag-section-title">${cv.ok ? '✓' : 'ℹ'} Vue de Claude CLI (<code class="mono">claude mcp get ${escapeHtml(mcpId)}</code>)</div>
+      ${cv.output ? `<pre class="diag-output">${escapeHtml(cv.output)}</pre>` : ''}
+      ${cv.stderr ? `<div class="diag-hint">${escapeHtml(cv.stderr)}</div>` : ''}
+    `;
+    body.appendChild(cvSec);
+
+    // Section : Erreurs récentes
+    const errs = d.recent_errors || [];
+    const errSec = el('div', 'diag-section');
+    errSec.innerHTML = `<div class="diag-section-title">${errs.length ? '⚠' : '✓'} Erreurs récentes (${errs.length})</div>`;
+    if (!errs.length) {
+      errSec.appendChild(el('div', 'dim', 'Aucune erreur récente trouvée dans les sessions Claude Code scannées.'));
+    } else {
+      const list = el('div', 'diag-errors');
+      for (const e of errs) {
+        const item = el('div', 'diag-error-item');
+        item.innerHTML = `
+          <div class="diag-error-meta"><code class="mono">${escapeHtml(e.session)}</code> · <span class="dim">${escapeHtml(e.time?.slice(0, 19) || '')}</span></div>
+          <div class="diag-error-snippet">${escapeHtml(e.snippet)}</div>
+        `;
+        list.appendChild(item);
+      }
+      errSec.appendChild(list);
+    }
+    body.appendChild(errSec);
+  };
+
+  retest.addEventListener('click', () => fetchAndRender());
+  fetchAndRender();
 }
 
 // ── Recettes MCP : catalogue 1-clic ──────────────────────────────────────────
@@ -1252,41 +1359,82 @@ async function modalMcpRecipes() {
     return;
   }
   const recipes = data.recipes || [];
+  const publicRecipes = recipes.filter(r => r.source !== 'local');
+  const localRecipes = recipes.filter(r => r.source === 'local');
   const existingIds = new Set((STATE.mcps || []).map(m => m.id));
 
-  body.innerHTML = `
-    <p class="muted" style="margin:0 0 var(--sp-3) 0;font-size:13px">
-      Sélection de MCPs populaires pré-configurés. Clique pour installer en remplissant les paramètres requis (token, chemin…).
-    </p>
+  body.innerHTML = '';
+
+  // Bandeau d'aide
+  const intro = el('div');
+  intro.style.cssText = 'margin:0 0 var(--sp-3) 0;font-size:13px;color:var(--text-muted)';
+  intro.innerHTML = `
+    Sélection de MCPs pré-configurés. Clique pour installer en remplissant les paramètres requis (token, chemin…).<br>
+    <span style="font-size:12px">Tu peux ajouter tes propres recettes locales (gitignored) via le bouton ci-dessous.</span>
   `;
-  const grid = el('div', 'recipes-grid');
-  for (const r of recipes) {
-    const installed = existingIds.has(r.id);
-    const card = el('button', 'recipe-card' + (installed ? ' is-installed' : ''));
-    card.type = 'button';
-    card.disabled = installed;
-    const paramCount = (r.params || []).length;
-    card.innerHTML = `
-      <div class="recipe-emoji">${r.emoji || '🔌'}</div>
-      <div class="recipe-body">
-        <div class="recipe-name">${escapeHtml(r.name)}${installed ? ' <span class="badge badge-warn" style="margin-left:6px">déjà installé</span>' : ''}</div>
-        <div class="recipe-desc">${escapeHtml(r.description || '')}</div>
-        <div class="recipe-meta">
-          <span class="badge">${escapeHtml(r.transport || 'stdio')}</span>
-          ${paramCount > 0 ? `<span class="badge badge-info">${paramCount} param${paramCount > 1 ? 's' : ''} requis</span>` : '<span class="badge badge-ok">prêt à l\'emploi</span>'}
-          ${r.docs_url ? `<a class="badge" href="${escapeHtml(r.docs_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">docs ↗</a>` : ''}
+  body.appendChild(intro);
+
+  // Bandeau "Recettes locales" (toujours visible avec bouton)
+  const localBar = el('div', 'recipes-local-bar');
+  localBar.innerHTML = `
+    <div>
+      <div style="font-size:12px;font-weight:500">📝 Mes recettes locales</div>
+      <div class="dim" style="font-size:11px">${localRecipes.length} recette(s) dans <code class="mono" style="font-size:11px">dashboard/data/mcp_recipes.local.json</code> (gitignored)</div>
+    </div>
+  `;
+  const editLocalBtn = btn(data.local_file_exists ? 'Éditer' : 'Créer + éditer', 'btn-sm', I.edit || I.code);
+  editLocalBtn.addEventListener('click', async () => {
+    try {
+      if (!data.local_file_exists) {
+        await API.post('/api/mcps/recipes/ensure-local', {});
+        toastOk('Fichier créé avec un template (OPNsense en exemple)');
+      }
+      const r = await API.post('/api/open', { target: 'mcp-recipes-local' });
+      if (r.message) toastOk(r.message);
+    } catch (e) { toastErr(e.message); }
+  });
+  localBar.appendChild(editLocalBtn);
+  body.appendChild(localBar);
+
+  const renderSection = (title, list) => {
+    if (!list.length) return;
+    const label = el('div', 'section-label');
+    label.style.cssText = 'margin-top:var(--sp-3);margin-bottom:var(--sp-2)';
+    label.innerHTML = `<span class="num">${list[0].source === 'local' ? '🔒' : '📦'}</span> ${title} <span class="right" style="color:var(--text-muted);font-weight:400">${list.length} recette${list.length > 1 ? 's' : ''}</span>`;
+    body.appendChild(label);
+
+    const grid = el('div', 'recipes-grid');
+    for (const r of list) {
+      const installed = existingIds.has(r.id);
+      const card = el('button', 'recipe-card' + (installed ? ' is-installed' : ''));
+      card.type = 'button';
+      card.disabled = installed;
+      const paramCount = (r.params || []).length;
+      card.innerHTML = `
+        <div class="recipe-emoji">${r.emoji || '🔌'}</div>
+        <div class="recipe-body">
+          <div class="recipe-name">${escapeHtml(r.name)}${installed ? ' <span class="badge badge-warn" style="margin-left:6px">déjà installé</span>' : ''}</div>
+          <div class="recipe-desc">${escapeHtml(r.description || '')}</div>
+          <div class="recipe-meta">
+            <span class="badge">${escapeHtml(r.transport || 'stdio')}</span>
+            ${paramCount > 0 ? `<span class="badge badge-info">${paramCount} param${paramCount > 1 ? 's' : ''} requis</span>` : '<span class="badge badge-ok">prêt à l\'emploi</span>'}
+            ${r.docs_url ? `<a class="badge" href="${escapeHtml(r.docs_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">docs ↗</a>` : ''}
+          </div>
         </div>
-      </div>
-    `;
-    if (!installed) {
-      card.addEventListener('click', () => {
-        doClose();
-        modalInstallRecipe(r);
-      });
+      `;
+      if (!installed) {
+        card.addEventListener('click', () => {
+          doClose();
+          modalInstallRecipe(r);
+        });
+      }
+      grid.appendChild(card);
     }
-    grid.appendChild(card);
-  }
-  body.appendChild(grid);
+    body.appendChild(grid);
+  };
+
+  renderSection('Recettes Atelier (catalogue public)', publicRecipes);
+  renderSection('Recettes locales (perso, non partagées)', localRecipes);
 }
 
 function modalInstallRecipe(recipe) {
@@ -1333,13 +1481,25 @@ function modalInstallRecipe(recipe) {
   body.appendChild(previewBox);
 
   const updatePreview = () => {
-    const values = {};
+    // Pour la preview, on masque les valeurs des params marqués `secret: true`
+    // (le token finit dans le registre en clair, mais ne pas le montrer à l'écran
+    //  évite les fuites par capture d'écran ou démo en partage écran).
+    const displayValues = {};
     for (const p of params) {
       const v = body.querySelector(`[name=param_${p.key}]`).value;
-      values[p.key] = v || `\${${p.key}}`;
+      if (!v) {
+        displayValues[p.key] = `\${${p.key}}`;
+      } else if (p.secret) {
+        displayValues[p.key] = '••••••••';
+      } else {
+        displayValues[p.key] = v;
+      }
     }
-    const cmd = recipe.command + (recipe.args && recipe.args.length ? ' ' + recipe.args.map(a => substitute(a, values)).join(' ') : '');
-    previewBox.querySelector('code').textContent = cmd;
+    const cmd = recipe.command + (recipe.args && recipe.args.length ? ' ' + recipe.args.map(a => substitute(a, displayValues)).join(' ') : '');
+    const envSummary = Object.entries(recipe.env || {})
+      .map(([k, v]) => `${k}=${substitute(v, displayValues)}`)
+      .join(' ');
+    previewBox.querySelector('code').textContent = cmd + (envSummary ? `\n\n# env\n${envSummary}` : '');
   };
   body.querySelectorAll('input').forEach(i => i.addEventListener('input', updatePreview));
   updatePreview();
@@ -1902,25 +2062,41 @@ async function checkForUpdates({ force = false } = {}) {
 }
 
 function renderUpdateBadge(info) {
-  // Retire l'ancien badge si présent
-  const existing = $('#nav-update-badge');
-  if (existing) existing.remove();
+  // Nettoie les anciennes versions du badge (sidebar + topbar)
+  const existingNav = $('#nav-update-badge');
+  if (existingNav) existingNav.remove();
+  const slot = $('#topbar-update-slot');
+  if (slot) slot.innerHTML = '';
 
   if (!info || !info.is_git || !info.behind || info.behind <= 0) return;
 
-  // Insère un bouton de mise à jour dans le footer de la sidebar
+  // Badge prominent dans le topbar (visible quelle que soit la page)
+  if (slot) {
+    const badge = el('button', 'topbar-update-badge');
+    badge.type = 'button';
+    badge.title = `Cliquer pour appliquer les ${info.behind} mise(s) à jour`;
+    badge.innerHTML = `
+      <span class="topbar-update-dot"></span>
+      <span class="topbar-update-text">${info.behind} MAJ</span>
+    `;
+    badge.addEventListener('click', () => modalSystemUpdate());
+    slot.appendChild(badge);
+  }
+
+  // Badge secondaire dans la sidebar footer (descriptif)
   const footer = $('.sidebar-footer');
-  if (!footer) return;
-  const badge = el('button', 'update-badge');
-  badge.id = 'nav-update-badge';
-  badge.type = 'button';
-  badge.innerHTML = `
-    <span class="update-badge-dot"></span>
-    <span class="update-badge-text">${info.behind} mise${info.behind > 1 ? 's' : ''} à jour disponible${info.behind > 1 ? 's' : ''}</span>
-    <span class="update-badge-icon">${I.right}</span>
-  `;
-  badge.addEventListener('click', () => modalSystemUpdate());
-  footer.insertBefore(badge, footer.firstChild);
+  if (footer) {
+    const navBadge = el('button', 'update-badge');
+    navBadge.id = 'nav-update-badge';
+    navBadge.type = 'button';
+    navBadge.innerHTML = `
+      <span class="update-badge-dot"></span>
+      <span class="update-badge-text">${info.behind} mise${info.behind > 1 ? 's' : ''} à jour disponible${info.behind > 1 ? 's' : ''}</span>
+      <span class="update-badge-icon">${I.right}</span>
+    `;
+    navBadge.addEventListener('click', () => modalSystemUpdate());
+    footer.insertBefore(navBadge, footer.firstChild);
+  }
 }
 
 async function modalSystemUpdate() {

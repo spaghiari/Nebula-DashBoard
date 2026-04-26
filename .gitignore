@@ -26,6 +26,15 @@
 # Journal personnel
 /memory/journal.md
 
+# Recettes MCP locales (perso, propriétaires) — uniquement chez l'utilisateur
+/dashboard/data/mcp_recipes.local.json
+
+# UI state runtime (thème, onboarding…)
+/dashboard/data/ui_state.json
+
+# Outils de dev local (preflight, checklist) — voir aussi entry plus bas
+/dashboard/tools/
+
 # Caches
 __pycache__/
 *.pyc

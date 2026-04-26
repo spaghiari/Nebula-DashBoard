@@ -231,6 +231,7 @@ OPEN_TARGETS = {
     "env-local": ENV_FILE,
     "workspaces-json": WORKSPACES_JSON,
     "global-memory": ROOT / "memory",
+    "mcp-recipes-local": ROOT / "dashboard" / "data" / "mcp_recipes.local.json",
 }
 
 
