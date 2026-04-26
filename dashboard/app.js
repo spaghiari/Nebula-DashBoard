@@ -331,13 +331,14 @@ function setTopbarActions(actions = []) {
 
 /* === DATA LOADING ================================================ */
 async function loadAll() {
-  const [ws, mcps, env, tpls, plugins, skills] = await Promise.all([
+  const [ws, mcps, env, tpls, plugins, skills, uiState] = await Promise.all([
     safe('/api/workspaces', { workspaces: [] }),
     safe('/api/mcps',       { mcps: [] }),
     safe('/api/env',        { keys: [], file: null, exists: false }),
     safe('/api/templates',  { templates: [] }),
     safe('/api/plugins',    { enabled: {}, count: 0 }),
     safe('/api/skills',     { global: [] }),
+    safe('/api/ui-state',   { theme: 'atelier', onboarded: false }),
   ]);
   STATE.workspaces = ws.workspaces || [];
   STATE.mcps = mcps.mcps || [];
@@ -347,6 +348,7 @@ async function loadAll() {
   STATE.templates = tpls.templates || [];
   STATE.plugins = plugins;
   STATE.skills = skills.global || [];
+  STATE.uiState = uiState;
 
   // Per-ws MCP status (parallel)
   const wsMcps = await Promise.all(
@@ -5144,10 +5146,9 @@ function init() {
     }
   });
   route().then(async () => {
-    // Charger l'état UI depuis le serveur (source de vérité)
-    let uiState = null;
-    try { uiState = await API.get('/api/ui-state'); } catch {}
-    STATE.uiState = uiState;
+    // STATE.uiState est déjà chargé par loadAll() (lancé dans route()).
+    // On lit la source de vérité et on synchronise thème + wizard.
+    const uiState = STATE.uiState;
 
     // Synchroniser le thème serveur → local si différent du cache LS
     if (uiState?.theme && uiState.theme !== getCurrentTheme()) {
