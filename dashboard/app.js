@@ -3509,12 +3509,14 @@ async function renderHelp() {
       <li><a href="#h-onboarding">Premier lancement & import depuis Claude</a></li>
       <li><a href="#h-workspaces">Workspaces : créer, importer, gérer</a></li>
       <li><a href="#h-mcps">MCPs : configurer un Model Context Protocol</a></li>
+      <li><a href="#h-recipes">Recettes MCP : catalogue 1-clic & recettes locales</a></li>
       <li><a href="#h-skills">Skills : créer, multi-fichiers, copier</a></li>
       <li><a href="#h-plugins">Plugins : installation et scope</a></li>
       <li><a href="#h-templates">Templates : modèles de workspaces</a></li>
       <li><a href="#h-env">Variables d'environnement (.env.local)</a></li>
       <li><a href="#h-scope">Lier MCPs / skills / plugins à un workspace</a></li>
       <li><a href="#h-tools">Outils & maintenance</a></li>
+      <li><a href="#h-update">Auto-update bulletproof</a></li>
       <li><a href="#h-shortcuts">Raccourcis clavier</a></li>
       <li><a href="#h-troubleshoot">Dépannage</a></li>
     </ol>
@@ -3649,16 +3651,91 @@ async function renderHelp() {
       <h3>Tester un MCP</h3>
       <p>Bouton <em>Tester</em> sur la card. Pour stdio, lance le process 2.5s pour vérifier qu'il démarre. Pour http/sse, fait un GET sur l'URL. Le statut affiché t'indique si la commande est trouvée et si l'env est complet.</p>
 
+      <h3>Diagnostic complet (bouton <em>Diag</em>)</h3>
+      <p>Quand un MCP plante et tu ne sais pas pourquoi, clic <em>Diag</em> sur la card → modale avec 6 sections :</p>
+      <ul class="help-list">
+        <li><strong>Binaire / Endpoint</strong> — résolution de la commande via <code class="mono">shutil.which</code> + hint si introuvable (ex: <em>npx s'appelle npx.cmd sur Windows</em>).</li>
+        <li><strong>Variables d'env</strong> — chaque var est marquée résolue ou manquante (avec liste des vars à définir dans <code class="mono">.env.local</code>).</li>
+        <li><strong>CWD</strong> — vérifie que le working dir existe sur disque.</li>
+        <li><strong>Test live</strong> — relance <em>Tester</em> pour avoir le statut courant.</li>
+        <li><strong>Vue Claude CLI</strong> — sortie de <code class="mono">claude mcp get &lt;id&gt;</code> pour comparer ta config vs ce que Claude voit.</li>
+        <li><strong>Erreurs récentes</strong> — scan des sessions Claude Code pour trouver les erreurs liées à ce MCP (snippets + horodatage).</li>
+      </ul>
+
+      <h3>Statut calculé automatiquement</h3>
+      <p>Le statut affiché sur la card est dérivé de l'état réel à chaque rafraîchissement (toutes les 30s sur la page MCPs) :</p>
+      <ul class="help-list">
+        <li><strong>désactivé</strong> — choix manuel (case "Désactiver" dans Modifier).</li>
+        <li><strong>à configurer</strong> — config incomplète (pas de command pour stdio, pas d'url pour http/sse).</li>
+        <li><strong>disponible</strong> — config OK, prêt à fonctionner.</li>
+      </ul>
+      <p class="dim" style="font-size:12px">Le statut "connecté" demanderait un test live à chaque check (lourd). Utilise <em>Tester</em> ou <em>Diag</em> pour vérifier en réel.</p>
+
+      <h3>Sauver une config MCP comme recette</h3>
+      <p>Tu as configuré un MCP qui marche (HomeAssistant avec ton token, OPNsense avec creds firewall…) ? Tu peux le transformer en <strong>recette locale réutilisable</strong> :</p>
+      <ol class="help-list">
+        <li>Card MCP → <em>Modifier</em></li>
+        <li>Footer du modal → bouton <strong>✨ Sauver comme recette</strong></li>
+        <li>Conversion intelligente : chaque var d'env devient un param <code class="mono">\${KEY}</code>. Les noms suggérant un secret (TOKEN, KEY, SECRET, PASSWORD…) sont marqués <code class="mono">secret: true</code> automatiquement.</li>
+        <li>Tu ajustes labels/placeholders → <em>Créer la recette</em></li>
+      </ol>
+      <p>Tu peux ensuite installer cette recette plusieurs fois avec d'autres credentials (cf section <a href="#h-recipes">Recettes</a>).</p>
+
       <h3>Vue JSON brut</h3>
       <p>L'onglet <em>JSON brut</em> de la modale te permet d'éditer toute la config en un coup, utile pour copier-coller depuis un README de MCP.</p>
 
+      <h3>Workspaces ciblés (checkboxes)</h3>
+      <p>Dans le formulaire MCP, le champ <em>Workspaces ciblés</em> liste tes workspaces existants en cases à cocher. Coche ceux qui doivent recevoir ce MCP. Case "★ Tous les workspaces" pour activer partout. <strong>Auto-sync</strong> : le <code class="mono">.mcp.json</code> de chaque workspace ciblé est régénéré immédiatement après le save (toast "MCP créé et synchronisé vers N workspace(s)").</p>
+
       <div class="callout callout-info">
-        <strong>Le registre vs Claude :</strong> le fichier <code class="mono">mcp/registry.json</code> est la source de vérité d'Atelier. Il liste les MCPs et leur scope (workspaces ciblés via <code class="mono">workspaces: ["dev","prod"]</code> ou <code class="mono">["*"]</code>). À chaque <em>Sync</em>, Atelier régénère les <code class="mono">.mcp.json</code> dans les workspaces concernés en interpolant les <code class="mono">\${VAR}</code>.
+        <strong>Le registre vs Claude :</strong> le fichier <code class="mono">mcp/registry.json</code> est la source de vérité d'Atelier. À chaque modif, Atelier régénère automatiquement les <code class="mono">.mcp.json</code> dans les workspaces concernés en interpolant les <code class="mono">\${VAR}</code>. Le bouton <em>Sync MCPs</em> sur un workspace n'est plus nécessaire dans le flow normal — utile uniquement pour forcer un re-sync (ex: après changement de <code class="mono">.env.local</code>).
+      </div>
+    </section>
+
+    <section id="h-recipes">
+      <h2>${I.sparkle}<span>5. Recettes MCP — installation 1-clic</span></h2>
+      <p>Les <strong>recettes</strong> sont des templates pré-configurés pour les MCPs courants. Plus besoin de chercher la commande, les args, la doc — tu cliques, tu remplis 2 champs, c'est installé.</p>
+
+      <h3>Accès</h3>
+      <p>Page <strong>MCPs → Recettes</strong> (bouton dans le topbar). Modale avec deux sections :</p>
+      <ul class="help-list">
+        <li><strong>📦 Recettes Atelier (catalogue public)</strong> — 8 recettes embarquées : Filesystem, GitHub, Brave Search, Fetch HTTP, Memory, Puppeteer, PostgreSQL, Slack. Mises à jour via auto-update du dashboard.</li>
+        <li><strong>🔒 Recettes locales (perso, non partagées)</strong> — Tes recettes propres, stockées dans <code class="mono">dashboard/data/mcp_recipes.local.json</code> (gitignored). Parfait pour les MCPs privés ou propriétaires (OPNsense interne, BDD perso, etc.).</li>
+      </ul>
+
+      <h3>Installer une recette</h3>
+      <p>Clic sur une carte → modale d'install avec :</p>
+      <ul class="help-list">
+        <li>ID auto-suggéré (auto-suffixé si déjà pris : <code class="mono">opnsense-2</code>, <code class="mono">opnsense-prod</code>…)</li>
+        <li>Champs typés pour chaque param (text ou password selon <code class="mono">secret</code>)</li>
+        <li><strong>Aperçu live</strong> de la commande générée — les secrets sont masqués <code class="mono">••••••••</code> à l'écran (sécurité capture)</li>
+        <li>Aide contextuelle sous chaque champ + lien doc ↗</li>
+      </ul>
+
+      <h3>Recettes = templates réutilisables</h3>
+      <p>Une recette n'est pas "à usage unique" — tu peux l'<strong>installer N fois</strong> avec des configs différentes. Ex : 2 firewalls OPNsense, 2 instances GitHub avec des tokens différents (perso/pro), 3 BDD PostgreSQL pour staging/prod/local. La carte affiche un badge <em>"Nx installées"</em>.</p>
+
+      <h3>Créer une recette locale</h3>
+      <p>Modale Recettes → bouton <strong>+ Nouvelle recette</strong> → éditeur GUI complet :</p>
+      <ul class="help-list">
+        <li>Métadonnées : id, nom, emoji, description, URL doc</li>
+        <li>Transport (stdio/http/sse) avec champs adaptés</li>
+        <li><strong>Liste dynamique de paramètres</strong> : chaque <code class="mono">\${KEY}</code> dans command/args/env doit avoir un param. Bouton <em>+ Ajouter un paramètre</em>, ✗ pour retirer. Cases <code class="mono">secret</code> et <code class="mono">required</code>.</li>
+      </ul>
+
+      <h3>Modifier / supprimer une recette locale</h3>
+      <p>Sur la carte d'une recette locale → ✎ en haut à droite → ouvre l'éditeur. Bouton 🗑 dans le footer pour supprimer.</p>
+
+      <h3>Workflow MCP existant → recette</h3>
+      <p>Tu as déjà un MCP configuré qui marche ? Convertis-le en recette en 1 clic : <em>Modifier</em> sur la card MCP → bouton <strong>✨ Sauver comme recette</strong>. Conversion auto avec détection des secrets. Cf <a href="#h-mcps">section MCPs</a>.</p>
+
+      <div class="callout callout-info">
+        <strong>Avantage du modèle recette :</strong> tes recettes locales survivent aux <code class="mono">git pull</code> du dashboard (gitignored) et restent strictement sur ta machine. Le catalogue public, lui, est versionné et reçoit les updates Anthropic / nouveaux MCPs populaires automatiquement via auto-update.
       </div>
     </section>
 
     <section id="h-skills">
-      <h2>${I.sparkle}<span>5. Skills</span></h2>
+      <h2>${I.sparkle}<span>6. Skills</span></h2>
       <p>Un skill = un dossier contenant <code class="mono">SKILL.md</code> (frontmatter + instructions Markdown). Optionnellement des fichiers de référence (<code class="mono">references/</code>, <code class="mono">examples/</code>).</p>
 
       <h3>Créer un skill</h3>
@@ -3682,7 +3759,7 @@ async function renderHelp() {
     </section>
 
     <section id="h-plugins">
-      <h2>${I.plug}<span>6. Plugins</span></h2>
+      <h2>${I.plug}<span>7. Plugins</span></h2>
       <p>Les plugins Claude Code sont gérés par la CLI <code class="mono">claude plugin</code>. Atelier propose un browser et la gestion du scope par workspace.</p>
 
       <h3>Installer un plugin</h3>
@@ -3709,7 +3786,7 @@ async function renderHelp() {
     </section>
 
     <section id="h-templates">
-      <h2>${I.layers}<span>7. Templates</span></h2>
+      <h2>${I.layers}<span>8. Templates</span></h2>
       <p>Un template = un dossier dans <code class="mono">templates/&lt;id&gt;/</code> qui sera copié à chaque création de workspace. Le fichier <code class="mono">.template.json</code> contient les méta (label, description, emoji).</p>
 
       <h3>Édition complète depuis le GUI</h3>
@@ -3728,7 +3805,7 @@ async function renderHelp() {
     </section>
 
     <section id="h-env">
-      <h2>${I.key}<span>8. Variables d'environnement (.env.local)</span></h2>
+      <h2>${I.key}<span>9. Variables d'environnement (.env.local)</span></h2>
       <p>Pour ne <strong>jamais</strong> committer de secrets dans tes registres ou templates, Atelier utilise <code class="mono">C:\\claude-workspace\\.env.local</code> comme stockage centralisé.</p>
 
       <h3>Format</h3>
@@ -3755,7 +3832,7 @@ DB_PASSWORD=mon_mdp
     </section>
 
     <section id="h-scope">
-      <h2>${I.activity}<span>9. Lier MCPs / skills / plugins à un workspace</span></h2>
+      <h2>${I.activity}<span>10. Lier MCPs / skills / plugins à un workspace</span></h2>
       <p>Trois mécaniques différentes selon le type :</p>
 
       <h3>MCP → workspace</h3>
@@ -3775,7 +3852,7 @@ DB_PASSWORD=mon_mdp
     </section>
 
     <section id="h-tools">
-      <h2>${I.tools}<span>10. Outils & maintenance</span></h2>
+      <h2>${I.tools}<span>11. Outils & maintenance</span></h2>
       <ul class="help-list">
         <li><strong>Apparence</strong> — choix du thème (Atelier sombre/clair, Marine, Forêt, Brique). Persisté localement.</li>
         <li><strong>Onboarding</strong> — wizards d'import (vu en section 2).</li>
@@ -3788,7 +3865,7 @@ DB_PASSWORD=mon_mdp
     </section>
 
     <section id="h-shortcuts">
-      <h2>${I.zap}<span>11. Raccourcis clavier</span></h2>
+      <h2>${I.zap}<span>13. Raccourcis clavier</span></h2>
       <table class="help-shortcuts">
         <tr><td><kbd>/</kbd> ou <kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Ouvrir la palette de recherche globale</td></tr>
         <tr><td><kbd>g</kbd> puis <kbd>h</kbd></td><td>Aller à l'<strong>Accueil</strong></td></tr>
@@ -3809,8 +3886,54 @@ DB_PASSWORD=mon_mdp
       </div>
     </section>
 
+    <section id="h-update">
+      <h2>${I.refresh}<span>12. Auto-update bulletproof</span></h2>
+      <p>Le dashboard se met à jour <strong>via git</strong>. Tant que ton install est un clone du repo public, tu reçois les nouvelles fonctionnalités automatiquement.</p>
+
+      <h3>Vérification automatique</h3>
+      <ul class="help-list">
+        <li>Check au démarrage (1.5s après l'init) puis toutes les <strong>30 minutes</strong> en arrière-plan.</li>
+        <li>Si des commits sont en attente : <strong>badge gradient pulsant "X MAJ"</strong> apparaît dans le topbar à droite (visible sur toutes les pages).</li>
+        <li>Badge secondaire descriptif dans la sidebar footer.</li>
+      </ul>
+
+      <h3>Appliquer une mise à jour</h3>
+      <p>Clic sur le badge → modale avec : version locale (sha), tracking branch, liste des commits à venir (sha + message + auteur + date relative).</p>
+      <p>Bouton <em>Appliquer</em> → exécute <code class="mono">git pull --ff-only</code>. Détection auto :</p>
+      <ul class="help-list">
+        <li>Si seuls JS/CSS/HTML ont changé → bouton <em>Recharger la page</em> (F5 suffit).</li>
+        <li>Si du Python a changé → bandeau <em>Redémarrage requis</em>, ferme la console et relance <code class="mono">start-dashboard.bat</code>.</li>
+      </ul>
+
+      <h3>Zéro blocage : auto-stash systématique</h3>
+      <p>Si tu as des modifs locales (fichiers édités, supprimés, ou untracked) au moment de l'update, Atelier fait un <code class="mono">git stash --include-untracked</code> automatique avec un label horodaté <strong>avant</strong> le pull, puis <code class="mono">git stash pop</code> pour restaurer après. Aucune intervention manuelle requise.</p>
+      <p>Si le pop échoue (vraie collision avec les changements distants), tes modifs sont <strong>préservées dans la pile stash</strong> (visibles via <code class="mono">git stash list</code>) — aucune perte de données possible. Un warning explicite te donne le label de stash pour récupération CLI.</p>
+
+      <h3>Escape hatch : Réinitialiser à la version distante</h3>
+      <p>Si le pull échoue malgré l'auto-stash (cas exceptionnel : branche divergée, état corrompu…), un panneau <strong>"Forcer l'alignement"</strong> apparaît avec un bouton <em>Réinitialiser à la version distante</em> :</p>
+      <ul class="help-list">
+        <li>Pré-stash systématique avant le reset</li>
+        <li>Exécute <code class="mono">git fetch + git reset --hard origin/main</code></li>
+        <li>Tes données utilisateur (registry, workspaces.json, .env.local, mémoire perso) sont préservées via <code class="mono">.gitignore</code> et <code class="mono">--skip-worktree</code></li>
+      </ul>
+
+      <h3>Modes de panne couverts</h3>
+      <ul class="help-list">
+        <li>Modifs locales sur fichiers trackés → auto-stash</li>
+        <li>Fichiers supprimés localement (<code class="mono">D ...</code>) → auto-stash</li>
+        <li>Fichiers untracked qui collisionnent → auto-stash</li>
+        <li>Lock orphelin <code class="mono">.git/index.lock</code> > 60s → retiré automatiquement</li>
+        <li>Branches divergées → hint + bouton reset</li>
+        <li>Réseau / auth / disque plein → hint humain explicite</li>
+      </ul>
+
+      <div class="callout callout-info">
+        <strong>Aucun mode de panne n'est silencieux.</strong> Chaque erreur git remonte avec un hint humain et le stderr brut accessible (collapsable) pour debug.
+      </div>
+    </section>
+
     <section id="h-troubleshoot">
-      <h2>${I.alert}<span>12. Dépannage</span></h2>
+      <h2>${I.alert}<span>14. Dépannage</span></h2>
 
       <h3>"Serveur hors ligne" en bas de page</h3>
       <p>Le serveur Python n'a pas démarré ou a crashé. Relance <code class="mono">scripts\\start-dashboard.bat</code> et vérifie les logs dans <code class="mono">logs\\dashboard.log</code>.</p>

@@ -29,40 +29,67 @@ Atelier centralise tout ça.
 
 ### Pilotage
 - **Workspaces** — CRUD, duplication, export ZIP, lancement en un clic, reprise
-  de session (`claude -c`), enregistrement d'un dossier existant.
+  de session (`claude -c`), enregistrement d'un dossier existant. Suppression
+  avec **undo 10 secondes** (snackbar) sur soft delete, double confirmation
+  pour la purge irréversible.
 - **Templates** — création depuis modèle (Python, Node, audit, automation,
   YAML, blank) avec interpolation `{{name}}`, `{{label}}`, `{{description}}`,
   `{{tools}}`, `{{date}}`, `{{emoji}}`. Édition multi-fichiers depuis l'UI.
 - **MCPs** — registre unique, transport `stdio`/`http`/`sse`, champs `cwd` et
-  `headers`, substitution `${VAR}` depuis `.env.local`, sync automatique des
-  `.mcp.json`, test live, import bulk depuis JSON Claude.
+  `headers`, substitution `${VAR}` depuis `.env.local`, **auto-sync** des
+  `.mcp.json` à chaque modif, test live, import bulk depuis JSON Claude.
+  Statuts calculés automatiquement (désactivé / à configurer / disponible),
+  workspaces ciblés via cases à cocher, page MCPs avec **auto-refresh 30s**.
+- **Recettes MCP** — catalogue 1-clic (8 recettes embarquées : Filesystem,
+  GitHub, Brave Search, Fetch HTTP, Memory, Puppeteer, PostgreSQL, Slack)
+  + **recettes locales** gitignored pour les MCPs perso/propriétaires.
+  Éditeur GUI complet, conversion MCP → recette en 1 clic (avec détection
+  auto des secrets), installation multi-instances avec auto-suffix d'ID.
+- **Diagnostic MCP** — bouton "Diag" sur chaque card → modale avec 6 sections
+  (binaire, env, cwd, test live, vue Claude CLI, erreurs récentes scannées
+  dans les sessions). Pour comprendre pourquoi un MCP plante sans creuser
+  dans les logs.
 - **Skills** — page dédiée avec édition multi-fichiers (SKILL.md + références),
   copier vers workspaces, cross-référence.
 - **Plugins** — browser marketplace (catalogue officiel + externes + README),
   install/uninstall en un clic, **vue scope par workspace** scalable
   (segmented control 3 états : Actif / Inactif / Hériter), actions de masse.
 - **Sessions** — liste des conversations Claude Code passées par workspace.
+  **Aperçu au hover** : tooltip avec les 3 premiers messages (cache client
+  pour éviter les re-fetch).
 - **Hooks & permissions** — éditeur GUI pour `settings.json` global + local.
 
 ### Confort & UX
 - **5 thèmes** — Atelier sombre/clair, Marine (bleu), Forêt (émeraude),
-  Brique (orange). Persisté en localStorage.
+  Brique (orange). Persisté **côté serveur** (`dashboard/data/ui_state.json`)
+  + cache localStorage pour éviter le flash au chargement.
 - **Command palette** — `/` ou `Ctrl+K`, recherche globale.
 - **Raccourcis clavier** — chord `g h/m/p/k/t/o/a` pour naviguer, `n`/`m`/`s`
   pour les actions rapides, `Ctrl+S` dans les éditeurs.
-- **Page Aide** intégrée — 12 sections couvrant tout, avec sommaire sticky.
+- **Page Aide** intégrée — 14 sections couvrant tout, avec sommaire sticky.
 - **Wizard premier lancement** — 5 étapes (bienvenue, thème, import config,
   workspace, raccourcis) qui se déclenche automatiquement au 1er run.
+- **Checklist de mise en route** — 6 étapes toujours accessibles (Outils →
+  A. Démarrage). **Bandeau Home contextuel** affiché tant que la checklist
+  n'est pas à 6/6.
+- **Snackbar avec actions** — toast étendu avec bouton (UNDO, etc.).
 
 ### Onboarding
-- **Wizard d'import** — scan de `~/.claude/` pour récupérer MCPs et projets
-  existants en un clic.
+- **Wizard d'import** — scan de `~/.claude.json` (incluant les MCPs déclarés
+  dans `projects.<path>.mcpServers`), `settings.json` et `settings.local.json`
+  pour récupérer MCPs et projets existants en un clic.
 - **Détection des conflits** — repère les MCPs présents à la fois dans
   `~/.claude.json`/`settings.json` et dans le registre Atelier, propose la
   migration ou le nettoyage avec backup automatique.
-- **Auto-update** — vérification git en arrière-plan, badge dans la sidebar
-  quand des updates sont dispos, modale avec changelog et `git pull` en un
-  clic. Détection du redémarrage nécessaire (Python vs frontend).
+- **Auto-update bulletproof** — vérification git en arrière-plan (au démarrage
+  + toutes les 30 min), badge gradient pulsant **"X MAJ"** dans le topbar
+  + badge descriptif dans la sidebar. Modale avec changelog et `git pull`
+  en un clic. **Auto-stash systématique** : tes modifs locales (modifiées,
+  supprimées, untracked) sont automatiquement stashées avant le pull et
+  re-poppées après. Aucun blocage possible. Si vrai conflit lors du pop :
+  modifs préservées dans la pile stash. **Escape hatch** "Réinitialiser à
+  la version distante" disponible si tout échoue. Détection du redémarrage
+  nécessaire (Python vs frontend).
 
 ### Sécurité
 - Bind `127.0.0.1` strict, pas d'auth (on suppose une machine perso).
@@ -95,11 +122,15 @@ claude-workspace/
 │   │   ├── journal.py           # Journal markdown
 │   │   ├── workspace_io.py      # Paths workspace, stats, sanity check
 │   │   ├── api_workspaces.py    # CRUD workspaces, templates, settings
-│   │   ├── api_mcps.py          # MCPs, conflicts, scan, sync
+│   │   ├── api_mcps.py          # MCPs, conflicts, scan, sync, recettes, diagnostic
 │   │   ├── api_plugins.py       # Plugins, skills, agents, commandes
-│   │   └── system_update.py     # Auto-update via git
+│   │   ├── api_ui_state.py      # Persistance thème + onboarding côté serveur
+│   │   └── system_update.py     # Auto-update bulletproof (auto-stash + reset)
 │   └── data/
-│       └── workspaces.json      # ← LOCAL, gitignored
+│       ├── workspaces.json      # ← LOCAL, gitignored
+│       ├── ui_state.json        # ← LOCAL, gitignored (thème, onboarded)
+│       ├── mcp_recipes.json     # Catalogue public de recettes MCP
+│       └── mcp_recipes.local.json # ← LOCAL, gitignored (recettes perso)
 │
 ├── mcp/                         # Registre des MCPs
 │   ├── registry.json            # ← LOCAL, gitignored
@@ -229,37 +260,134 @@ Plus l'onglet **JSON brut** pour copier-coller un bloc complet (depuis un
 README de MCP par exemple), et le bouton **Importer** sur la page MCPs pour
 coller un format `{"mcpServers": {...}}` Claude Code standard.
 
+### 🩺 Diagnostic MCP
+
+Bouton **Diag** sur chaque card MCP → modale d'analyse complète :
+
+- **Binaire/Endpoint** — résolution de la commande via `shutil.which` + hint
+- **Variables d'env** — résolues vs manquantes (vs `.env.local`)
+- **CWD** — vérifie l'existence du working dir
+- **Test live** — relance le test et affiche le résultat
+- **Vue Claude CLI** — sortie de `claude mcp get <id>` pour comparer
+- **Erreurs récentes** — scan des sessions Claude Code, snippets datés
+
 ---
 
-## 🔄 Auto-update
+## 🍱 Recettes MCP — installation 1-clic
 
-Quand tu pousses des commits sur la branche `main` du repo, les utilisateurs
-voient automatiquement un **badge violet** dans leur sidebar au prochain
-démarrage (vérification toutes les 6 h en cache). Clic → modale avec :
-- Version locale (sha court) et tracking branch
+Plutôt que de chercher la commande/args/env de chaque MCP populaire dans des
+README éparpillés, le dashboard embarque un **catalogue de recettes**
+pré-configurées.
+
+### Catalogue public (8 recettes embarquées)
+
+📁 Filesystem · 🐙 GitHub · 🔍 Brave Search · 🌐 Fetch HTTP · 🧠 Memory ·
+🎭 Puppeteer · 🐘 PostgreSQL · 💬 Slack
+
+Servies depuis `dashboard/data/mcp_recipes.json` (versionné, mis à jour via
+auto-update). Pour étendre le catalogue public, édite ce fichier et push.
+
+### Recettes locales (perso, gitignored)
+
+Pour les MCPs propriétaires ou hyper-personnels (firewall interne, BDD perso,
+script local custom…), bouton **+ Nouvelle recette** dans la modale Recettes
+ouvre l'éditeur GUI complet :
+
+- Métadonnées : id, nom, emoji, description, doc URL
+- Transport (stdio/http/sse) avec champs adaptés
+- Liste dynamique de **paramètres** : key, label, placeholder, cases `secret`
+  (input password + masquage preview) et `required`
+
+Stocké dans `dashboard/data/mcp_recipes.local.json` (gitignored). Modifiable
+ensuite via le bouton ✎ sur chaque carte locale.
+
+### Multi-install (templates réutilisables)
+
+Une recette n'est pas "à usage unique" — installe-la **N fois** avec des
+configs différentes :
+
+- 2 firewalls OPNsense → `opnsense-prod` + `opnsense-staging`
+- 2 GitHub → `github-perso` + `github-pro` (tokens différents)
+- 3 BDD PostgreSQL → `pg-local`, `pg-staging`, `pg-prod`
+
+L'ID est auto-suffixé (`opnsense-2`, `opnsense-3`) avec hint visible si
+des instances existent déjà. Tu peux personnaliser l'ID pour qu'il soit
+sémantique.
+
+### MCP existant → recette en 1 clic
+
+Tu as déjà configuré un MCP qui marche ? Card MCP → **Modifier** → bouton
+**✨ Sauver comme recette** dans le footer. Conversion intelligente :
+
+- Chaque var d'env devient un param `${KEY}`
+- Heuristique secret : `/token|key|secret|password|auth|credential|bearer/i`
+  → marqué `secret: true` (input password + masqué dans la preview)
+- Tu ajustes labels/placeholders avant de valider
+
+Parfait pour transformer une config qui marche en template réutilisable
+pour d'autres environnements.
+
+---
+
+## 🔄 Auto-update bulletproof
+
+Quand tu pousses des commits sur la branche `main`, les utilisateurs voient
+automatiquement un **badge gradient pulsant "X MAJ"** dans leur topbar
+(vérif au démarrage + toutes les 30 min). Clic → modale avec :
+
+- Version locale (sha court) + tracking branch
 - Liste des commits à venir (sha + message + auteur + date relative)
-- Bouton **Appliquer la mise à jour** → `git pull --ff-only`
-- Détection automatique : si seuls les fichiers JS/CSS/HTML ont changé,
-  un simple F5 suffit. Si du Python a changé, message demande de
-  redémarrer `start-dashboard.bat`.
+- Bouton **Appliquer la mise à jour**
+- Détection auto : si seuls JS/CSS/HTML ont changé → F5 suffit. Si du
+  Python a changé → bandeau "Redémarrage requis".
 
-Sécurité : refus si modifications locales non committées, commandes git
-hardcodées (pas d'injection possible).
+### Garanties zéro blocage
 
-### Workflow mainteneur (pour pousser une mise à jour)
+L'update n'échoue **jamais** silencieusement :
 
-Pas de pipeline CI, pas de MR — push direct sur `main` :
+1. **Pré-stash systématique** — si tu as des modifs locales (fichiers
+   modifiés, supprimés, untracked), `git stash --include-untracked` avec
+   un label horodaté avant le pull.
+2. **Pull** — `git pull --ff-only` sur état propre.
+3. **Pop** — `git stash pop` après le pull, dans tous les cas (même si pull
+   a échoué) pour restaurer l'état local.
+4. **Si pop conflit** — tes modifs sont préservées dans la pile (`git stash
+   list` les retrouve), warning explicite avec le label pour récupération
+   CLI manuelle.
+
+### Modes de panne couverts
+
+| Cas | Comportement |
+|---|---|
+| Modifs locales sur fichiers trackés | Auto-stash |
+| Fichiers supprimés (`D ...`) | Auto-stash |
+| Untracked qui collisionnent | Auto-stash --include-untracked |
+| Lock orphelin `.git/index.lock` > 60s | Retiré automatiquement |
+| Branches divergées | Hint + bouton "Réinitialiser à la version distante" |
+| Réseau / auth / disque plein | Hint humain explicite |
+
+### Escape hatch : Réinitialiser à la version distante
+
+Si l'update échoue malgré l'auto-stash (cas exceptionnel), un panneau
+"Forcer l'alignement" apparaît dans la modale avec un bouton qui exécute
+`git fetch + git reset --hard origin/main` (avec pré-stash de sauvegarde).
+Tes données utilisateur (registry, workspaces.json, .env.local, mémoire
+perso) sont préservées via `.gitignore` et `--skip-worktree`.
+
+### Workflow mainteneur
+
+Pas de pipeline CI, pas de MR — push direct sur `main` depuis l'export :
 
 ```cmd
 cd C:\claude-workspace-export
-:: (sync depuis ton install perso si besoin via le script)
+:: (sync depuis ton install perso si besoin)
+python ../claude-workspace/dashboard/tools/preflight.py   :: validation pre-push
 git add .
 git commit -m "feat: ..."
 git push origin main
 ```
 
-Tous les utilisateurs verront la mise à jour à leur prochain démarrage du
-dashboard.
+Tous les utilisateurs reçoivent la mise à jour automatiquement.
 
 ---
 
