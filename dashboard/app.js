@@ -1382,9 +1382,15 @@ async function modalMcpRecipes() {
       <div class="dim" style="font-size:11px">${localRecipes.length} recette(s) dans <code class="mono" style="font-size:11px">dashboard/data/mcp_recipes.local.json</code> (gitignored)</div>
     </div>
   `;
-  // Note : openLocalFile est défini plus bas avec la fonction renderSection qui en a besoin
-  const editLocalBtn = btn(data.local_file_exists ? 'Éditer le fichier' : 'Créer + éditer', 'btn-sm', I.edit || I.code);
-  localBar.appendChild(editLocalBtn);
+  const newLocalBtn = btn('+ Nouvelle recette', 'btn-sm btn-primary', I.plus);
+  newLocalBtn.title = 'Créer une recette locale via formulaire (gitignored)';
+  newLocalBtn.addEventListener('click', () => {
+    doClose();
+    modalEditRecipe(null);
+  });
+  const editLocalBtn = btn('Ouvrir JSON brut', 'btn-sm btn-ghost', I.edit || I.code);
+  editLocalBtn.title = 'Éditer mcp_recipes.local.json directement (avancé)';
+  localBar.append(newLocalBtn, editLocalBtn);
   body.appendChild(localBar);
 
   const openLocalFile = async () => {
@@ -1429,12 +1435,13 @@ async function modalMcpRecipes() {
           </div>
         </div>
       `;
-      // Bouton édition (recettes locales uniquement) — n'ouvre pas la modal install
+      // Bouton édition (recettes locales uniquement) — ouvre l'éditeur GUI
       const editBtn = card.querySelector('.recipe-edit-btn');
       if (editBtn) {
         editBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          openLocalFile();
+          doClose();
+          modalEditRecipe(r);
         });
       }
       // Click sur la carte → install (sauf si déjà installée)
@@ -1570,6 +1577,162 @@ function modalInstallRecipe(recipe) {
     } catch (e) {
       toastErr(e.message);
       install.disabled = false;
+    }
+  });
+}
+
+// ── Éditeur GUI de recette locale ────────────────────────────────────────────
+function modalEditRecipe(existing) {
+  const isEdit = !!existing;
+  const r = existing ? JSON.parse(JSON.stringify(existing)) : {
+    id: '', name: '', emoji: '🔌', description: '',
+    transport: 'stdio', command: '', args: [], env: {}, url: '',
+    params: [], docs_url: '',
+  };
+
+  const body = el('div');
+  body.innerHTML = `
+    <div class="field-row">
+      <div class="field" style="max-width:80px"><label class="field-label">Emoji</label><input class="input" name="emoji" value="${escapeHtml(r.emoji || '🔌')}" maxlength="4"></div>
+      <div class="field" style="flex:1"><label class="field-label">ID *</label><input class="input mono" name="id" value="${escapeHtml(r.id)}" placeholder="mon-mcp" autocomplete="off" ${isEdit ? 'disabled' : ''}></div>
+      <div class="field" style="flex:2"><label class="field-label">Nom</label><input class="input" name="name" value="${escapeHtml(r.name || '')}" placeholder="Mon MCP"></div>
+    </div>
+    <div class="field"><label class="field-label">Description</label><textarea class="textarea" name="description" rows="2" placeholder="À quoi sert ce MCP">${escapeHtml(r.description || '')}</textarea></div>
+    <div class="field-row">
+      <div class="field"><label class="field-label">Transport</label>
+        <select class="select" name="transport">
+          <option value="stdio" ${r.transport === 'stdio' ? 'selected' : ''}>stdio</option>
+          <option value="http" ${r.transport === 'http' ? 'selected' : ''}>http</option>
+          <option value="sse" ${r.transport === 'sse' ? 'selected' : ''}>sse</option>
+        </select>
+      </div>
+      <div class="field" style="flex:2"><label class="field-label">Documentation (URL)</label><input class="input" name="docs_url" value="${escapeHtml(r.docs_url || '')}" placeholder="https://github.com/..."></div>
+    </div>
+    <div data-stdio>
+      <div class="field"><label class="field-label">Command *</label><input class="input mono" name="command" value="${escapeHtml(r.command || '')}" placeholder="npx ou uvx"></div>
+      <div class="field"><label class="field-label">Args (un par ligne) <span class="dim">— supporte <code class="mono">\${KEY}</code></span></label><textarea class="textarea mono" name="args" rows="3" placeholder="-y&#10;@scope/mcp-server&#10;\${PATH}">${escapeHtml((r.args || []).join('\n'))}</textarea></div>
+    </div>
+    <div data-http hidden>
+      <div class="field"><label class="field-label">URL *</label><input class="input mono" name="url" value="${escapeHtml(r.url || '')}" placeholder="https://api.example.com/mcp"></div>
+    </div>
+    <div class="field"><label class="field-label">Env <span class="dim">— KEY=VALUE par ligne, supporte <code class="mono">\${KEY}</code></span></label><textarea class="textarea mono" name="env" rows="3" placeholder="API_KEY=\${TOKEN}&#10;DEBUG=1">${escapeHtml(Object.entries(r.env || {}).map(([k,v]) => `${k}=${v}`).join('\n'))}</textarea></div>
+
+    <div class="section-label" style="margin-top:var(--sp-3);margin-bottom:var(--sp-2)"><span class="num">⚙</span> Paramètres demandés à l'install</div>
+    <p class="dim" style="font-size:11.5px;margin:0 0 var(--sp-2) 0">Pour chaque <code class="mono">\${KEY}</code> utilisé dans command/args/env, déclare ici un param. L'utilisateur saisira sa valeur lors de l'install.</p>
+    <div class="recipe-params-list" data-params></div>
+    <button type="button" class="btn btn-sm btn-ghost" data-add-param style="margin-top:var(--sp-2)">+ Ajouter un paramètre</button>
+  `;
+
+  // Toggle stdio/http/sse
+  const updateTransport = () => {
+    const t = body.querySelector('[name=transport]').value;
+    body.querySelectorAll('[data-stdio]').forEach(e => e.hidden = t !== 'stdio');
+    body.querySelectorAll('[data-http]').forEach(e => e.hidden = t === 'stdio');
+  };
+  body.querySelector('[name=transport]').addEventListener('change', updateTransport);
+  updateTransport();
+
+  // Liste dynamique de params
+  const paramsHost = body.querySelector('[data-params]');
+  const renderParam = (p = { key: '', label: '', placeholder: '', required: false, secret: false, help: '' }) => {
+    const row = el('div', 'recipe-param-row');
+    row.innerHTML = `
+      <input class="input mono" data-pk="key"         placeholder="KEY"            value="${escapeHtml(p.key || '')}">
+      <input class="input"      data-pk="label"       placeholder="Label affiché"  value="${escapeHtml(p.label || '')}">
+      <input class="input"      data-pk="placeholder" placeholder="Exemple"        value="${escapeHtml(p.placeholder || '')}">
+      <label class="ws-check" style="padding:4px 8px;margin:0"><input type="checkbox" data-pk="required" ${p.required ? 'checked' : ''}> <span>requis</span></label>
+      <label class="ws-check" style="padding:4px 8px;margin:0"><input type="checkbox" data-pk="secret" ${p.secret ? 'checked' : ''}> <span>secret</span></label>
+      <button type="button" class="btn btn-sm btn-ghost btn-icon-only btn-danger" data-remove-param title="Retirer">✗</button>
+    `;
+    row.querySelector('[data-remove-param]').addEventListener('click', () => row.remove());
+    paramsHost.appendChild(row);
+  };
+  for (const p of (r.params || [])) renderParam(p);
+  body.querySelector('[data-add-param]').addEventListener('click', () => renderParam());
+
+  // Footer : Save + Delete (si edit) + Cancel
+  const cancel = btn('Annuler', 'btn-ghost');
+  const save = btn(isEdit ? 'Enregistrer' : 'Créer la recette', 'btn-primary', I.check || I.plus);
+  const footer = [cancel];
+  if (isEdit) {
+    const del = btn('', 'btn-ghost btn-icon-only btn-danger', I.trash);
+    del.title = 'Supprimer cette recette locale';
+    del.addEventListener('click', () => {
+      confirmDialog(`Supprimer la recette « ${r.name || r.id} » ?`, async () => {
+        try {
+          await API.del(`/api/mcps/recipes/local/${r.id}`);
+          toastOk(`Recette '${r.id}' supprimée`);
+          close();
+          // Reload + ré-ouvre le catalog
+          STATE.loading = true;
+          await route();
+          modalMcpRecipes();
+        } catch (e) { toastErr(e.message); }
+      }, { danger: true });
+    });
+    footer.push(del);
+  }
+  footer.push(save);
+
+  const { close } = openModal({
+    title: isEdit ? `Modifier la recette « ${r.name || r.id} »` : 'Nouvelle recette locale',
+    body, footer, wide: true,
+  });
+  cancel.addEventListener('click', close);
+
+  save.addEventListener('click', async () => {
+    const get = (n) => body.querySelector(`[name=${n}]`).value.trim();
+    const id = get('id') || r.id;
+    if (!/^[a-zA-Z0-9_-]{1,40}$/.test(id)) {
+      toastErr('ID invalide (alphanumérique + - _ uniquement, max 40)'); return;
+    }
+    const transport = get('transport');
+    // Parse env KEY=VALUE
+    const env = {};
+    for (const line of get('env').split('\n').map(s => s.trim()).filter(Boolean)) {
+      const idx = line.indexOf('=');
+      if (idx > 0) env[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
+    }
+    // Parse params (lit chaque row)
+    const params = [];
+    for (const row of paramsHost.querySelectorAll('.recipe-param-row')) {
+      const pk = (k) => row.querySelector(`[data-pk=${k}]`).value;
+      const k = pk('key').trim();
+      const lbl = pk('label').trim();
+      if (!k || !lbl) continue;  // skip ligne incomplète
+      params.push({
+        key: k,
+        label: lbl,
+        placeholder: pk('placeholder').trim(),
+        required: row.querySelector('[data-pk=required]').checked,
+        secret: row.querySelector('[data-pk=secret]').checked,
+      });
+    }
+
+    const payload = {
+      id,
+      name: get('name') || id,
+      emoji: get('emoji') || '🔌',
+      description: get('description'),
+      transport,
+      command: transport === 'stdio' ? get('command') : '',
+      args: transport === 'stdio' ? get('args').split('\n').map(s => s.trim()).filter(Boolean) : [],
+      url: transport !== 'stdio' ? get('url') : '',
+      env,
+      params,
+      docs_url: get('docs_url'),
+    };
+
+    save.disabled = true;
+    try {
+      const resp = await API.post('/api/mcps/recipes/local', payload);
+      toastOk(resp.action === 'created' ? `Recette '${id}' créée` : `Recette '${id}' mise à jour`);
+      close();
+      // Re-fetch + re-ouvre la modal de catalogue
+      modalMcpRecipes();
+    } catch (e) {
+      toastErr(e.message);
+      save.disabled = false;
     }
   });
 }

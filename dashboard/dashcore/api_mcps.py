@@ -886,6 +886,67 @@ def ensure_local_recipes_file() -> Path:
     return MCP_RECIPES_LOCAL_FILE
 
 
+def add_or_update_local_recipe(payload: dict) -> tuple[int, dict]:
+    """Upsert d'une recette locale (mcp_recipes.local.json).
+
+    Validation minimale : id valide + au moins command (stdio) ou url (http/sse).
+    Les params sont validés (chaque param doit avoir au moins key + label).
+    """
+    rid = (payload.get("id") or "").strip()
+    if not safe_id(rid):
+        return 400, {"error": "ID invalide (alphanumérique + - _ uniquement)"}
+    transport = payload.get("transport", "stdio")
+    if transport not in ALLOWED_TRANSPORTS:
+        return 400, {"error": f"Transport invalide. Autorisés : {ALLOWED_TRANSPORTS}"}
+    if transport == "stdio" and not (payload.get("command") or "").strip():
+        return 400, {"error": "command requis pour stdio"}
+    if transport in ("http", "sse") and not (payload.get("url") or "").strip():
+        return 400, {"error": f"url requis pour {transport}"}
+
+    # Valide les params
+    params = payload.get("params") or []
+    if not isinstance(params, list):
+        return 400, {"error": "params doit être une liste"}
+    for p in params:
+        if not isinstance(p, dict) or not p.get("key") or not p.get("label"):
+            return 400, {"error": "chaque param doit avoir key + label"}
+
+    ensure_local_recipes_file()
+    with _MUTATION_LOCK:
+        data = read_json(MCP_RECIPES_LOCAL_FILE, {"version": 1, "recipes": []})
+        recipes = data.get("recipes", [])
+        # Construit la recette nettoyée (drop le `source` si fourni par le front)
+        clean = {k: v for k, v in payload.items() if k != "source"}
+
+        replaced = False
+        for i, r in enumerate(recipes):
+            if r.get("id") == rid:
+                recipes[i] = clean
+                replaced = True
+                break
+        if not replaced:
+            recipes.append(clean)
+        data["recipes"] = recipes
+        write_json(MCP_RECIPES_LOCAL_FILE, data)
+        return 200, {"ok": True, "id": rid, "action": "updated" if replaced else "created"}
+
+
+def delete_local_recipe(rid: str) -> tuple[int, dict]:
+    if not safe_id(rid):
+        return 400, {"error": "id invalide"}
+    if not MCP_RECIPES_LOCAL_FILE.exists():
+        return 404, {"error": "Aucune recette locale"}
+    with _MUTATION_LOCK:
+        data = read_json(MCP_RECIPES_LOCAL_FILE, {"version": 1, "recipes": []})
+        recipes = data.get("recipes", [])
+        new_recipes = [r for r in recipes if r.get("id") != rid]
+        if len(new_recipes) == len(recipes):
+            return 404, {"error": f"Recette '{rid}' introuvable"}
+        data["recipes"] = new_recipes
+        write_json(MCP_RECIPES_LOCAL_FILE, data)
+        return 200, {"ok": True, "deleted": rid}
+
+
 def list_mcp_recipes() -> tuple[int, dict]:
     """Sert le catalogue de recettes MCP : public (versionné) + local (gitignored).
 

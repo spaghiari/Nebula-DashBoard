@@ -47,6 +47,7 @@ from dashcore.api_mcps import (
     workspace_mcp_status, mcp_live_check, test_mcp, scan_claude_config,
     find_global_mcp_conflicts, remove_mcp_from_claude_global, migrate_global_mcp_to_registry,
     list_mcp_recipes, ensure_local_recipes_file, diagnose_mcp,
+    add_or_update_local_recipe, delete_local_recipe,
 )
 from dashcore.system_update import system_version_info, system_apply_update
 from dashcore.api_ui_state import get_ui_state, patch_ui_state
@@ -113,6 +114,8 @@ def h_get_mcp_recipes(q, b):    return list_mcp_recipes()
 def h_post_ensure_local_recipes(q, b):
     p = ensure_local_recipes_file()
     return 200, {"ok": True, "path": str(p), "created": True}
+def h_post_local_recipe(q, b):       return add_or_update_local_recipe(b or {})
+def h_del_local_recipe(q, b, rid):   return delete_local_recipe(rid)
 def h_post_add_mcp(q, b):       return add_or_update_mcp(b)
 def h_post_test_mcp(q, b, mid): return test_mcp(mid)
 def h_get_mcp_diagnose(q, b, mid): return diagnose_mcp(mid)
@@ -376,6 +379,7 @@ ROUTES_POST = [
     (re.compile(rf"^/api/mcps$"),                                                           h_post_add_mcp),
     (re.compile(rf"^/api/mcps/import$"),                                                    h_post_import_mcps),
     (re.compile(rf"^/api/mcps/recipes/ensure-local$"),                                      h_post_ensure_local_recipes),
+    (re.compile(rf"^/api/mcps/recipes/local$"),                                             h_post_local_recipe),
     (re.compile(rf"^/api/mcps/conflicts/remove$"),                                          h_post_remove_global_mcp),
     (re.compile(rf"^/api/mcps/conflicts/migrate$"),                                         h_post_migrate_global_mcp),
     (re.compile(rf"^/api/mcps/({_ID})/test$"),                                              h_post_test_mcp),
@@ -413,6 +417,7 @@ ROUTES_POST = [
 
 ROUTES_DELETE = [
     (re.compile(rf"^/api/workspaces/({_ID})$"),                                             h_del_ws),
+    (re.compile(rf"^/api/mcps/recipes/local/({_ID})$"),                                     h_del_local_recipe),
     (re.compile(rf"^/api/mcps/({_ID})$"),                                                   h_del_mcp),
     (re.compile(rf"^/api/env/(.+)$"),                                                       h_del_env),
     (re.compile(rf"^/api/journal$"),                                                        h_del_journal),

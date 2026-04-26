@@ -1000,6 +1000,27 @@ body {
   border-color: rgba(167, 139, 250, 0.25);
 }
 
+/* Éditeur GUI de recette : liste de paramètres dynamique */
+.recipe-params-list {
+  display: flex; flex-direction: column;
+  gap: 6px;
+}
+.recipe-param-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 1fr auto auto auto;
+  gap: 6px;
+  align-items: center;
+  padding: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.recipe-param-row .input { padding: 4px 8px; font-size: 12px; }
+.recipe-param-row .ws-check { font-size: 11px; }
+@media (max-width: 700px) {
+  .recipe-param-row { grid-template-columns: 1fr 1fr; }
+}
+
 /* Bouton "✎ éditer" sur les recettes locales */
 .recipe-edit-btn {
   position: absolute;
