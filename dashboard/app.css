@@ -962,6 +962,72 @@ body {
   text-align: right;
 }
 
+/* Catalogue de recettes MCP */
+.recipes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--sp-3);
+  margin-top: var(--sp-2);
+}
+.recipe-card {
+  display: flex; align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color var(--d-fast) var(--ease), background var(--d-fast) var(--ease), transform var(--d-fast) var(--ease);
+  font-family: inherit; color: inherit;
+}
+.recipe-card:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  transform: translateY(-2px);
+}
+.recipe-card.is-installed {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.recipe-emoji {
+  font-size: 28px; line-height: 1;
+  flex-shrink: 0;
+}
+.recipe-body { flex: 1; min-width: 0; }
+.recipe-name {
+  font-size: 14px; font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.recipe-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.45;
+  margin-bottom: var(--sp-2);
+}
+.recipe-meta {
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+.recipe-meta .badge { font-size: 10.5px; }
+.recipe-meta a.badge { text-decoration: none; cursor: pointer; }
+.recipe-meta a.badge:hover { background: var(--accent); color: var(--bg); }
+
+.recipe-preview {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--surface-2);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  word-break: break-all;
+}
+.recipe-preview code {
+  font-size: 11.5px;
+  color: var(--text);
+  display: block;
+  white-space: pre-wrap;
+}
+
 /* === COMMAND PALETTE ========================================== */
 .palette-overlay {
   position: fixed; inset: 0;

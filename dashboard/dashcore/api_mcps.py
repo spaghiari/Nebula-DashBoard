@@ -663,3 +663,18 @@ def scan_claude_config() -> tuple[int, dict]:
 
     result["projects"].sort(key=lambda x: x["last_modified"], reverse=True)
     return 200, result
+
+
+# ── Recettes MCP ────────────────────────────────────────────────────────────
+MCP_RECIPES_FILE = DASHBOARD_DIR / "data" / "mcp_recipes.json"
+
+
+def list_mcp_recipes() -> tuple[int, dict]:
+    """Sert le catalogue de recettes MCP (configurations pré-remplies).
+
+    Le frontend affiche ces recettes en grid avec un bouton "Installer" qui
+    demande les params (token, path…) puis crée le MCP via /api/mcps.
+    Substitution des `${KEY}` faite côté client avant le POST.
+    """
+    data = read_json(MCP_RECIPES_FILE, {"version": 1, "recipes": []})
+    return 200, data

@@ -1078,7 +1078,10 @@ async function renderMCPs() {
   newBtn.addEventListener('click', () => modalNewMCP());
   const importBtn = btn('Importer', 'btn', I.download);
   importBtn.addEventListener('click', () => modalImportMCPs());
-  setTopbarActions([importBtn, newBtn]);
+  const recipesBtn = btn('Recettes', 'btn', I.sparkle);
+  recipesBtn.title = 'Catalogue de MCPs populaires pré-configurés';
+  recipesBtn.addEventListener('click', () => modalMcpRecipes());
+  setTopbarActions([recipesBtn, importBtn, newBtn]);
 
   const c = $('#content');
   c.innerHTML = '';
@@ -1230,6 +1233,168 @@ function mcpCard(m) {
   footer.append(test, ed, rm);
   card.appendChild(footer);
   return card;
+}
+
+// ── Recettes MCP : catalogue 1-clic ──────────────────────────────────────────
+async function modalMcpRecipes() {
+  const body = el('div');
+  body.innerHTML = `<div class="page-loader"><div class="spinner"></div><span>Chargement…</span></div>`;
+  const close = btn('Fermer', 'btn-ghost');
+  const { close: doClose } = openModal({
+    title: 'Recettes MCP — installation 1-clic', body, footer: close, wide: true,
+  });
+  close.addEventListener('click', doClose);
+
+  let data;
+  try { data = await API.get('/api/mcps/recipes'); }
+  catch (e) {
+    body.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  const recipes = data.recipes || [];
+  const existingIds = new Set((STATE.mcps || []).map(m => m.id));
+
+  body.innerHTML = `
+    <p class="muted" style="margin:0 0 var(--sp-3) 0;font-size:13px">
+      Sélection de MCPs populaires pré-configurés. Clique pour installer en remplissant les paramètres requis (token, chemin…).
+    </p>
+  `;
+  const grid = el('div', 'recipes-grid');
+  for (const r of recipes) {
+    const installed = existingIds.has(r.id);
+    const card = el('button', 'recipe-card' + (installed ? ' is-installed' : ''));
+    card.type = 'button';
+    card.disabled = installed;
+    const paramCount = (r.params || []).length;
+    card.innerHTML = `
+      <div class="recipe-emoji">${r.emoji || '🔌'}</div>
+      <div class="recipe-body">
+        <div class="recipe-name">${escapeHtml(r.name)}${installed ? ' <span class="badge badge-warn" style="margin-left:6px">déjà installé</span>' : ''}</div>
+        <div class="recipe-desc">${escapeHtml(r.description || '')}</div>
+        <div class="recipe-meta">
+          <span class="badge">${escapeHtml(r.transport || 'stdio')}</span>
+          ${paramCount > 0 ? `<span class="badge badge-info">${paramCount} param${paramCount > 1 ? 's' : ''} requis</span>` : '<span class="badge badge-ok">prêt à l\'emploi</span>'}
+          ${r.docs_url ? `<a class="badge" href="${escapeHtml(r.docs_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">docs ↗</a>` : ''}
+        </div>
+      </div>
+    `;
+    if (!installed) {
+      card.addEventListener('click', () => {
+        doClose();
+        modalInstallRecipe(r);
+      });
+    }
+    grid.appendChild(card);
+  }
+  body.appendChild(grid);
+}
+
+function modalInstallRecipe(recipe) {
+  const body = el('div');
+  const params = recipe.params || [];
+
+  // Substitue ${KEY} dans une string par values[KEY] ; supporte plusieurs occurences
+  const substitute = (s, values) =>
+    String(s).replace(/\$\{([A-Z0-9_]+)\}/g, (_, k) => values[k] !== undefined ? values[k] : `\${${k}}`);
+
+  body.innerHTML = `
+    <div style="display:flex;align-items:center;gap:var(--sp-3);margin-bottom:var(--sp-3)">
+      <div style="font-size:32px">${recipe.emoji || '🔌'}</div>
+      <div>
+        <div style="font-size:15px;font-weight:600">${escapeHtml(recipe.name)}</div>
+        <div class="dim" style="font-size:12px">${escapeHtml(recipe.description || '')}</div>
+      </div>
+    </div>
+    <div class="field">
+      <label class="field-label">ID dans Atelier</label>
+      <input class="input mono" name="mcp_id" value="${escapeHtml(recipe.id)}" autocomplete="off">
+      <div class="dim" style="font-size:11px;margin-top:4px">Auto-suffix si déjà pris.</div>
+    </div>
+  `;
+
+  // Champs des params
+  for (const p of params) {
+    const field = el('div', 'field');
+    field.innerHTML = `
+      <label class="field-label">${escapeHtml(p.label)}${p.required ? ' <span style="color:var(--err)">*</span>' : ''}</label>
+      <input class="input ${p.secret ? '' : 'mono'}"
+             name="param_${escapeHtml(p.key)}"
+             type="${p.secret ? 'password' : 'text'}"
+             placeholder="${escapeHtml(p.placeholder || '')}"
+             autocomplete="off">
+      ${p.help ? `<div class="dim" style="font-size:11px;margin-top:4px">${escapeHtml(p.help)}</div>` : ''}
+    `;
+    body.appendChild(field);
+  }
+
+  // Aperçu de la commande finale (réactif)
+  const previewBox = el('div', 'recipe-preview');
+  previewBox.innerHTML = `<div class="dim" style="font-size:11px;margin-bottom:4px">Commande générée :</div><code class="mono"></code>`;
+  body.appendChild(previewBox);
+
+  const updatePreview = () => {
+    const values = {};
+    for (const p of params) {
+      const v = body.querySelector(`[name=param_${p.key}]`).value;
+      values[p.key] = v || `\${${p.key}}`;
+    }
+    const cmd = recipe.command + (recipe.args && recipe.args.length ? ' ' + recipe.args.map(a => substitute(a, values)).join(' ') : '');
+    previewBox.querySelector('code').textContent = cmd;
+  };
+  body.querySelectorAll('input').forEach(i => i.addEventListener('input', updatePreview));
+  updatePreview();
+
+  const cancel = btn('Annuler', 'btn-ghost');
+  const install = btn('Installer', 'btn-primary', I.plus);
+  const { close } = openModal({
+    title: `Installer « ${recipe.name} »`, body, footer: [cancel, install],
+  });
+  cancel.addEventListener('click', close);
+  install.addEventListener('click', async () => {
+    // Validation params requis
+    const values = {};
+    for (const p of params) {
+      const v = body.querySelector(`[name=param_${p.key}]`).value.trim();
+      if (p.required && !v) { toastErr(`Champ requis : ${p.label}`); return; }
+      values[p.key] = v;
+    }
+    const mcpId = body.querySelector('[name=mcp_id]').value.trim() || recipe.id;
+    // Auto-suffix si l'id existe déjà
+    let finalId = mcpId;
+    let suffix = 2;
+    const existing = new Set((STATE.mcps || []).map(m => m.id));
+    while (existing.has(finalId)) { finalId = `${mcpId}-${suffix++}`; }
+
+    // Construction de la payload avec substitution
+    const env = {};
+    for (const [k, v] of Object.entries(recipe.env || {})) env[k] = substitute(v, values);
+
+    const payload = {
+      id: finalId,
+      name: recipe.name,
+      description: recipe.description || '',
+      transport: recipe.transport || 'stdio',
+      command: substitute(recipe.command || '', values),
+      args: (recipe.args || []).map(a => substitute(a, values)),
+      env,
+      cwd: '',
+      url: '',
+      headers: {},
+      workspaces: [],
+      status: 'disponible',
+    };
+    install.disabled = true;
+    try {
+      await API.post('/api/mcps', payload);
+      toastOk(`MCP « ${finalId} » installé depuis la recette`);
+      close();
+      STATE.loading = true;
+      route();
+    } catch (e) {
+      toastErr(e.message);
+      install.disabled = false;
+    }
+  });
 }
 
 function modalNewMCP(existing = null) {

@@ -1,0 +1,158 @@
+{
+  "version": 1,
+  "updated": "2026-04-26",
+  "recipes": [
+    {
+      "id": "filesystem",
+      "name": "Filesystem",
+      "emoji": "📁",
+      "description": "Accès lecture/écriture à un dossier local. Le LLM peut lister, lire, créer, modifier les fichiers du dossier indiqué.",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "${ROOT_PATH}"],
+      "env": {},
+      "params": [
+        {
+          "key": "ROOT_PATH",
+          "label": "Chemin racine du dossier",
+          "placeholder": "C:\\mon\\dossier",
+          "required": true,
+          "secret": false
+        }
+      ],
+      "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/filesystem"
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "emoji": "🐙",
+      "description": "Lecture/écriture sur tes repos GitHub : issues, PR, code, commits, releases.",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${TOKEN}"
+      },
+      "params": [
+        {
+          "key": "TOKEN",
+          "label": "Token GitHub (classic, scope 'repo')",
+          "placeholder": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "required": true,
+          "secret": true,
+          "help": "Crée un token sur github.com/settings/tokens — scope 'repo' suffit pour la majorité des opérations."
+        }
+      ],
+      "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/github"
+    },
+    {
+      "id": "brave-search",
+      "name": "Brave Search",
+      "emoji": "🔍",
+      "description": "Recherche web via l'API Brave. Privacy-friendly, indépendant de Google.",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "${API_KEY}"
+      },
+      "params": [
+        {
+          "key": "API_KEY",
+          "label": "Clé API Brave Search",
+          "placeholder": "BSAxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "required": true,
+          "secret": true,
+          "help": "Récupère une clé sur api.search.brave.com (plan free 2000 req/mois)."
+        }
+      ],
+      "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/brave-search"
+    },
+    {
+      "id": "fetch",
+      "name": "Fetch HTTP",
+      "emoji": "🌐",
+      "description": "Effectue des requêtes HTTP arbitraires. Utile pour scraper, appeler des APIs publiques, vérifier des URLs.",
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"],
+      "env": {},
+      "params": [],
+      "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/fetch"
+    },
+    {
+      "id": "memory",
+      "name": "Memory",
+      "emoji": "🧠",
+      "description": "Mémoire persistante key-value pour le LLM. Le modèle peut stocker/relire des notes entre sessions.",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {},
+      "params": [],
+      "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/memory"
+    },
+    {
+      "id": "puppeteer",
+      "name": "Puppeteer",
+      "emoji": "🎭",
+      "description": "Navigateur headless pour scraper, screenshoter, interagir avec des pages JS lourdes.",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "env": {},
+      "params": [],
+      "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/puppeteer"
+    },
+    {
+      "id": "postgres",
+      "name": "PostgreSQL",
+      "emoji": "🐘",
+      "description": "Connexion lecture seule à une base PostgreSQL. Le LLM peut interroger les schémas et exécuter des SELECT.",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres", "${CONNECTION}"],
+      "env": {},
+      "params": [
+        {
+          "key": "CONNECTION",
+          "label": "Chaîne de connexion PostgreSQL",
+          "placeholder": "postgresql://user:pass@localhost:5432/dbname",
+          "required": true,
+          "secret": true
+        }
+      ],
+      "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/postgres"
+    },
+    {
+      "id": "slack",
+      "name": "Slack",
+      "emoji": "💬",
+      "description": "Lecture des canaux, messages, threads. Envoi de messages si le bot a les permissions.",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "env": {
+        "SLACK_BOT_TOKEN": "${BOT_TOKEN}",
+        "SLACK_TEAM_ID": "${TEAM_ID}"
+      },
+      "params": [
+        {
+          "key": "BOT_TOKEN",
+          "label": "Bot User OAuth Token",
+          "placeholder": "xoxb-xxxxxxxxxxxxxx",
+          "required": true,
+          "secret": true
+        },
+        {
+          "key": "TEAM_ID",
+          "label": "Team ID (workspace Slack)",
+          "placeholder": "T01234ABCDE",
+          "required": true,
+          "secret": false
+        }
+      ],
+      "docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/slack"
+    }
+  ]
+}
