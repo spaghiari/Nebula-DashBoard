@@ -1416,17 +1416,18 @@ async function modalMcpRecipes() {
 
     const grid = el('div', 'recipes-grid');
     for (const r of list) {
-      const installed = existingIds.has(r.id);
-      // Pour les recettes locales, on garde la carte cliquable même si installée
-      // (bouton ✎ d'édition reste accessible). Pour publiques, on désactive.
-      const isClickable = !installed || isLocal;
-      const card = el('div', 'recipe-card' + (installed ? ' is-installed' : '') + (isLocal ? ' is-local' : ''));
+      // Compte combien d'instances de cette recette sont déjà installées
+      // (recettes = templates : on peut en créer plusieurs avec des creds différents)
+      const instances = (STATE.mcps || []).filter(m =>
+        m.id === r.id || m.id.startsWith(r.id + '-')
+      ).length;
+      const card = el('div', 'recipe-card' + (isLocal ? ' is-local' : ''));
       const paramCount = (r.params || []).length;
       card.innerHTML = `
-        ${isLocal ? '<button class="recipe-edit-btn" type="button" title="Éditer la définition (ouvre mcp_recipes.local.json)">✎</button>' : ''}
+        ${isLocal ? '<button class="recipe-edit-btn" type="button" title="Éditer la définition de cette recette">✎</button>' : ''}
         <div class="recipe-emoji">${r.emoji || '🔌'}</div>
         <div class="recipe-body">
-          <div class="recipe-name">${escapeHtml(r.name)}${installed ? ' <span class="badge badge-warn" style="margin-left:6px">déjà installé</span>' : ''}</div>
+          <div class="recipe-name">${escapeHtml(r.name)}${instances > 0 ? ` <span class="badge badge-info" style="margin-left:6px" title="Tu as déjà ${instances} instance(s) de cette recette installée(s)">${instances}× installée${instances > 1 ? 's' : ''}</span>` : ''}</div>
           <div class="recipe-desc">${escapeHtml(r.description || '')}</div>
           <div class="recipe-meta">
             <span class="badge">${escapeHtml(r.transport || 'stdio')}</span>
@@ -1444,14 +1445,13 @@ async function modalMcpRecipes() {
           modalEditRecipe(r);
         });
       }
-      // Click sur la carte → install (sauf si déjà installée)
-      if (!installed) {
-        card.style.cursor = 'pointer';
-        card.addEventListener('click', () => {
-          doClose();
-          modalInstallRecipe(r);
-        });
-      }
+      // Click sur la carte → install (toujours actif, même si déjà installé une fois)
+      // L'install modal proposera un id auto-suffixé (ex: opnsense-2) pour 2e instance
+      card.style.cursor = 'pointer';
+      card.addEventListener('click', () => {
+        doClose();
+        modalInstallRecipe(r);
+      });
       grid.appendChild(card);
     }
     body.appendChild(grid);
@@ -1469,18 +1469,30 @@ function modalInstallRecipe(recipe) {
   const substitute = (s, values) =>
     String(s).replace(/\$\{([A-Z0-9_]+)\}/g, (_, k) => values[k] !== undefined ? values[k] : `\${${k}}`);
 
+  // Calcule un id pré-suggéré : auto-suffix si la base est déjà prise.
+  // Permet d'installer la même recette N fois (ex: 2 firewalls OPNsense).
+  const existingIds = new Set((STATE.mcps || []).map(m => m.id));
+  const instances = [...existingIds].filter(id => id === recipe.id || id.startsWith(recipe.id + '-')).length;
+  let suggestedId = recipe.id;
+  if (existingIds.has(suggestedId)) {
+    let n = 2;
+    while (existingIds.has(`${recipe.id}-${n}`)) n++;
+    suggestedId = `${recipe.id}-${n}`;
+  }
+
   body.innerHTML = `
     <div style="display:flex;align-items:center;gap:var(--sp-3);margin-bottom:var(--sp-3)">
       <div style="font-size:32px">${recipe.emoji || '🔌'}</div>
       <div>
         <div style="font-size:15px;font-weight:600">${escapeHtml(recipe.name)}</div>
         <div class="dim" style="font-size:12px">${escapeHtml(recipe.description || '')}</div>
+        ${instances > 0 ? `<div style="font-size:11px;color:var(--info);margin-top:4px">ℹ ${instances} instance(s) déjà installée(s) — un nouvel ID est suggéré ci-dessous</div>` : ''}
       </div>
     </div>
     <div class="field">
       <label class="field-label">ID dans Atelier</label>
-      <input class="input mono" name="mcp_id" value="${escapeHtml(recipe.id)}" autocomplete="off">
-      <div class="dim" style="font-size:11px;margin-top:4px">Auto-suffix si déjà pris.</div>
+      <input class="input mono" name="mcp_id" value="${escapeHtml(suggestedId)}" autocomplete="off">
+      <div class="dim" style="font-size:11px;margin-top:4px">Tu peux personnaliser pour distinguer (ex: <code class="mono">opnsense-prod</code>, <code class="mono">opnsense-dev</code>). Auto-suffix si l'ID est déjà pris.</div>
     </div>
   `;
 
