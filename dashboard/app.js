@@ -1283,6 +1283,9 @@ function mcpCard(m) {
   const diag = btn('Diag', 'btn-sm btn-ghost', I.alert);
   diag.title = 'Diagnostic complet : binaire, env, dernier test, vue Claude, erreurs récentes';
   diag.addEventListener('click', () => modalDiagnoseMcp(m.id));
+  const recipe = btn('', 'btn-sm btn-ghost btn-icon-only', I.sparkle);
+  recipe.title = 'Sauver comme recette locale (template réutilisable)';
+  recipe.addEventListener('click', () => modalSaveAsRecipe(m));
   const ed = btn('Modifier', 'btn-sm btn-ghost', I.edit);
   ed.addEventListener('click', () => modalNewMCP(m));
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
@@ -1291,7 +1294,7 @@ function mcpCard(m) {
     try { await API.del(`/api/mcps/${m.id}`); toastOk('Supprimé'); STATE.loading = true; route(); }
     catch (e) { toastErr(e.message); }
   }, { danger: true }));
-  footer.append(test, diag, ed, rm);
+  footer.append(test, diag, recipe, ed, rm);
   card.appendChild(footer);
   return card;
 }
@@ -1651,9 +1654,50 @@ function modalInstallRecipe(recipe) {
   });
 }
 
+// Convertit un MCP du registre en template de recette locale.
+// Heuristique : chaque env var devient un param ${KEY}, secret=true si le nom
+// suggère un secret (token/key/secret/password/auth/credential).
+function mcpToRecipeTemplate(mcp) {
+  const SECRET_RX = /token|key|secret|password|auth|credential|api_?key|bearer/i;
+  const params = [];
+  const env = {};
+  for (const [k, v] of Object.entries(mcp.env || {})) {
+    params.push({
+      key: k,
+      label: k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+      placeholder: '',
+      required: true,
+      secret: SECRET_RX.test(k),
+    });
+    env[k] = `\${${k}}`;
+  }
+  return {
+    id: mcp.id,
+    name: mcp.name || mcp.id,
+    emoji: mcp.emoji || '🔌',
+    description: mcp.description || '',
+    transport: mcp.transport || 'stdio',
+    command: mcp.command || '',
+    args: mcp.args || [],
+    url: mcp.url || '',
+    env,
+    params,
+    docs_url: '',
+  };
+}
+
+function modalSaveAsRecipe(mcp) {
+  const template = mcpToRecipeTemplate(mcp);
+  // Ouvre l'éditeur en mode "création depuis MCP" : id éditable, pas de delete
+  modalEditRecipe(template, { fromMcp: true, sourceMcpId: mcp.id });
+}
+
 // ── Éditeur GUI de recette locale ────────────────────────────────────────────
-function modalEditRecipe(existing) {
-  const isEdit = !!existing;
+function modalEditRecipe(existing, opts = {}) {
+  const fromMcp = !!opts.fromMcp;
+  // En mode fromMcp, on est techniquement en CRÉATION (pas d'édition d'une
+  // recette qui existerait déjà). Donc on déverrouille l'id.
+  const isEdit = !!existing && !fromMcp;
   const r = existing ? JSON.parse(JSON.stringify(existing)) : {
     id: '', name: '', emoji: '🔌', description: '',
     transport: 'stdio', command: '', args: [], env: {}, url: '',
@@ -1662,6 +1706,19 @@ function modalEditRecipe(existing) {
 
   const body = el('div');
   body.innerHTML = `
+    ${fromMcp ? `
+      <div class="callout callout-info" style="margin-bottom:var(--sp-3)">
+        <div>
+          <strong>📋 Conversion MCP → recette</strong>
+          <p style="margin:4px 0 0;font-size:12px">
+            Chaque variable d'env de ton MCP a été convertie en paramètre <code class="mono">\${KEY}</code>.
+            Les noms suggérant un secret (token, key, password…) sont marqués <code class="mono">secret: true</code>.
+            <strong>Vérifie/ajuste</strong> les params ci-dessous avant de sauver.
+            ${r.id ? `Si tu gardes l'id <code class="mono">${escapeHtml(r.id)}</code>, ça écrasera une recette locale homonyme existante (sinon utilise un id différent).` : ''}
+          </p>
+        </div>
+      </div>
+    ` : ''}
     <div class="field-row">
       <div class="field" style="max-width:80px"><label class="field-label">Emoji</label><input class="input" name="emoji" value="${escapeHtml(r.emoji || '🔌')}" maxlength="4"></div>
       <div class="field" style="flex:1"><label class="field-label">ID *</label><input class="input mono" name="id" value="${escapeHtml(r.id)}" placeholder="mon-mcp" autocomplete="off" ${isEdit ? 'disabled' : ''}></div>
@@ -1745,7 +1802,9 @@ function modalEditRecipe(existing) {
   footer.push(save);
 
   const { close } = openModal({
-    title: isEdit ? `Modifier la recette « ${r.name || r.id} »` : 'Nouvelle recette locale',
+    title: isEdit
+      ? `Modifier la recette « ${r.name || r.id} »`
+      : (fromMcp ? `Sauver « ${opts.sourceMcpId} » comme recette` : 'Nouvelle recette locale'),
     body, footer, wide: true,
   });
   cancel.addEventListener('click', close);
