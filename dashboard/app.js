@@ -1283,9 +1283,6 @@ function mcpCard(m) {
   const diag = btn('Diag', 'btn-sm btn-ghost', I.alert);
   diag.title = 'Diagnostic complet : binaire, env, dernier test, vue Claude, erreurs récentes';
   diag.addEventListener('click', () => modalDiagnoseMcp(m.id));
-  const recipe = btn('', 'btn-sm btn-ghost btn-icon-only', I.sparkle);
-  recipe.title = 'Sauver comme recette locale (template réutilisable)';
-  recipe.addEventListener('click', () => modalSaveAsRecipe(m));
   const ed = btn('Modifier', 'btn-sm btn-ghost', I.edit);
   ed.addEventListener('click', () => modalNewMCP(m));
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
@@ -1294,7 +1291,7 @@ function mcpCard(m) {
     try { await API.del(`/api/mcps/${m.id}`); toastOk('Supprimé'); STATE.loading = true; route(); }
     catch (e) { toastErr(e.message); }
   }, { danger: true }));
-  footer.append(test, diag, recipe, ed, rm);
+  footer.append(test, diag, ed, rm);
   card.appendChild(footer);
   return card;
 }
@@ -1978,7 +1975,20 @@ function modalNewMCP(existing = null) {
 
   const cancel = btn('Annuler', 'btn-ghost');
   const save = btn(isEdit ? 'Mettre à jour' : 'Créer', 'btn-primary');
-  const { close } = openModal({ title: isEdit ? `Modifier ${m.id}` : 'Nouveau MCP', body, footer: [cancel, save], wide: true });
+  const footer = [cancel];
+  // En mode édition d'un MCP existant : bouton "Sauver comme recette"
+  // permet de transformer une config qui marche en template réutilisable.
+  if (isEdit) {
+    const saveAsRecipe = btn('Sauver comme recette', 'btn-ghost', I.sparkle);
+    saveAsRecipe.title = 'Crée une recette locale (template) à partir de ce MCP — réutilisable pour installer d\'autres instances avec d\'autres credentials';
+    saveAsRecipe.addEventListener('click', () => {
+      close();
+      modalSaveAsRecipe(m);
+    });
+    footer.push(saveAsRecipe);
+  }
+  footer.push(save);
+  const { close } = openModal({ title: isEdit ? `Modifier ${m.id}` : 'Nouveau MCP', body, footer, wide: true });
   cancel.addEventListener('click', close);
 
   const parseKV = (text) => {
