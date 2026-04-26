@@ -1382,8 +1382,12 @@ async function modalMcpRecipes() {
       <div class="dim" style="font-size:11px">${localRecipes.length} recette(s) dans <code class="mono" style="font-size:11px">dashboard/data/mcp_recipes.local.json</code> (gitignored)</div>
     </div>
   `;
-  const editLocalBtn = btn(data.local_file_exists ? 'Éditer' : 'Créer + éditer', 'btn-sm', I.edit || I.code);
-  editLocalBtn.addEventListener('click', async () => {
+  // Note : openLocalFile est défini plus bas avec la fonction renderSection qui en a besoin
+  const editLocalBtn = btn(data.local_file_exists ? 'Éditer le fichier' : 'Créer + éditer', 'btn-sm', I.edit || I.code);
+  localBar.appendChild(editLocalBtn);
+  body.appendChild(localBar);
+
+  const openLocalFile = async () => {
     try {
       if (!data.local_file_exists) {
         await API.post('/api/mcps/recipes/ensure-local', {});
@@ -1392,25 +1396,28 @@ async function modalMcpRecipes() {
       const r = await API.post('/api/open', { target: 'mcp-recipes-local' });
       if (r.message) toastOk(r.message);
     } catch (e) { toastErr(e.message); }
-  });
-  localBar.appendChild(editLocalBtn);
-  body.appendChild(localBar);
+  };
+  // Branche le bouton du bandeau (défini plus haut) sur openLocalFile
+  editLocalBtn.addEventListener('click', openLocalFile);
 
   const renderSection = (title, list) => {
     if (!list.length) return;
+    const isLocal = list[0].source === 'local';
     const label = el('div', 'section-label');
     label.style.cssText = 'margin-top:var(--sp-3);margin-bottom:var(--sp-2)';
-    label.innerHTML = `<span class="num">${list[0].source === 'local' ? '🔒' : '📦'}</span> ${title} <span class="right" style="color:var(--text-muted);font-weight:400">${list.length} recette${list.length > 1 ? 's' : ''}</span>`;
+    label.innerHTML = `<span class="num">${isLocal ? '🔒' : '📦'}</span> ${title} <span class="right" style="color:var(--text-muted);font-weight:400">${list.length} recette${list.length > 1 ? 's' : ''}</span>`;
     body.appendChild(label);
 
     const grid = el('div', 'recipes-grid');
     for (const r of list) {
       const installed = existingIds.has(r.id);
-      const card = el('button', 'recipe-card' + (installed ? ' is-installed' : ''));
-      card.type = 'button';
-      card.disabled = installed;
+      // Pour les recettes locales, on garde la carte cliquable même si installée
+      // (bouton ✎ d'édition reste accessible). Pour publiques, on désactive.
+      const isClickable = !installed || isLocal;
+      const card = el('div', 'recipe-card' + (installed ? ' is-installed' : '') + (isLocal ? ' is-local' : ''));
       const paramCount = (r.params || []).length;
       card.innerHTML = `
+        ${isLocal ? '<button class="recipe-edit-btn" type="button" title="Éditer la définition (ouvre mcp_recipes.local.json)">✎</button>' : ''}
         <div class="recipe-emoji">${r.emoji || '🔌'}</div>
         <div class="recipe-body">
           <div class="recipe-name">${escapeHtml(r.name)}${installed ? ' <span class="badge badge-warn" style="margin-left:6px">déjà installé</span>' : ''}</div>
@@ -1422,7 +1429,17 @@ async function modalMcpRecipes() {
           </div>
         </div>
       `;
+      // Bouton édition (recettes locales uniquement) — n'ouvre pas la modal install
+      const editBtn = card.querySelector('.recipe-edit-btn');
+      if (editBtn) {
+        editBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          openLocalFile();
+        });
+      }
+      // Click sur la carte → install (sauf si déjà installée)
       if (!installed) {
+        card.style.cursor = 'pointer';
         card.addEventListener('click', () => {
           doClose();
           modalInstallRecipe(r);
