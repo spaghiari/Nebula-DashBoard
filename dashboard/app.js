@@ -541,6 +541,7 @@ async function renderHome() {
   }
 
   // Sanity check
+  right.appendChild(el('div', 'section-label', '<span class="num">B.</span> Sanity check'));
   const sanityCard = el('div', 'card sanity-card');
   sanityCard.innerHTML = `<div class="card-header"><h3 class="card-title">${I.shield} Sanity check</h3><button class="icon-btn" data-refresh aria-label="Rafraîchir">${I.refresh}</button></div>`;
   const sanityBody = el('div');
@@ -550,6 +551,7 @@ async function renderHome() {
   sanityCard.querySelector('[data-refresh]').addEventListener('click', () => loadSanity(sanityBody));
 
   // Journal
+  right.appendChild(el('div', 'section-label', '<span class="num">C.</span> Journal'));
   const journalCard = el('div', 'card');
   journalCard.innerHTML = `<div class="card-header"><h3 class="card-title">${I.book} Journal</h3><button class="icon-btn btn-danger" data-clear aria-label="Tout effacer">${I.trash}</button></div>`;
   const jForm = el('form', 'journal-form');
