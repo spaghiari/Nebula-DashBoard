@@ -1044,6 +1044,28 @@ body {
   color: var(--bg);
   transform: scale(1.1);
 }
+.recipe-delete-btn {
+  position: absolute;
+  top: 6px; right: 36px;
+  width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1;
+  transition: all var(--d-fast) var(--ease);
+  font-family: inherit;
+}
+.recipe-delete-btn:hover {
+  border-color: var(--danger, #e5484d);
+  background: var(--danger, #e5484d);
+  color: #fff;
+  transform: scale(1.1);
+}
 .recipe-emoji {
   font-size: 28px; line-height: 1;
   flex-shrink: 0;

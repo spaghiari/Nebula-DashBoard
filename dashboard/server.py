@@ -59,6 +59,7 @@ from dashcore.api_plugins import (
     list_skills_global, list_skills_for_workspace,
     create_skill, delete_skill, get_skill_content, save_skill_content,
     copy_skill_to_workspace,
+    preview_github_skills, import_github_skills,
     get_skill_detail, get_skill_file, write_skill_file, delete_skill_file,
     list_skill_workspace_usage,
     list_agents, list_commands,
@@ -206,6 +207,8 @@ def h_get_skill_usage(q, b, name):          return 200, {"workspaces": list_skil
 
 def h_post_create_skill(q, b):              return create_skill(b)
 def h_post_copy_skill(q, b):                return copy_skill_to_workspace(b)
+def h_post_skills_import_preview(q, b):     return preview_github_skills(b)
+def h_post_skills_import(q, b):             return import_github_skills(b)
 def h_post_skill_content(q, b, scope, name): return save_skill_content(scope, name, b.get("content", ""))
 def h_post_skill_file(q, b, scope, name):   return write_skill_file(scope, name, b.get("path", ""), b.get("content", ""))
 
@@ -392,6 +395,8 @@ ROUTES_POST = [
     # Skills
     (re.compile(rf"^/api/skills$"),                                                         h_post_create_skill),
     (re.compile(rf"^/api/skills/copy$"),                                                    h_post_copy_skill),
+    (re.compile(rf"^/api/skills/import/preview$"),                                          h_post_skills_import_preview),
+    (re.compile(rf"^/api/skills/import$"),                                                  h_post_skills_import),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/content$"),                              h_post_skill_content),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/file$"),                                 h_post_skill_file),
     # Plugins

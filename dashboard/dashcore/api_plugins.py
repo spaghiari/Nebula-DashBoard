@@ -733,6 +733,177 @@ def copy_skill_to_workspace(payload: dict) -> tuple[int, dict]:
     return 201, {"ok": True, "path": str(dst)}
 
 
+_GITHUB_URL_RE = re.compile(
+    r"^(?:https?://github\.com/|git@github\.com:)?"
+    r"([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?$"
+)
+
+
+def _parse_github_url(url: str) -> tuple[str, str] | None:
+    """Accepte 'user/repo', 'https://github.com/user/repo', 'https://github.com/user/repo.git'."""
+    s = (url or "").strip()
+    if not s:
+        return None
+    m = _GITHUB_URL_RE.match(s)
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
+def _clone_github_shallow(owner: str, repo: str, branch: str | None) -> tuple[Path, str] | None:
+    """Clone shallow dans un temp dir. Retourne (path, commit_sha) ou None."""
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="atelier-skill-import-"))
+    url = f"https://github.com/{owner}/{repo}.git"
+    cmd = ["git", "clone", "--depth", "1"]
+    if branch:
+        cmd += ["--branch", branch]
+    cmd += [url, str(tmp)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if r.returncode != 0:
+            shutil.rmtree(tmp, ignore_errors=True)
+            return None
+        sha = subprocess.run(
+            ["git", "-C", str(tmp), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10
+        ).stdout.strip()
+        return tmp, sha
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        shutil.rmtree(tmp, ignore_errors=True)
+        return None
+
+
+def _find_skills_in_repo(repo_dir: Path) -> list[dict]:
+    """Cherche tous les dossiers contenant un SKILL.md (max 3 niveaux). Retourne meta."""
+    out = []
+    seen = set()
+    # Priorité au sous-dossier 'skills/' s'il existe (convention)
+    candidates = []
+    skills_root = repo_dir / "skills"
+    if skills_root.is_dir():
+        candidates.append(skills_root)
+    candidates.append(repo_dir)
+
+    for root in candidates:
+        for skill_md in root.rglob("SKILL.md"):
+            sub = skill_md.parent
+            # Ignore si dans .git ou node_modules
+            if any(p in {".git", "node_modules", ".github"} for p in sub.parts):
+                continue
+            try:
+                rel = sub.relative_to(repo_dir)
+            except ValueError:
+                continue
+            key = str(rel)
+            if key in seen:
+                continue
+            seen.add(key)
+            meta = parse_skill_frontmatter(skill_md)
+            out.append({
+                "id": sub.name,
+                "rel_path": key.replace("\\", "/"),
+                "name": meta.get("name") or sub.name,
+                "description": meta.get("description") or "",
+            })
+    return out
+
+
+def preview_github_skills(payload: dict) -> tuple[int, dict]:
+    parsed = _parse_github_url(payload.get("url", ""))
+    if not parsed:
+        return 400, {"error": "URL GitHub invalide (attendu: user/repo ou https://github.com/user/repo)"}
+    owner, repo = parsed
+    branch = (payload.get("branch") or "").strip() or None
+    if branch and not re.match(r"^[A-Za-z0-9._/-]{1,80}$", branch):
+        return 400, {"error": "branche invalide"}
+    cloned = _clone_github_shallow(owner, repo, branch)
+    if cloned is None:
+        return 502, {"error": "git clone a échoué (repo introuvable, privé, ou git absent)"}
+    tmp, sha = cloned
+    try:
+        skills = _find_skills_in_repo(tmp)
+        if not skills:
+            return 404, {"error": "Aucun SKILL.md détecté dans ce repo"}
+        return 200, {
+            "owner": owner, "repo": repo, "branch": branch or "default",
+            "commit": sha, "skills": skills,
+        }
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def import_github_skills(payload: dict) -> tuple[int, dict]:
+    parsed = _parse_github_url(payload.get("url", ""))
+    if not parsed:
+        return 400, {"error": "URL GitHub invalide"}
+    owner, repo = parsed
+    branch = (payload.get("branch") or "").strip() or None
+    scope = (payload.get("scope") or "").strip()
+    selected = payload.get("skills") or []  # liste de rel_path
+    overwrite = bool(payload.get("overwrite"))
+
+    if not isinstance(selected, list) or not selected:
+        return 400, {"error": "Aucun skill sélectionné"}
+
+    parent = _skill_dir(scope)
+    if parent is None:
+        return 400, {"error": "scope invalide (global ou workspace:<id>)"}
+
+    cloned = _clone_github_shallow(owner, repo, branch)
+    if cloned is None:
+        return 502, {"error": "git clone a échoué"}
+    tmp, sha = cloned
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        imported = []
+        skipped = []
+        errors = []
+        now_iso = dt.datetime.now().isoformat(timespec="seconds")
+
+        for rel in selected:
+            rel = str(rel).replace("\\", "/").strip("/")
+            if ".." in rel.split("/"):
+                errors.append({"rel": rel, "error": "chemin invalide"})
+                continue
+            src = tmp / rel
+            if not (src / "SKILL.md").exists():
+                errors.append({"rel": rel, "error": "SKILL.md introuvable côté source"})
+                continue
+            dst = parent / src.name
+            if dst.exists():
+                if not overwrite:
+                    skipped.append({"name": src.name, "reason": "existe déjà"})
+                    continue
+                _remove_dir_or_link(dst)
+            try:
+                shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".git", "node_modules"))
+                # Métadonnées de provenance pour futur "vérifier MAJ"
+                origin = {
+                    "repo": f"{owner}/{repo}",
+                    "branch": branch or "default",
+                    "commit": sha,
+                    "source_path": rel,
+                    "imported_at": now_iso,
+                }
+                (dst / ".atelier-origin.json").write_text(
+                    json.dumps(origin, indent=2), encoding="utf-8"
+                )
+                imported.append({"name": src.name, "path": str(dst)})
+            except OSError as e:
+                errors.append({"rel": rel, "error": str(e)})
+
+        return 200, {
+            "ok": True,
+            "imported": imported,
+            "skipped": skipped,
+            "errors": errors,
+            "commit": sha,
+        }
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _file_scope_path(kind: str, scope: str, name: str) -> Path | None:
     """kind in {agents, commands}. Retourne le .md du fichier."""
     if not safe_id(name):

@@ -1482,7 +1482,7 @@ async function modalMcpRecipes() {
       const card = el('div', 'recipe-card' + (isLocal ? ' is-local' : ''));
       const paramCount = (r.params || []).length;
       card.innerHTML = `
-        ${isLocal ? '<button class="recipe-edit-btn" type="button" title="Éditer la définition de cette recette">✎</button>' : ''}
+        ${isLocal ? '<button class="recipe-edit-btn" type="button" title="Éditer la définition de cette recette">✎</button><button class="recipe-delete-btn" type="button" title="Supprimer cette recette locale">🗑</button>' : ''}
         <div class="recipe-emoji">${r.emoji || '🔌'}</div>
         <div class="recipe-body">
           <div class="recipe-name">${escapeHtml(r.name)}${instances > 0 ? ` <span class="badge badge-info" style="margin-left:6px" title="Tu as déjà ${instances} instance(s) de cette recette installée(s)">${instances}× installée${instances > 1 ? 's' : ''}</span>` : ''}</div>
@@ -1501,6 +1501,21 @@ async function modalMcpRecipes() {
           e.stopPropagation();
           doClose();
           modalEditRecipe(r);
+        });
+      }
+      // Bouton suppression rapide (recettes locales) — confirm direct
+      const delBtn = card.querySelector('.recipe-delete-btn');
+      if (delBtn) {
+        delBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          confirmDialog(`Supprimer la recette « ${r.name || r.id} » ?`, async () => {
+            try {
+              await API.del(`/api/mcps/recipes/local/${r.id}`);
+              toastOk(`Recette '${r.id}' supprimée`);
+              doClose();
+              modalMcpRecipes();
+            } catch (err) { toastErr(err.message); }
+          }, { danger: true });
         });
       }
       // Click sur la carte → install (toujours actif, même si déjà installé une fois)
@@ -1779,7 +1794,7 @@ function modalEditRecipe(existing, opts = {}) {
   const save = btn(isEdit ? 'Enregistrer' : 'Créer la recette', 'btn-primary', I.check || I.plus);
   const footer = [cancel];
   if (isEdit) {
-    const del = btn('', 'btn-ghost btn-icon-only btn-danger', I.trash);
+    const del = btn('Supprimer', 'btn-ghost btn-danger', I.trash);
     del.title = 'Supprimer cette recette locale';
     del.addEventListener('click', () => {
       confirmDialog(`Supprimer la recette « ${r.name || r.id} » ?`, async () => {
@@ -3972,7 +3987,10 @@ async function renderSkills() {
   setBreadcrumbs([{ label: 'Skills' }]);
   const newBtn = btn('Nouveau skill', 'btn-primary', I.plus);
   newBtn.addEventListener('click', () => modalNewSkill());
-  setTopbarActions([newBtn]);
+  const importBtn = btn('Importer GitHub', 'btn-ghost', '📥');
+  importBtn.title = 'Importer un skill depuis un repo GitHub (méthode manuelle automatisée)';
+  importBtn.addEventListener('click', () => modalImportSkillsFromGitHub());
+  setTopbarActions([importBtn, newBtn]);
 
   const c = $('#content');
   c.innerHTML = '';
@@ -5249,6 +5267,130 @@ function modalHooks(wsId) {
       } catch (e) { toastErr(e.message); }
     });
   })();
+}
+
+function modalImportSkillsFromGitHub() {
+  const body = el('div');
+  const wsOptions = (STATE.workspaces || [])
+    .map(w => `<option value="workspace:${escapeHtml(w.id)}">${escapeHtml(w.name || w.id)}</option>`)
+    .join('');
+  body.innerHTML = `
+    <div class="callout callout-info" style="margin-bottom:var(--sp-3)">
+      <div>
+        <strong>📥 Import depuis GitHub</strong>
+        <p style="margin:4px 0 0;font-size:12px">
+          Clone un repo public GitHub, détecte les skills (dossiers contenant <code class="mono">SKILL.md</code>),
+          et copie ceux que tu sélectionnes vers le scope de ton choix.
+          Une trace de provenance (<code class="mono">.atelier-origin.json</code>) est ajoutée à chaque skill importé.
+        </p>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field" style="flex:3">
+        <label class="field-label">Repo GitHub *</label>
+        <input class="input mono" name="url" placeholder="czlonkowski/n8n-skills ou https://github.com/.../..." autocomplete="off">
+      </div>
+      <div class="field" style="flex:1">
+        <label class="field-label">Branche</label>
+        <input class="input mono" name="branch" placeholder="main" autocomplete="off">
+      </div>
+    </div>
+    <div class="field">
+      <label class="field-label">Cible *</label>
+      <select class="select" name="scope">
+        <option value="global">Global (~/.claude/skills/)</option>
+        ${wsOptions}
+      </select>
+    </div>
+    <div class="field-row" style="align-items:flex-end">
+      <button type="button" class="btn btn-primary" data-analyze>🔍 Analyser le repo</button>
+      <label class="ws-check" style="margin:0;padding:6px 10px"><input type="checkbox" name="overwrite"> <span>Écraser si existe déjà</span></label>
+    </div>
+    <div data-result style="margin-top:var(--sp-3)"></div>
+  `;
+
+  const cancel = btn('Fermer', 'btn-ghost');
+  const importBtn = btn('Importer la sélection', 'btn-primary', '📦');
+  importBtn.disabled = true;
+  const { close } = openModal({ title: 'Importer des skills depuis GitHub', body, footer: [cancel, importBtn], wide: true });
+  cancel.addEventListener('click', close);
+
+  const resultHost = body.querySelector('[data-result]');
+  const get = (n) => body.querySelector(`[name=${n}]`).value.trim();
+  let lastPreview = null;
+
+  body.querySelector('[data-analyze]').addEventListener('click', async () => {
+    const url = get('url');
+    if (!url) { toastErr('URL requise'); return; }
+    resultHost.innerHTML = '<div class="dim" style="padding:var(--sp-2)">⏳ Clone en cours…</div>';
+    importBtn.disabled = true;
+    try {
+      const r = await API.post('/api/skills/import/preview', { url, branch: get('branch') });
+      lastPreview = r;
+      if (!r.skills || !r.skills.length) {
+        resultHost.innerHTML = '<div class="callout callout-warn">Aucun SKILL.md détecté.</div>';
+        return;
+      }
+      resultHost.innerHTML = `
+        <div class="section-label" style="margin-bottom:var(--sp-2)">
+          <span class="num">📦</span> ${r.skills.length} skill${r.skills.length > 1 ? 's' : ''} détecté${r.skills.length > 1 ? 's' : ''}
+          <span class="right dim" style="font-weight:400">
+            ${escapeHtml(r.owner)}/${escapeHtml(r.repo)} · ${escapeHtml(r.branch)} · <code class="mono">${escapeHtml((r.commit || '').slice(0, 7))}</code>
+          </span>
+        </div>
+        <div class="recipes-grid" data-skill-list></div>
+      `;
+      const list = resultHost.querySelector('[data-skill-list]');
+      for (const s of r.skills) {
+        const card = el('label', 'recipe-card');
+        card.style.cursor = 'pointer';
+        card.innerHTML = `
+          <input type="checkbox" data-rel="${escapeHtml(s.rel_path)}" checked style="margin-right:8px">
+          <div class="recipe-emoji">🧠</div>
+          <div class="recipe-body">
+            <div class="recipe-name">${escapeHtml(s.name)}</div>
+            <div class="recipe-desc">${escapeHtml(s.description || '(pas de description)')}</div>
+            <div class="recipe-meta">
+              <span class="badge mono">${escapeHtml(s.rel_path)}</span>
+            </div>
+          </div>
+        `;
+        list.appendChild(card);
+      }
+      importBtn.disabled = false;
+    } catch (e) {
+      resultHost.innerHTML = `<div class="callout callout-warn">${escapeHtml(e.message || 'Échec analyse')}</div>`;
+    }
+  });
+
+  importBtn.addEventListener('click', async () => {
+    if (!lastPreview) return;
+    const selected = Array.from(resultHost.querySelectorAll('input[type=checkbox][data-rel]:checked'))
+      .map(cb => cb.dataset.rel);
+    if (!selected.length) { toastErr('Aucun skill sélectionné'); return; }
+    const payload = {
+      url: get('url'),
+      branch: get('branch'),
+      scope: get('scope'),
+      skills: selected,
+      overwrite: body.querySelector('[name=overwrite]').checked,
+    };
+    importBtn.disabled = true;
+    try {
+      const r = await API.post('/api/skills/import', payload);
+      const parts = [];
+      if (r.imported?.length) parts.push(`${r.imported.length} importé(s)`);
+      if (r.skipped?.length) parts.push(`${r.skipped.length} ignoré(s) (existe déjà)`);
+      if (r.errors?.length) parts.push(`${r.errors.length} erreur(s)`);
+      toastOk(parts.join(' · ') || 'Terminé');
+      close();
+      STATE.loading = true;
+      route();
+    } catch (e) {
+      toastErr(e.message);
+      importBtn.disabled = false;
+    }
+  });
 }
 
 function modalNewSkill() {
