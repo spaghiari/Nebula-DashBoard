@@ -19,7 +19,7 @@ from dashcore.config import SKILLS_LIBRARY_DIR, CLAUDE_HOME
 from dashcore.helpers import (
     _remove_dir_or_link, parse_skill_frontmatter, safe_id, resolve_ws_dir,
 )
-from dashcore.api_workspaces import list_workspaces
+from dashcore.workspace_io import list_workspaces
 
 
 def _ensure_library() -> None:

@@ -35,7 +35,7 @@ from dashcore.helpers import (
     load_env_local, read_json, resolve_cli, resolve_ws_dir, safe_id,
     substitute_env, write_json,
 )
-from dashcore.api_workspaces import list_workspaces
+from dashcore.workspace_io import list_workspaces
 
 
 def mcp_live_check(ws_id: str) -> tuple[int, dict]:

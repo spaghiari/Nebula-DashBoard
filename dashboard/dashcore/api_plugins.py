@@ -34,7 +34,8 @@ from dashcore.helpers import (
     _remove_dir_or_link, parse_skill_frontmatter, read_json,
     resolve_cli, resolve_ws_dir, safe_id, write_json,
 )
-from dashcore.api_workspaces import list_workspaces, _workspace_settings_path
+from dashcore.workspace_io import list_workspaces
+from dashcore.api_workspaces import _workspace_settings_path
 
 
 def list_plugins() -> dict:
@@ -707,8 +708,6 @@ def list_skill_workspace_usage(skill_name: str) -> list[str]:
     if not safe_id(skill_name):
         return []
     out = []
-    # Import tardif pour éviter le cycle
-    from dashcore.api_workspaces import list_workspaces
     for w in list_workspaces():
         skill_path = resolve_ws_dir(w["id"]) / ".claude" / "skills" / skill_name
         if skill_path.exists():
