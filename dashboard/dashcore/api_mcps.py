@@ -203,8 +203,9 @@ def add_or_update_mcp(payload: dict) -> tuple[int, dict]:
         else:
             mcps[idx] = clean
         write_json(MCP_REGISTRY, data)
-
-    synced = _auto_sync(affected)
+        # Sync sous le verrou : garantit que les .mcp.json reflètent
+        # exactement le registre qu'on vient d'écrire (pas d'interleaving).
+        synced = _auto_sync(affected)
     return 200, {"ok": True, "id": clean["id"], "synced": sorted(synced.keys())}
 
 
@@ -220,7 +221,7 @@ def delete_mcp(mcp_id: str) -> tuple[int, dict]:
         affected = _workspaces_affected_by_mcp(existing)
         data["mcps"] = [m for m in data.get("mcps", []) if m.get("id") != mcp_id]
         write_json(MCP_REGISTRY, data)
-    synced = _auto_sync(affected)
+        synced = _auto_sync(affected)
     return 200, {"ok": True, "synced": sorted(synced.keys())}
 
 

@@ -80,6 +80,11 @@ applyTheme(getCurrentTheme(), { save: false });
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Filtre une URL avant de l'injecter dans un href : bloque javascript:, data:, vbscript:
+const safeUrl = (u) => {
+  const s = String(u ?? '').trim();
+  return /^(https?:\/\/|\/|#|mailto:)/i.test(s) ? s : '';
+};
 const fmtDate = (iso) => {
   if (!iso) return '—';
   try {
@@ -108,7 +113,10 @@ const debounce = (fn, ms) => {
 /* === API ========================================================= */
 const API = {
   async _req(method, url, body) {
-    const opts = { method, headers: {} };
+    // X-Nebula-XHR : header custom posable seulement par fetch/XHR same-origin.
+    // Bloque les attaques CSRF basiques sur les routes sensibles
+    // (un <form> ou <img> ne peut pas le poser).
+    const opts = { method, headers: { 'X-Nebula-XHR': '1' } };
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
@@ -149,6 +157,7 @@ const STATE = {
   filter: { mcp: '' },
   loading: true,
   pagePollers: [],   // setInterval ids actifs sur la page courante (cleared à chaque navigation)
+  pageTimeouts: [],  // setTimeout ids en attente sur la page courante
   uiState: null,     // {theme, onboarded} chargé depuis /api/ui-state au démarrage
 };
 
@@ -156,9 +165,16 @@ const STATE = {
 function registerPagePoller(intervalId) {
   STATE.pagePollers.push(intervalId);
 }
+// Enregistre un setTimeout à nettoyer lors du prochain changement de page
+function registerPageTimeout(timeoutId) {
+  STATE.pageTimeouts.push(timeoutId);
+  return timeoutId;
+}
 function clearPagePollers() {
   for (const id of STATE.pagePollers) clearInterval(id);
+  for (const id of STATE.pageTimeouts) clearTimeout(id);
   STATE.pagePollers = [];
+  STATE.pageTimeouts = [];
 }
 
 /* === TOAST / SNACKBAR ============================================ */
@@ -945,18 +961,20 @@ function attachSessionPreview(row, wsId, file) {
   };
 
   row.addEventListener('mouseenter', () => {
-    timer = setTimeout(async () => {
+    timer = registerPageTimeout(setTimeout(async () => {
+      if (!row.isConnected) return;  // garde-fou : navigation entretemps
       if (_sessionPreviewCache.has(cacheKey)) {
         showTooltip(_sessionPreviewCache.get(cacheKey));
         return;
       }
       try {
         const r = await API.get(`/api/workspaces/${wsId}/sessions/${file}`);
+        if (!row.isConnected) return;
         const msgs = r.messages || [];
         _sessionPreviewCache.set(cacheKey, msgs);
         showTooltip(msgs);
       } catch { /* silencieux : pas de tooltip si erreur réseau */ }
-    }, 500);
+    }, 500));
   });
   row.addEventListener('mouseleave', hide);
   row.addEventListener('click', hide);  // hide avant d'ouvrir le modal
@@ -1536,14 +1554,14 @@ async function modalMcpRecipes() {
       const paramCount = (r.params || []).length;
       card.innerHTML = `
         ${isLocal ? '<button class="recipe-edit-btn" type="button" title="Éditer la définition de cette recette">✎</button><button class="recipe-delete-btn" type="button" title="Supprimer cette recette locale">🗑</button>' : ''}
-        <div class="recipe-emoji">${r.emoji || '🔌'}</div>
+        <div class="recipe-emoji">${escapeHtml(r.emoji || '🔌')}</div>
         <div class="recipe-body">
           <div class="recipe-name">${escapeHtml(r.name)}${instances > 0 ? ` <span class="badge badge-info" style="margin-left:6px" title="Tu as déjà ${instances} instance(s) de cette recette installée(s)">${instances}× installée${instances > 1 ? 's' : ''}</span>` : ''}</div>
           <div class="recipe-desc">${escapeHtml(r.description || '')}</div>
           <div class="recipe-meta">
             <span class="badge">${escapeHtml(r.transport || 'stdio')}</span>
             ${paramCount > 0 ? `<span class="badge badge-info">${paramCount} param${paramCount > 1 ? 's' : ''} requis</span>` : '<span class="badge badge-ok">prêt à l\'emploi</span>'}
-            ${r.docs_url ? `<a class="badge" href="${escapeHtml(r.docs_url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">docs ↗</a>` : ''}
+            ${safeUrl(r.docs_url) ? `<a class="badge" href="${escapeHtml(safeUrl(r.docs_url))}" target="_blank" rel="noopener" onclick="event.stopPropagation()">docs ↗</a>` : ''}
           </div>
         </div>
       `;
@@ -1608,7 +1626,7 @@ function modalInstallRecipe(recipe) {
 
   body.innerHTML = `
     <div style="display:flex;align-items:center;gap:var(--sp-3);margin-bottom:var(--sp-3)">
-      <div style="font-size:32px">${recipe.emoji || '🔌'}</div>
+      <div style="font-size:32px">${escapeHtml(recipe.emoji || '🔌')}</div>
       <div>
         <div style="font-size:15px;font-weight:600">${escapeHtml(recipe.name)}</div>
         <div class="dim" style="font-size:12px">${escapeHtml(recipe.description || '')}</div>
@@ -2012,7 +2030,7 @@ function modalNewMCP(existing = null) {
     const lbl = el('label', 'ws-check');
     const checked = allChecked || currentWs.has(w.id);
     lbl.innerHTML = `<input type="checkbox" data-ws="${escapeHtml(w.id)}" ${checked ? 'checked' : ''} ${allChecked ? 'disabled' : ''}>
-      <span>${w.emoji ? w.emoji + ' ' : ''}<strong>${escapeHtml(w.id)}</strong>${w.label && w.label !== w.id ? ` <span class="dim">— ${escapeHtml(w.label)}</span>` : ''}</span>`;
+      <span>${w.emoji ? escapeHtml(w.emoji) + ' ' : ''}<strong>${escapeHtml(w.id)}</strong>${w.label && w.label !== w.id ? ` <span class="dim">— ${escapeHtml(w.label)}</span>` : ''}</span>`;
     wsHost.appendChild(lbl);
   }
 
@@ -2688,6 +2706,7 @@ async function modalSystemUpdate() {
           ${r.hint ? `<p style="margin:var(--sp-2) 0 0">${escapeHtml(r.hint)}</p>` : ''}
           ${r.stash_applied ? '<p class="dim" style="margin:var(--sp-2) 0 0;font-size:11.5px">ℹ Tes modifs locales ont été stashées (préservées dans `git stash list`).</p>' : ''}
           ${r.stash_pop_warning ? `<p class="text-warn" style="margin:var(--sp-2) 0 0;font-size:11.5px">⚠ ${escapeHtml(r.stash_pop_warning)}</p>` : ''}
+          ${(r.sensitive_in_stash || []).length ? `<p class="text-warn" style="margin:var(--sp-2) 0 0;font-size:11.5px">⚠ Fichiers sensibles dans le stash : ${r.sensitive_in_stash.map(escapeHtml).join(', ')} — vérifie avec <code class="mono">git stash list</code> si la restauration semble incomplète.</p>` : ''}
           ${r.stderr ? `<details style="margin-top:var(--sp-2)"><summary style="cursor:pointer;font-size:11px;color:var(--text-muted)">Détail technique</summary><pre class="mono" style="font-size:10.5px;background:var(--bg);padding:var(--sp-2);border-radius:4px;margin-top:6px;white-space:pre-wrap;max-height:160px;overflow:auto">${escapeHtml(r.stderr)}</pre></details>` : ''}
         </div>
       `;
@@ -2735,6 +2754,7 @@ async function modalSystemUpdate() {
           <p style="margin:var(--sp-2) 0 0">${escapeHtml(r.message)}</p>
           ${r.stash_applied ? '<p class="dim" style="margin:var(--sp-2) 0 0;font-size:11.5px">ℹ Tes modifs locales ont été stashées puis re-appliquées automatiquement.</p>' : ''}
           ${r.stash_pop_warning ? `<p class="text-warn" style="margin:var(--sp-2) 0 0;font-size:11.5px">⚠ ${escapeHtml(r.stash_pop_warning)}</p>` : ''}
+          ${(r.sensitive_in_stash || []).length ? `<p class="text-warn" style="margin:var(--sp-2) 0 0;font-size:11.5px">⚠ Fichiers sensibles dans le stash : ${r.sensitive_in_stash.map(escapeHtml).join(', ')} — vérifie avec <code class="mono">git stash list</code> si la restauration semble incomplète.</p>` : ''}
         </div>
       </div>
       <div class="section-label" style="margin-top:var(--sp-4)"><span class="num">▾</span> ${(r.files_changed || []).length} fichier(s) modifié(s)</div>
@@ -4897,7 +4917,7 @@ function modalNewTemplate() {
     card.style.cursor = 'pointer';
     card.innerHTML = `
       <input type="radio" name="starter" value="${s.id}" ${s.id === 'standard' ? 'checked' : ''} style="margin-right:8px">
-      <div class="recipe-emoji">${s.emoji}</div>
+      <div class="recipe-emoji">${escapeHtml(s.emoji || '🧠')}</div>
       <div class="recipe-body">
         <div class="recipe-name">${escapeHtml(s.name)}${s.recommended ? ' <span class="badge badge-ok" style="margin-left:6px">recommandé novices</span>' : ''}</div>
         <div class="recipe-desc">${escapeHtml(s.desc)}</div>

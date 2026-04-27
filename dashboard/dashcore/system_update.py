@@ -254,7 +254,19 @@ def system_apply_update() -> tuple[int, dict]:
     stash_pop_warning = None
     stash_label = f"nebula-autostash-{int(time.time())}"
 
+    # Avant de stasher, on détecte les fichiers de données utilisateur connus
+    # (.env.local, registry.json, workspaces.json…) qui pourraient se retrouver
+    # dans le stash si l'utilisateur n'a pas configuré skip-worktree.
+    sensitive_in_stash: list[str] = []
     if has_local_changes:
+        sensitive_patterns = (".env.local", "mcp/registry.json",
+                              "dashboard/data/workspaces.json")
+        for line in status.splitlines():
+            # format porcelain : "XY path"
+            path = line[3:].strip().strip('"')
+            if any(p in path for p in sensitive_patterns):
+                sensitive_in_stash.append(path)
+
         rc_s, _, stash_err = _git(
             "stash", "push", "--include-untracked", "-m", stash_label,
             timeout=GIT_TIMEOUT_QUICK,
@@ -263,6 +275,9 @@ def system_apply_update() -> tuple[int, dict]:
             stash_applied = True
             log.info("Pre-pull stash effectué (%d entrées status, label=%s)",
                      len(status.splitlines()), stash_label)
+            if sensitive_in_stash:
+                log.warning("Stash contient des fichiers sensibles : %s — label %s",
+                            sensitive_in_stash, stash_label)
         else:
             # Stash a échoué — on continue quand même, peut-être que pull marchera
             log.warning("git stash a échoué (continuons quand même) : %s", stash_err)
@@ -323,6 +338,7 @@ def system_apply_update() -> tuple[int, dict]:
         "needs_restart": needs_restart,
         "stash_applied": stash_applied,
         "stash_pop_warning": stash_pop_warning,
+        "sensitive_in_stash": sensitive_in_stash if stash_applied else [],
         "message": (
             "Mise à jour appliquée. Redémarre le dashboard pour activer les changements."
             if needs_restart

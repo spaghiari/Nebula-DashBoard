@@ -469,25 +469,42 @@ def get_workspace_settings(ws_id: str) -> tuple[int, dict]:
     return 200, {"path": str(path), "exists": path.exists(), "content": content}
 
 
+_SETTINGS_ALLOWED_ROOT_KEYS = frozenset({
+    "permissions", "hooks", "model", "env", "effortLevel",
+    "enabledPlugins", "mcpServers", "alwaysAllowedTools",
+    "outputStyle", "includeCoAuthoredBy",
+})
+_SETTINGS_MAX_BYTES = 256 * 1024  # 256 Kio — un settings.json sain ne dépasse jamais ça
+
+
 def save_workspace_settings(ws_id: str, content: str) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
+    if len(content) > _SETTINGS_MAX_BYTES:
+        return 413, {"error": f"settings.json trop gros (> {_SETTINGS_MAX_BYTES} octets)"}
     try:
         parsed = json.loads(content)
     except json.JSONDecodeError as e:
         return 400, {"error": f"JSON invalide : {e}"}
     if not isinstance(parsed, dict):
         return 400, {"error": "doit être un objet JSON"}
+    unknown = set(parsed.keys()) - _SETTINGS_ALLOWED_ROOT_KEYS
+    if unknown:
+        return 400, {"error": f"clés racine non reconnues : {', '.join(sorted(unknown))}"}
 
     path = _workspace_settings_path(ws_id)
-    if path.exists():
-        bak = path.with_suffix(".json.bak")
-        bak.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if parsed:
-        write_json(path, parsed)
-    elif path.exists():
-        path.unlink()
+    with _MUTATION_LOCK:
+        if path.exists():
+            bak = path.with_suffix(".json.bak")
+            try:
+                bak.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+            except OSError as e:
+                return 500, {"error": f"backup impossible : {e}"}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if parsed:
+            write_json(path, parsed)
+        elif path.exists():
+            path.unlink()
     return 200, {"ok": True}
 
 
@@ -897,10 +914,23 @@ def write_workspace_file(ws_id: str, filename: str, content: str) -> tuple[int, 
         return 404, {"error": "workspace absent sur disque"}
     target = ws_dir.joinpath(*_EDITABLE_FILES[filename])
     target.parent.mkdir(parents=True, exist_ok=True)
+    is_json = target.name.endswith(".json")
+    if is_json:
+        # Validation JSON avant tout, hors verrou
+        try:
+            parsed = json.loads(content) if content.strip() else None
+        except json.JSONDecodeError as e:
+            return 400, {"error": f"JSON invalide : {e}"}
     with _MUTATION_LOCK:
         if target.exists():
             target.with_suffix(target.suffix + ".bak").write_bytes(target.read_bytes())
-        target.write_text(content, encoding="utf-8")
+        if is_json and parsed is not None:
+            # Écriture atomique pour les JSON critiques
+            write_json(target, parsed)
+        else:
+            tmp = target.with_suffix(target.suffix + ".tmp")
+            tmp.write_text(content, encoding="utf-8")
+            tmp.replace(target)
     log.info("workspace file written: %s / %s", ws_id, filename)
     return 200, {"ok": True, "path": str(target)}
 

@@ -60,16 +60,16 @@ from dashcore.api_plugins import (
     list_skills_global, list_skills_for_workspace,
     create_skill, delete_skill, get_skill_content, save_skill_content,
     copy_skill_to_workspace,
-    preview_github_skills, import_github_skills,)
-from dashcore.api_skills_library import (
-    list_library, get_distribution, distribute, create_library_skill,
-    delete_library_skill, get_library_skill_content, save_library_skill_content,
-    migrate_existing_to_library,)
-from dashcore.api_plugins import (
+    preview_github_skills, import_github_skills,
     get_skill_detail, get_skill_file, write_skill_file, delete_skill_file,
     list_skill_workspace_usage,
     list_agents, list_commands,
     create_fileitem, delete_fileitem, get_fileitem_content, save_fileitem_content,
+)
+from dashcore.api_skills_library import (
+    list_library, get_distribution, distribute, create_library_skill,
+    delete_library_skill, get_library_skill_content, save_library_skill_content,
+    migrate_existing_to_library,
 )
 
 
@@ -545,10 +545,19 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             return None
 
+    # Routes qui exposent des données sensibles : exigent un header custom
+    # qui ne peut pas être posé par <form>, <img>, <link>… (anti-CSRF basique
+    # même si on est sur 127.0.0.1).
+    _SENSITIVE_ROUTES = {"/api/env/values"}
+
     def _dispatch(self, method: str, body=None):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
+
+        if path in self._SENSITIVE_ROUTES:
+            if self.headers.get("X-Nebula-XHR") != "1":
+                self._send_json(403, {"error": "header X-Nebula-XHR requis"}); return
 
         for pat, handler in ROUTES_BY_METHOD.get(method, []):
             mat = pat.match(path)
