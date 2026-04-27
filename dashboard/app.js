@@ -4835,11 +4835,16 @@ function templateCard(t) {
   // Fetch qualité en async (non-bloquant)
   const qualHost = card.querySelector('[data-quality]');
   API.get(`/api/templates/${t.id}/quality`).then(q => {
-    const cls = q.score === 'ok' ? 'badge-ok' : q.score === 'warn' ? 'badge-warn' : 'badge-err';
-    const icon = q.score === 'ok' ? '✅' : q.score === 'warn' ? '⚠️' : '❌';
-    const count = (q.suggestions || []).length;
-    const summary = q.score === 'ok' ? 'Qualité OK' : `${count} suggestion${count > 1 ? 's' : ''}`;
-    qualHost.innerHTML = `<span class="badge ${cls}" title="${escapeHtml((q.suggestions || []).map(s => '• ' + s.msg).join('\n') || 'Aucune suggestion')}">${icon} ${summary}</span>`;
+    const sugs = q.suggestions || [];
+    const hasErr = sugs.some(s => s.level === 'error');
+    const hasWarn = sugs.some(s => s.level === 'warn');
+    const hasInfo = sugs.some(s => s.level === 'info');
+    let cls, icon, summary;
+    if (hasErr) { cls = 'badge-err'; icon = '❌'; summary = `${sugs.length} problème${sugs.length > 1 ? 's' : ''}`; }
+    else if (hasWarn) { cls = 'badge-warn'; icon = '⚠️'; summary = `${sugs.length} suggestion${sugs.length > 1 ? 's' : ''}`; }
+    else if (hasInfo) { cls = 'badge'; icon = 'ℹ️'; summary = `${sugs.length} info${sugs.length > 1 ? 's' : ''}`; }
+    else { cls = 'badge-ok'; icon = '✅'; summary = 'Qualité OK'; }
+    qualHost.innerHTML = `<span class="badge ${cls}" title="${escapeHtml(sugs.map(s => '• ' + s.msg).join('\n') || 'Aucune suggestion')}">${icon} ${summary}</span>`;
   }).catch(() => {
     qualHost.innerHTML = '';
   });
@@ -4999,18 +5004,28 @@ async function modalEditTemplate(tplId) {
   const refreshQuality = async () => {
     try {
       const q = await API.get(`/api/templates/${tplId}/quality`);
-      const cls = q.score === 'ok' ? 'callout-success' : q.score === 'warn' ? 'callout-warn' : 'callout-error';
-      const icon = q.score === 'ok' ? '✅' : q.score === 'warn' ? '⚠️' : '❌';
-      const lines = (q.suggestions || []).map(s => {
+      const sugs = q.suggestions || [];
+      const hasErr = sugs.some(s => s.level === 'error');
+      const hasWarn = sugs.some(s => s.level === 'warn');
+      const hasInfo = sugs.some(s => s.level === 'info');
+      let cls, icon, summary;
+      if (hasErr) { cls = 'callout-error'; icon = '❌'; summary = `${sugs.length} problème${sugs.length > 1 ? 's' : ''}`; }
+      else if (hasWarn) { cls = 'callout-warn'; icon = '⚠️'; summary = `${sugs.length} suggestion${sugs.length > 1 ? 's' : ''}`; }
+      else if (hasInfo) { cls = 'callout-info'; icon = 'ℹ️'; summary = `${sugs.length} info${sugs.length > 1 ? 's' : ''}`; }
+      else { cls = 'callout-success'; icon = '✅'; summary = 'rien à signaler'; }
+
+      const lines = sugs.map(s => {
         const li = s.level === 'error' ? '❌' : s.level === 'warn' ? '⚠️' : 'ℹ️';
         return `<li>${li} ${escapeHtml(s.msg)}</li>`;
       }).join('');
       const placeholders = (q.placeholders_used || []).length
         ? `<div class="dim" style="font-size:11px;margin-top:6px">Placeholders détectés : ${q.placeholders_used.map(p => `<code class="mono">{{${p}}}</code>`).join(' ')}</div>`
         : `<div class="dim" style="font-size:11px;margin-top:6px">Aucun placeholder utilisé — le template ne s'adapte pas au workspace créé.</div>`;
+      // Ouvert par défaut si erreur ou warn ; fermé pour info-only et OK
+      const openByDefault = hasErr || hasWarn;
       qualHost.innerHTML = `
-        <details class="callout ${cls}" style="margin-bottom:var(--sp-3)" ${q.score !== 'ok' ? 'open' : ''}>
-          <summary style="cursor:pointer;font-weight:600">${icon} Conseils & qualité ${q.score === 'ok' ? '— rien à signaler' : `(${(q.suggestions || []).length})`}</summary>
+        <details class="callout ${cls}" style="margin-bottom:var(--sp-3)" ${openByDefault ? 'open' : ''}>
+          <summary style="cursor:pointer;font-weight:600">${icon} Conseils & qualité — ${summary}</summary>
           ${lines ? `<ul class="help-list" style="margin:8px 0 0">${lines}</ul>` : ''}
           ${placeholders}
         </details>
