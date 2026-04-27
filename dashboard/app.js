@@ -159,6 +159,7 @@ const STATE = {
   pagePollers: [],   // setInterval ids actifs sur la page courante (cleared à chaque navigation)
   pageTimeouts: [],  // setTimeout ids en attente sur la page courante
   uiState: null,     // {theme, onboarded} chargé depuis /api/ui-state au démarrage
+  tour: null,        // Tour guidé actif : { name, step, definition }
 };
 
 // Enregistre un poller à nettoyer lors du prochain changement de page
@@ -493,6 +494,36 @@ async function renderHome() {
       <p class="page-subtitle">Pilotage des workspaces, MCPs, plugins et skills Claude Code.</p>
     </div>
   `));
+
+  // Banner "Première fois ?" — uniquement si tour jamais lancé ET install vide
+  let tourDone = false;
+  try { tourDone = localStorage.getItem('nebula-tour-completed') === '1'; } catch {}
+  const isFreshInstall = (STATE.workspaces.length === 0 && STATE.mcps.length === 0);
+  if (!tourDone && isFreshInstall) {
+    const banner = el('div', 'callout callout-info');
+    banner.style.cssText = 'margin-bottom:var(--sp-4);background:linear-gradient(90deg,rgba(167,139,250,0.08),rgba(124,58,237,0.04));border-color:var(--accent)';
+    banner.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <div style="font-size:32px">🎯</div>
+        <div style="flex:1;min-width:240px">
+          <strong style="font-size:14px">Première fois sur Nebula ?</strong>
+          <p style="margin:4px 0 0;font-size:12.5px">Une visite guidée interactive de ~2 min te montre l'essentiel : workspaces, MCPs, skills, templates. Avec spotlight sur les vrais éléments de l'UI.</p>
+        </div>
+      </div>
+    `;
+    const launchBtn = btn('🎯 Démarrer la visite', 'btn-primary', null);
+    const dismissBtn = btn('Plus tard', 'btn-ghost btn-sm', null);
+    dismissBtn.addEventListener('click', () => {
+      try { localStorage.setItem('nebula-tour-completed', '1'); } catch {}
+      banner.remove();
+    });
+    launchBtn.addEventListener('click', () => startTour('main'));
+    const actions = el('div');
+    actions.style.cssText = 'display:flex;gap:8px;margin-top:8px';
+    actions.append(launchBtn, dismissBtn);
+    banner.querySelector('div > div:last-child').appendChild(actions);
+    page.appendChild(banner);
+  }
 
   // Bandeau "Mise en route" si la checklist d'onboarding n'est pas à 100 %
   const quickstart = buildHomeQuickstart();
@@ -3586,7 +3617,10 @@ async function modalPluginReadme(mktId, kind, pluginId, name) {
    ================================================================ */
 async function renderHelp() {
   setBreadcrumbs([{ label: 'Aide' }]);
-  setTopbarActions([]);
+  const tourBtn = btn('🎯 Visite guidée', 'btn-primary', null);
+  tourBtn.title = 'Lance un tour interactif en 8 étapes (~2 min)';
+  tourBtn.addEventListener('click', () => startTour('main'));
+  setTopbarActions([tourBtn]);
 
   const c = $('#content');
   c.innerHTML = '';
@@ -3598,6 +3632,25 @@ async function renderHelp() {
       <p class="page-subtitle">Tout ce qu'il faut savoir pour piloter ton écosystème Claude Code depuis Nebula.</p>
     </div>
   `));
+
+  // Banner promo de la visite guidée si jamais lancée
+  let tourCompleted = false;
+  try { tourCompleted = localStorage.getItem('nebula-tour-completed') === '1'; } catch {}
+  if (!tourCompleted) {
+    const promo = el('div', 'callout callout-info');
+    promo.style.marginBottom = 'var(--sp-4)';
+    promo.innerHTML = `
+      <div>
+        <strong>🎯 Première fois ici ?</strong>
+        <p style="margin:4px 0 0;font-size:12.5px">Lance la <strong>visite guidée interactive</strong> (~2 min) — elle te montre les fonctions essentielles avec spotlight sur l'UI réelle.</p>
+      </div>
+    `;
+    const launchBtn = btn('Démarrer la visite', 'btn-primary', null);
+    launchBtn.style.marginTop = '8px';
+    launchBtn.addEventListener('click', () => startTour('main'));
+    promo.querySelector('div').appendChild(launchBtn);
+    page.appendChild(promo);
+  }
 
   // Table des matières
   const toc = el('nav', 'help-toc');
@@ -6180,6 +6233,193 @@ document.addEventListener('keydown', (e) => {
     lastKey = null;
   }
 });
+
+/* ================================================================
+   TOUR GUIDÉ — overlay + spotlight + bubble par étape
+   ================================================================ */
+const TOURS = {
+  main: [
+    {
+      title: '👋 Bienvenue dans Nebula',
+      body: `<p>Nebula pilote ton écosystème <strong>Claude Code</strong> en local. En 8 étapes (~2 min), je te montre l'essentiel.</p>
+        <p class="dim" style="font-size:12px">Tu peux <kbd>Échap</kbd> à tout moment, ou cliquer "Passer". Tu pourras relancer cette visite quand tu veux.</p>`,
+      target: null, navigate: '#/',
+    },
+    {
+      title: '📁 Workspaces — tes projets Claude',
+      body: `<p>Chaque workspace = un projet Claude Code (un dossier avec son <code class="mono">CLAUDE.md</code>, ses MCPs scopés, ses skills).</p>
+        <p>D'ici, tu lances <em>claude</em> directement dans le bon dossier d'un clic.</p>`,
+      target: '.workspace-grid, .empty', navigate: '#/',
+    },
+    {
+      title: '➕ Créer un workspace',
+      body: `<p>Le bouton <strong>Nouveau workspace</strong> en haut à droite te lance la création depuis un template (Standard, Python, Node…). On copie l'arborescence et on remplace les <code class="mono">{{placeholders}}</code>.</p>`,
+      target: '#topbar-actions', navigate: '#/',
+    },
+    {
+      title: '🔌 MCPs — super-pouvoirs de Claude',
+      body: `<p>Les <strong>MCPs</strong> (Model Context Protocol) donnent à Claude accès à des outils externes : filesystem, GitHub, n8n, ta base de données…</p>
+        <p>Pas besoin d'écrire du JSON : utilise les <strong>recettes</strong> (catalogue 1-clic) ou le formulaire visuel. Atelier sync automatiquement vers les workspaces ciblés.</p>`,
+      target: '.page', navigate: '#/mcps',
+    },
+    {
+      title: '🧠 Skills — bibliothèque centrale',
+      body: `<p>Les <strong>skills</strong> sont des compétences réutilisables (prompts longs structurés) que Claude active dynamiquement.</p>
+        <p>Le modèle "magasin" : tu maintiens une bibliothèque, et tu <strong>distribues</strong> chaque skill vers Global et/ou des workspaces spécifiques. Une seule édition, plusieurs cibles.</p>`,
+      target: '.page', navigate: '#/skills',
+    },
+    {
+      title: '📦 Templates — moules de workspaces',
+      body: `<p>Un template, c'est l'arborescence de fichiers copiée à chaque <em>Nouveau workspace</em>. Le bouton <strong>+ Nouveau template</strong> propose des starters (Standard, Python, Node, Docker).</p>
+        <p>Chaque template a un panneau <em>Conseils & qualité</em> qui scanne les bonnes pratiques.</p>`,
+      target: '.page', navigate: '#/templates',
+    },
+    {
+      title: '🛡️ Sanity check + Journal sur la home',
+      body: `<p>De retour à l'accueil. La colonne droite contient :</p>
+        <ul style="margin:6px 0;padding-left:18px;font-size:13px">
+          <li><strong>Sanity check</strong> : signale les configs MCP cassées ou desync.</li>
+          <li><strong>Journal</strong> : tes notes rapides projet par projet.</li>
+        </ul>`,
+      target: '.home-grid > div:nth-child(2)', navigate: '#/',
+    },
+    {
+      title: '🎯 Tu sais l\'essentiel',
+      body: `<p>Pour aller plus loin : la page <strong>Aide</strong> détaille tout (raccourcis, dépannage, modèles avancés). Tu peux <strong>relancer cette visite</strong> à tout moment depuis Aide → bouton "Visite guidée".</p>
+        <p style="margin-top:8px">Bon code !</p>`,
+      target: null,
+    },
+  ],
+};
+
+function _ensureTourOverlay() {
+  let overlay = document.getElementById('tour-overlay');
+  if (overlay) return overlay;
+  overlay = document.createElement('div');
+  overlay.id = 'tour-overlay';
+  overlay.innerHTML = `
+    <div class="tour-mask"></div>
+    <div class="tour-bubble" role="dialog" aria-live="polite">
+      <div class="tour-bubble-step"></div>
+      <h3 class="tour-bubble-title"></h3>
+      <div class="tour-bubble-body"></div>
+      <div class="tour-bubble-actions">
+        <button type="button" class="btn btn-ghost btn-sm" data-tour-skip>Passer</button>
+        <div style="flex:1"></div>
+        <button type="button" class="btn btn-ghost btn-sm" data-tour-prev>← Précédent</button>
+        <button type="button" class="btn btn-primary btn-sm" data-tour-next>Suivant →</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-tour-skip]').addEventListener('click', endTour);
+  overlay.querySelector('[data-tour-next]').addEventListener('click', () => tourGoto(STATE.tour.step + 1));
+  overlay.querySelector('[data-tour-prev]').addEventListener('click', () => tourGoto(STATE.tour.step - 1));
+  return overlay;
+}
+
+function _positionTourBubble(targetEl) {
+  const overlay = document.getElementById('tour-overlay');
+  const bubble = overlay.querySelector('.tour-bubble');
+  const mask = overlay.querySelector('.tour-mask');
+  if (!targetEl) {
+    // Centre la bulle sans spotlight
+    mask.style.clipPath = 'none';
+    bubble.style.top = '50%';
+    bubble.style.left = '50%';
+    bubble.style.transform = 'translate(-50%, -50%)';
+    return;
+  }
+  const r = targetEl.getBoundingClientRect();
+  const pad = 8;
+  // Spotlight via clip-path : un trou rectangulaire dans le mask
+  const x1 = Math.max(0, r.left - pad);
+  const y1 = Math.max(0, r.top - pad);
+  const x2 = Math.min(window.innerWidth, r.right + pad);
+  const y2 = Math.min(window.innerHeight, r.bottom + pad);
+  mask.style.clipPath = `polygon(
+    0 0, 100% 0, 100% 100%, 0 100%, 0 0,
+    ${x1}px ${y1}px, ${x1}px ${y2}px, ${x2}px ${y2}px, ${x2}px ${y1}px, ${x1}px ${y1}px
+  )`;
+  // Position de la bulle : sous l'élément si possible, sinon au-dessus
+  const bw = 380, bh = 240;
+  let top = y2 + 12;
+  let left = Math.max(12, Math.min(window.innerWidth - bw - 12, r.left));
+  if (top + bh > window.innerHeight) {
+    top = Math.max(12, y1 - bh - 12);
+  }
+  bubble.style.transform = 'none';
+  bubble.style.top = `${top}px`;
+  bubble.style.left = `${left}px`;
+  // Scroll si l'élément n'est pas visible
+  if (r.top < 0 || r.bottom > window.innerHeight) {
+    targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+async function tourGoto(idx) {
+  if (!STATE.tour) return;
+  const def = STATE.tour.definition;
+  if (idx < 0) return;
+  if (idx >= def.length) { endTour(); return; }
+  STATE.tour.step = idx;
+  const step = def[idx];
+
+  // Navigation hash si demandée
+  if (step.navigate && location.hash !== step.navigate) {
+    location.hash = step.navigate;
+    // Attendre que la page render
+    await new Promise(r => setTimeout(r, 200));
+  }
+  // Petit délai pour les animations CSS
+  await new Promise(r => setTimeout(r, 80));
+
+  const overlay = _ensureTourOverlay();
+  overlay.classList.add('is-active');
+  overlay.querySelector('.tour-bubble-step').textContent = `${idx + 1} / ${def.length}`;
+  overlay.querySelector('.tour-bubble-title').textContent = step.title;
+  overlay.querySelector('.tour-bubble-body').innerHTML = step.body;
+  overlay.querySelector('[data-tour-prev]').disabled = idx === 0;
+  overlay.querySelector('[data-tour-next]').textContent = idx === def.length - 1 ? 'Terminer ✓' : 'Suivant →';
+
+  const targetEl = step.target ? document.querySelector(step.target) : null;
+  _positionTourBubble(targetEl);
+  try { sessionStorage.setItem('nebula-tour-progress', JSON.stringify({ name: STATE.tour.name, step: idx })); } catch {}
+}
+
+function startTour(name = 'main', startStep = 0) {
+  const def = TOURS[name];
+  if (!def) return;
+  STATE.tour = { name, step: startStep, definition: def };
+  tourGoto(startStep);
+  // Échap pour quitter
+  window.addEventListener('keydown', _tourKeyHandler);
+  // Reposition sur resize
+  window.addEventListener('resize', _tourResizeHandler);
+}
+
+function endTour() {
+  const overlay = document.getElementById('tour-overlay');
+  if (overlay) overlay.classList.remove('is-active');
+  STATE.tour = null;
+  window.removeEventListener('keydown', _tourKeyHandler);
+  window.removeEventListener('resize', _tourResizeHandler);
+  try { sessionStorage.removeItem('nebula-tour-progress'); } catch {}
+  try { localStorage.setItem('nebula-tour-completed', '1'); } catch {}
+}
+
+function _tourKeyHandler(e) {
+  if (!STATE.tour) return;
+  if (e.key === 'Escape') { endTour(); }
+  else if (e.key === 'ArrowRight') { tourGoto(STATE.tour.step + 1); }
+  else if (e.key === 'ArrowLeft') { tourGoto(STATE.tour.step - 1); }
+}
+function _tourResizeHandler() {
+  if (!STATE.tour) return;
+  const step = STATE.tour.definition[STATE.tour.step];
+  const targetEl = step.target ? document.querySelector(step.target) : null;
+  _positionTourBubble(targetEl);
+}
 
 /* ================================================================
    INIT

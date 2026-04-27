@@ -1115,6 +1115,57 @@ body {
   margin-bottom: var(--sp-3);
 }
 
+/* ── Tour guidé ────────────────────────────────────────────────── */
+#tour-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  pointer-events: none;
+  opacity: 0; transition: opacity 0.2s ease;
+}
+#tour-overlay.is-active { opacity: 1; pointer-events: auto; }
+.tour-mask {
+  position: absolute; inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  pointer-events: auto;
+  transition: clip-path 0.3s ease;
+}
+.tour-bubble {
+  position: absolute;
+  width: 380px;
+  max-width: calc(100vw - 24px);
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  padding: var(--sp-4);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--accent);
+  pointer-events: auto;
+  transition: top 0.3s ease, left 0.3s ease;
+  z-index: 1;
+}
+.tour-bubble-step {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.tour-bubble-title {
+  font-size: 16px; font-weight: 600;
+  margin: 0 0 var(--sp-2) 0;
+  color: var(--text);
+}
+.tour-bubble-body {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  margin-bottom: var(--sp-3);
+}
+.tour-bubble-body p { margin: 0 0 6px 0; }
+.tour-bubble-body p:last-child { margin-bottom: 0; }
+.tour-bubble-actions {
+  display: flex; gap: var(--sp-2);
+  align-items: center;
+}
+
 /* Topbar : badge de mise à jour visible et pulsant */
 .topbar-right {
   display: flex; align-items: center; gap: var(--sp-2);
