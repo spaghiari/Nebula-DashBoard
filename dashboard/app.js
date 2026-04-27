@@ -762,10 +762,51 @@ async function renderWorkspace(wsId) {
     <div class="info-tile"><div class="info-tile-label">Messages</div><div class="info-tile-value tabular">${fmtNum(stats.messages || 0)}</div></div>
     <div class="info-tile"><div class="info-tile-label">Tokens in</div><div class="info-tile-value tabular">${fmtNum(stats.input_tokens || 0)}</div></div>
     <div class="info-tile"><div class="info-tile-label">Tokens out</div><div class="info-tile-value tabular">${fmtNum(stats.output_tokens || 0)}</div></div>
-    <div class="info-tile"><div class="info-tile-label">Coût ~$</div><div class="info-tile-value tabular">${stats.cost_usd != null ? stats.cost_usd.toFixed(2) : '—'}</div></div>
+    <div class="info-tile" data-cost-tile style="cursor:help"><div class="info-tile-label">Coût ~$</div><div class="info-tile-value tabular">${stats.cost_usd != null ? stats.cost_usd.toFixed(2) : '—'}</div></div>
     <div class="info-tile"><div class="info-tile-label">Dernière</div><div class="info-tile-value" style="font-size:14px">${stats.last ? fmtDate(stats.last) : '—'}</div></div>
   `;
   page.appendChild(tiles);
+
+  // Tooltip détaillé sur la tuile coût
+  const costTile = tiles.querySelector('[data-cost-tile]');
+  if (costTile) {
+    const breakdown = stats.cost_by_model || [];
+    const total = stats.cost_usd || 0;
+    const lines = breakdown.map(b => {
+      const pct = total > 0 ? (b.cost_usd / total * 100).toFixed(0) : 0;
+      return `${b.label}: $${b.cost_usd.toFixed(4)} (${pct}%)`;
+    });
+    if (stats.cache_savings_usd > 0) {
+      lines.push(`— Économies cache : $${stats.cache_savings_usd.toFixed(4)}`);
+    }
+    lines.push('');
+    lines.push('Estimation hors crédits/abonnement.');
+    lines.push('Édite dashboard/data/pricing.json pour ajuster.');
+    costTile.title = lines.join('\n') || 'Aucune donnée de coût.';
+
+    if (breakdown.length || stats.cache_savings_usd > 0) {
+      const detail = el('div');
+      detail.style.cssText = 'margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:6px;font-size:11.5px';
+      const rows = breakdown.map(b => {
+        const pct = total > 0 ? (b.cost_usd / total * 100).toFixed(0) : 0;
+        const tk = (b.input_tokens + b.output_tokens + b.cache_creation_tokens + b.cache_read_tokens);
+        return `<div style="display:flex;justify-content:space-between;gap:12px">
+          <span><strong>${escapeHtml(b.label)}</strong> <span class="dim">${fmtNum(tk)} tokens</span></span>
+          <span class="mono tabular">$${b.cost_usd.toFixed(4)} <span class="dim">(${pct}%)</span></span>
+        </div>`;
+      }).join('');
+      const savings = stats.cache_savings_usd > 0
+        ? `<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);color:var(--ok,#27ae60)">Économies cache : <strong class="mono tabular">$${stats.cache_savings_usd.toFixed(4)}</strong></div>`
+        : '';
+      detail.innerHTML = `
+        <div class="dim" style="font-size:10.5px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px">Coût par modèle</div>
+        ${rows || '<div class="dim">Aucune donnée.</div>'}
+        ${savings}
+        <div class="dim" style="margin-top:8px;font-size:10.5px">Estimation hors crédits/abonnement. Tarifs : <code class="mono">dashboard/data/pricing.json</code>.</div>
+      `;
+      page.appendChild(detail);
+    }
+  }
 
   // ── Config toolbar (horizontal full width) ──
   page.appendChild(el('div', 'section-label', '<span class="num">A.</span> Configuration'));
@@ -3616,7 +3657,7 @@ async function renderHelp() {
         <div class="help-step-num">3</div>
         <div>
           <h4>Coller du JSON MCP</h4>
-          <p>Si tu as un bloc <code class="mono">{"mcpServers": {...}}</code> ou un objet MCP brut, colle-le via <strong>MCPs → Importer</strong> ou <strong>Outils → Onboarding → Coller du JSON</strong>. Atelier détecte automatiquement le format.</p>
+          <p>Si tu as un bloc <code class="mono">{"mcpServers": {...}}</code> ou un objet MCP brut, colle-le via <strong>MCPs → Importer</strong>. Atelier détecte automatiquement le format.</p>
         </div>
       </div>
       <div class="callout callout-info">
@@ -4984,15 +5025,13 @@ function buildOnboardingChecklist() {
   `;
   card.appendChild(progress);
 
-  // Actions complémentaires (import JSON, conflits)
+  // Action complémentaire (conflits — l'import JSON est déjà sur la page MCPs)
   const extra = el('div', 'row');
   extra.style.cssText = 'margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border)';
-  const onbMcp = btn('Coller du JSON MCP', 'btn-sm btn-ghost', I.code);
-  onbMcp.addEventListener('click', () => modalImportMCPs());
   const onbConflicts = btn('Conflits Claude global', 'btn-sm btn-ghost', I.alert);
   onbConflicts.title = 'Détecter et nettoyer les MCPs en doublon avec ~/.claude/';
   onbConflicts.addEventListener('click', () => modalGlobalConflicts());
-  extra.append(onbMcp, onbConflicts);
+  extra.append(onbConflicts);
   card.appendChild(extra);
 
   return card;
