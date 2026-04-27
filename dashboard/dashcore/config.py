@@ -34,6 +34,7 @@ SCRIPTS_DIR = ROOT / "scripts"
 SNIPPETS_DIR = ROOT / "memory" / "snippets"
 WORKSPACES_JSON = DASHBOARD_DIR / "data" / "workspaces.json"
 MCP_REGISTRY = ROOT / "mcp" / "registry.json"
+SKILLS_LIBRARY_DIR = DASHBOARD_DIR / "data" / "skills-library"
 ENV_FILE = ROOT / ".env.local"
 LOGS_DIR = ROOT / "logs"
 

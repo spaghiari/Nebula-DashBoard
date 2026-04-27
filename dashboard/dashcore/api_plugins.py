@@ -834,31 +834,32 @@ def preview_github_skills(payload: dict) -> tuple[int, dict]:
 
 
 def import_github_skills(payload: dict) -> tuple[int, dict]:
+    """Importe N skills depuis GitHub vers la bibliothèque, puis distribue
+    optionnellement vers une liste de cibles (`distribute_to`).
+    """
+    from dashcore.api_skills_library import import_dir_into_library, distribute
+
     parsed = _parse_github_url(payload.get("url", ""))
     if not parsed:
         return 400, {"error": "URL GitHub invalide"}
     owner, repo = parsed
     branch = (payload.get("branch") or "").strip() or None
-    scope = (payload.get("scope") or "").strip()
     selected = payload.get("skills") or []  # liste de rel_path
     overwrite = bool(payload.get("overwrite"))
+    distribute_to = payload.get("distribute_to") or []  # ["global", "workspace:..."]
 
     if not isinstance(selected, list) or not selected:
         return 400, {"error": "Aucun skill sélectionné"}
-
-    parent = _skill_dir(scope)
-    if parent is None:
-        return 400, {"error": "scope invalide (global ou workspace:<id>)"}
 
     cloned = _clone_github_shallow(owner, repo, branch)
     if cloned is None:
         return 502, {"error": "git clone a échoué"}
     tmp, sha = cloned
     try:
-        parent.mkdir(parents=True, exist_ok=True)
-        imported = []
-        skipped = []
-        errors = []
+        imported: list[dict] = []
+        skipped: list[dict] = []
+        errors: list[dict] = []
+        distributed: dict = {}
         now_iso = dt.datetime.now().isoformat(timespec="seconds")
 
         for rel in selected:
@@ -870,34 +871,31 @@ def import_github_skills(payload: dict) -> tuple[int, dict]:
             if not (src / "SKILL.md").exists():
                 errors.append({"rel": rel, "error": "SKILL.md introuvable côté source"})
                 continue
-            dst = parent / src.name
-            if dst.exists():
-                if not overwrite:
-                    skipped.append({"name": src.name, "reason": "existe déjà"})
-                    continue
-                _remove_dir_or_link(dst)
-            try:
-                shutil.copytree(src, dst, ignore=shutil.ignore_patterns(".git", "node_modules"))
-                # Métadonnées de provenance pour futur "vérifier MAJ"
-                origin = {
-                    "repo": f"{owner}/{repo}",
-                    "branch": branch or "default",
-                    "commit": sha,
-                    "source_path": rel,
-                    "imported_at": now_iso,
-                }
-                (dst / ".atelier-origin.json").write_text(
-                    json.dumps(origin, indent=2), encoding="utf-8"
-                )
-                imported.append({"name": src.name, "path": str(dst)})
-            except OSError as e:
-                errors.append({"rel": rel, "error": str(e)})
+            origin = {
+                "repo": f"{owner}/{repo}",
+                "branch": branch or "default",
+                "commit": sha,
+                "source_path": rel,
+                "imported_at": now_iso,
+            }
+            status, resp = import_dir_into_library(src, overwrite=overwrite, origin=origin)
+            if status == 201:
+                name = resp.get("name") or src.name
+                imported.append({"name": name})
+                if distribute_to:
+                    _, dresp = distribute(name, list(distribute_to))
+                    distributed[name] = dresp
+            elif status == 409:
+                skipped.append({"name": src.name, "reason": "déjà dans la bibliothèque"})
+            else:
+                errors.append({"rel": rel, "error": resp.get("error", "import a échoué")})
 
         return 200, {
             "ok": True,
             "imported": imported,
             "skipped": skipped,
             "errors": errors,
+            "distributed": distributed,
             "commit": sha,
         }
     finally:

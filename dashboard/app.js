@@ -141,6 +141,7 @@ const STATE = {
   templates: [],
   plugins: { enabled: {}, count: 0 },
   skills: [],
+  skillsLibrary: [],
   stats: {},
   wsMcps: {},      // ws_id -> {active, has_file}
   sanity: null,
@@ -331,7 +332,7 @@ function setTopbarActions(actions = []) {
 
 /* === DATA LOADING ================================================ */
 async function loadAll() {
-  const [ws, mcps, env, tpls, plugins, skills, uiState] = await Promise.all([
+  const [ws, mcps, env, tpls, plugins, skills, uiState, library] = await Promise.all([
     safe('/api/workspaces', { workspaces: [] }),
     safe('/api/mcps',       { mcps: [] }),
     safe('/api/env',        { keys: [], file: null, exists: false }),
@@ -339,6 +340,7 @@ async function loadAll() {
     safe('/api/plugins',    { enabled: {}, count: 0 }),
     safe('/api/skills',     { global: [] }),
     safe('/api/ui-state',   { theme: 'atelier', onboarded: false }),
+    safe('/api/skills-library', { skills: [] }),
   ]);
   STATE.workspaces = ws.workspaces || [];
   STATE.mcps = mcps.mcps || [];
@@ -348,6 +350,7 @@ async function loadAll() {
   STATE.templates = tpls.templates || [];
   STATE.plugins = plugins;
   STATE.skills = skills.global || [];
+  STATE.skillsLibrary = library.skills || [];
   STATE.uiState = uiState;
 
   // Per-ws MCP status (parallel)
@@ -971,8 +974,15 @@ async function loadWsSkills(wsId, host) {
     const local = r.local || [];
     const global = r.global_available || [];
     host.innerHTML = '';
+    // Action bar : ajouter depuis le magasin
+    const actionBar = el('div');
+    actionBar.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:8px';
+    const addFromLibrary = btn('+ Ajouter depuis le magasin', 'btn-sm btn-primary', '📚');
+    addFromLibrary.addEventListener('click', () => modalAddSkillFromLibrary(wsId));
+    actionBar.appendChild(addFromLibrary);
+    host.appendChild(actionBar);
     if (!local.length && !global.length) {
-      host.innerHTML = '<div class="dim" style="font-size:12.5px">Aucun skill disponible.</div>';
+      host.appendChild(el('div', 'dim', '<span style="font-size:12.5px">Aucun skill installé. Clique « Ajouter depuis le magasin » pour en piocher dans la bibliothèque.</span>'));
       return;
     }
     for (const s of local) {
@@ -4044,16 +4054,36 @@ async function renderSkills() {
   `;
   page.appendChild(toolbar);
 
+  // Banner migration : bibliothèque vide mais des skills existent ailleurs
+  const library = STATE.skillsLibrary || [];
+  if (!library.length && (STATE.skills || []).length) {
+    const banner = el('div', 'callout callout-info');
+    banner.innerHTML = `
+      <div>
+        <strong>📚 Importer mes skills existants dans la bibliothèque ?</strong>
+        <p style="margin:4px 0 0;font-size:12px">
+          Atelier a détecté ${STATE.skills.length} skill(s) dans <code class="mono">~/.claude/skills/</code>.
+          Importe-les dans la bibliothèque pour les gérer comme un magasin (édition centralisée + distribution multi-workspaces).
+        </p>
+      </div>
+    `;
+    const migrateBtn = btn('Importer dans la bibliothèque', 'btn-primary', '📥');
+    migrateBtn.style.marginTop = '8px';
+    migrateBtn.addEventListener('click', async () => {
+      try {
+        const r = await API.post('/api/skills-library/migrate', {});
+        toastOk(`${(r.imported || []).length} skill(s) importé(s) dans la bibliothèque`);
+        STATE.loading = true; route();
+      } catch (e) { toastErr(e.message); }
+    });
+    banner.querySelector('div').appendChild(migrateBtn);
+    page.appendChild(banner);
+  }
+
   const grid = el('div', 'skill-grid');
   page.appendChild(grid);
 
-  const skills = STATE.skills.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
-  // Fetch usage for each (parallel)
-  const usageMap = {};
-  await Promise.all(skills.map(async s => {
-    try { const r = await API.get(`/api/skills/${s.id}/usage`); usageMap[s.id] = r.workspaces || []; }
-    catch { usageMap[s.id] = []; }
-  }));
+  const skills = library.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
 
   const renderList = () => {
     const filter = (toolbar.querySelector('[name=filter]').value || '').trim().toLowerCase();
@@ -4064,16 +4094,240 @@ async function renderSkills() {
     grid.innerHTML = '';
     if (!filtered.length) {
       const empty = el('div', 'empty');
-      empty.innerHTML = `<div class="empty-title">Aucun skill ${filter ? 'ne correspond' : 'global'}</div><p class="muted">${filter ? 'Modifie ton filtre.' : 'Crée ton premier skill.'}</p>`;
+      if (filter) {
+        empty.innerHTML = `<div class="empty-title">Aucun skill ne correspond</div><p class="muted">Modifie ton filtre.</p>`;
+      } else {
+        empty.innerHTML = `<div class="empty-title">Bibliothèque vide</div><p class="muted">Crée un skill, ou importe-en depuis GitHub avec le bouton « Importer GitHub ».</p>`;
+      }
       grid.appendChild(empty);
       return;
     }
-    for (const s of filtered) grid.appendChild(skillCard(s, usageMap[s.id] || []));
+    for (const s of filtered) grid.appendChild(librarySkillCard(s));
   };
   toolbar.querySelector('[name=filter]').addEventListener('input', debounce(renderList, 100));
   renderList();
 
   c.appendChild(page);
+}
+
+function librarySkillCard(s) {
+  const card = el('div', 'skill-card');
+  const distributed = s.distributed_to || [];
+  const outdated = s.outdated_count || 0;
+  const distLabel = (t) => {
+    if (t === 'global') return 'Global';
+    if (t.startsWith('workspace:')) {
+      const id = t.split(':', 2)[1];
+      const w = (STATE.workspaces || []).find(x => x.id === id);
+      return `WS: ${w?.label || w?.name || id}`;
+    }
+    return t;
+  };
+  let badge;
+  if (!distributed.length) {
+    badge = '<span class="badge">non distribué</span>';
+  } else if (outdated > 0) {
+    badge = `<span class="badge badge-warn" title="${outdated} copie(s) avec contenu différent de la bibliothèque">${distributed.length} distribué(s) · ${outdated} désync.</span>`;
+  } else {
+    badge = `<span class="badge badge-ok">${distributed.length} distribué(s)</span>`;
+  }
+
+  card.innerHTML = `
+    <div class="skill-card-header">
+      <div class="skill-icon">${I.sparkle}</div>
+      <div style="flex:1;min-width:0">
+        <h3 class="skill-name">${escapeHtml(s.name || s.id)}</h3>
+        <div class="dim mono" style="font-size:11px;margin-top:2px">${escapeHtml(s.id)}</div>
+      </div>
+      ${badge}
+    </div>
+    <p class="skill-desc">${escapeHtml(s.description || 'Pas de description')}</p>
+    ${distributed.length ? `<div class="skill-ws-list">${distributed.map(t => `<span class="chip">${escapeHtml(distLabel(t))}</span>`).join('')}</div>` : ''}
+  `;
+  const actions = el('div', 'skill-actions');
+  const dist = btn('Distribuer', 'btn-sm btn-primary', '📤');
+  dist.addEventListener('click', () => modalDistributeSkill(s));
+  const ed = btn('Éditer', 'btn-sm btn-ghost', I.edit);
+  ed.addEventListener('click', () => modalEditLibrarySkill(s));
+  const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
+  rm.title = 'Supprimer de la bibliothèque';
+  rm.addEventListener('click', () => modalDeleteLibrarySkill(s));
+  actions.append(dist, ed, rm);
+  card.appendChild(actions);
+  return card;
+}
+
+function modalDistributeSkill(s) {
+  const body = el('div');
+  const distributed = new Set(s.distributed_to || []);
+  const wsList = (STATE.workspaces || []);
+  body.innerHTML = `
+    <p class="muted" style="margin-top:0">
+      Coche les emplacements où <strong class="mono">${escapeHtml(s.id)}</strong> doit être présent.
+      Décoche pour retirer. La bibliothèque reste source de vérité.
+    </p>
+    <label class="ws-check" style="display:flex;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:6px">
+      <input type="checkbox" data-target="global" ${distributed.has('global') ? 'checked' : ''}>
+      <span><strong>Global</strong> <span class="dim mono" style="font-size:11px">~/.claude/skills/</span><br><span class="dim" style="font-size:11.5px">Actif dans tous les projets</span></span>
+    </label>
+    <div class="dim" style="font-size:11px;margin:8px 0 4px">Workspaces :</div>
+    <div data-ws-list></div>
+  `;
+  const wsHost = body.querySelector('[data-ws-list]');
+  if (!wsList.length) {
+    wsHost.innerHTML = '<p class="muted">Aucun workspace.</p>';
+  } else {
+    for (const w of wsList) {
+      const t = `workspace:${w.id}`;
+      const lbl = el('label', 'ws-check');
+      lbl.style.cssText = 'display:flex;gap:8px;align-items:center;padding:6px 10px;border:1px solid var(--border);border-radius:6px;margin-bottom:4px';
+      lbl.innerHTML = `
+        <input type="checkbox" data-target="${escapeHtml(t)}" ${distributed.has(t) ? 'checked' : ''}>
+        <span>${escapeHtml(w.emoji || '📁')} ${escapeHtml(w.label || w.name || w.id)} <span class="dim mono" style="font-size:11px">${escapeHtml(w.id)}</span></span>
+      `;
+      wsHost.appendChild(lbl);
+    }
+  }
+  const cancel = btn('Annuler', 'btn-ghost');
+  const ok = btn('Appliquer', 'btn-primary', '📤');
+  const { close } = openModal({ title: `Distribuer ${s.id}`, body, footer: [cancel, ok], wide: true });
+  cancel.addEventListener('click', close);
+  ok.addEventListener('click', async () => {
+    const targets = Array.from(body.querySelectorAll('input[type=checkbox]:checked')).map(cb => cb.dataset.target);
+    const willRemove = [...distributed].filter(t => !targets.includes(t));
+    const apply = async () => {
+      ok.disabled = true;
+      try {
+        const r = await API.post(`/api/skills-library/${s.id}/distribute`, { targets });
+        const parts = [];
+        if (r.added?.length) parts.push(`${r.added.length} ajout(s)`);
+        if (r.updated?.length) parts.push(`${r.updated.length} mise(s) à jour`);
+        if (r.removed?.length) parts.push(`${r.removed.length} retrait(s)`);
+        toastOk(parts.join(' · ') || 'Aucun changement');
+        close();
+        STATE.loading = true; route();
+      } catch (e) {
+        toastErr(e.message); ok.disabled = false;
+      }
+    };
+    if (willRemove.length) {
+      confirmDialog(`Retirer ce skill de ${willRemove.length} emplacement(s) ?`, apply, { danger: true });
+    } else {
+      apply();
+    }
+  });
+}
+
+function modalAddSkillFromLibrary(wsId) {
+  const target = `workspace:${wsId}`;
+  const library = (STATE.skillsLibrary || []);
+  const candidates = library.filter(s => !(s.distributed_to || []).includes(target));
+  const body = el('div');
+  if (!library.length) {
+    body.innerHTML = `<p class="muted" style="margin-top:0">Ta bibliothèque est vide. Crée un skill depuis l'onglet <strong>Skills</strong> ou importe-en depuis GitHub.</p>`;
+    const c = btn('Fermer', 'btn-ghost');
+    const { close } = openModal({ title: 'Ajouter depuis le magasin', body, footer: c });
+    c.addEventListener('click', close);
+    return;
+  }
+  body.innerHTML = `
+    <p class="muted" style="margin-top:0">Coche les skills à installer dans ce workspace.</p>
+    <div class="recipes-grid" data-list></div>
+  `;
+  const list = body.querySelector('[data-list]');
+  if (!candidates.length) {
+    list.innerHTML = '<p class="muted">Tous les skills de la bibliothèque sont déjà installés ici.</p>';
+  }
+  for (const s of candidates) {
+    const card = el('label', 'recipe-card');
+    card.style.cursor = 'pointer';
+    card.innerHTML = `
+      <input type="checkbox" data-id="${escapeHtml(s.id)}" style="margin-right:8px">
+      <div class="recipe-emoji">🧠</div>
+      <div class="recipe-body">
+        <div class="recipe-name">${escapeHtml(s.name || s.id)}</div>
+        <div class="recipe-desc">${escapeHtml(s.description || '')}</div>
+        <div class="recipe-meta"><span class="badge mono">${escapeHtml(s.id)}</span></div>
+      </div>
+    `;
+    list.appendChild(card);
+  }
+  const cancel = btn('Annuler', 'btn-ghost');
+  const ok = btn('Installer', 'btn-primary', I.plus);
+  const { close } = openModal({ title: 'Ajouter depuis le magasin', body, footer: [cancel, ok], wide: true });
+  cancel.addEventListener('click', close);
+  ok.addEventListener('click', async () => {
+    const ids = Array.from(body.querySelectorAll('input[type=checkbox]:checked')).map(cb => cb.dataset.id);
+    if (!ids.length) { toastErr('Aucun skill sélectionné'); return; }
+    ok.disabled = true;
+    let okCount = 0;
+    for (const id of ids) {
+      const s = library.find(x => x.id === id);
+      const targets = new Set(s?.distributed_to || []);
+      targets.add(target);
+      try {
+        await API.post(`/api/skills-library/${id}/distribute`, { targets: [...targets] });
+        okCount++;
+      } catch (e) { toastErr(`${id}: ${e.message}`); }
+    }
+    if (okCount) toastOk(`${okCount} skill(s) installé(s)`);
+    close(); STATE.loading = true; route();
+  });
+}
+
+function modalEditLibrarySkill(s) {
+  (async () => {
+    let data;
+    try { data = await API.get(`/api/skills-library/${s.id}/content`); }
+    catch (e) { toastErr(e.message); return; }
+    const body = el('div');
+    body.innerHTML = `
+      <p class="muted" style="margin-top:0">Édition de la version <strong>bibliothèque</strong>.
+      Les copies déjà distribuées ne seront <strong>pas écrasées</strong> automatiquement —
+      utilise « Distribuer » pour propager les changements.</p>
+      <textarea class="textarea mono" rows="22" style="width:100%;font-size:12.5px"></textarea>
+    `;
+    const ta = body.querySelector('textarea');
+    ta.value = data.content || '';
+    const cancel = btn('Annuler', 'btn-ghost');
+    const save = btn('Enregistrer', 'btn-primary', I.check);
+    const { close } = openModal({ title: `Éditer ${s.id} (bibliothèque)`, body, footer: [cancel, save], wide: true });
+    cancel.addEventListener('click', close);
+    save.addEventListener('click', async () => {
+      try {
+        await API.post(`/api/skills-library/${s.id}/content`, { content: ta.value });
+        toastOk('Enregistré dans la bibliothèque');
+        close(); STATE.loading = true; route();
+      } catch (e) { toastErr(e.message); }
+    });
+  })();
+}
+
+function modalDeleteLibrarySkill(s) {
+  const distributed = (s.distributed_to || []).length;
+  const body = el('div');
+  body.innerHTML = `
+    <p style="margin-top:0">Supprimer <strong class="mono">${escapeHtml(s.id)}</strong> de la bibliothèque ?</p>
+    ${distributed > 0 ? `
+      <label class="ws-check" style="display:flex;gap:8px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:6px">
+        <input type="checkbox" data-also>
+        <span>Supprimer aussi des <strong>${distributed} emplacement(s)</strong> où il est distribué</span>
+      </label>
+      <p class="dim" style="font-size:12px;margin-top:8px">Sinon les copies distribuées restent en place mais perdent leur lien avec la bibliothèque.</p>
+    ` : '<p class="dim" style="font-size:12px">Ce skill n\'est distribué nulle part.</p>'}
+  `;
+  const cancel = btn('Annuler', 'btn-ghost');
+  const ok = btn('Supprimer', 'btn-danger', I.trash);
+  const { close } = openModal({ title: `Supprimer ${s.id}`, body, footer: [cancel, ok] });
+  cancel.addEventListener('click', close);
+  ok.addEventListener('click', async () => {
+    const also = body.querySelector('[data-also]')?.checked ? 1 : 0;
+    try {
+      await API.del(`/api/skills-library/${s.id}?also_remove_distributed=${also}`);
+      toastOk('Supprimé');
+      close(); STATE.loading = true; route();
+    } catch (e) { toastErr(e.message); }
+  });
 }
 
 function skillCard(s, usedInWorkspaces) {
@@ -5271,17 +5525,20 @@ function modalHooks(wsId) {
 
 function modalImportSkillsFromGitHub() {
   const body = el('div');
-  const wsOptions = (STATE.workspaces || [])
-    .map(w => `<option value="workspace:${escapeHtml(w.id)}">${escapeHtml(w.name || w.id)}</option>`)
-    .join('');
+  const wsRows = (STATE.workspaces || []).map(w => `
+    <label class="ws-check" style="display:flex;gap:8px;align-items:center;padding:5px 8px;border:1px solid var(--border);border-radius:6px;margin:3px 0">
+      <input type="checkbox" data-target="workspace:${escapeHtml(w.id)}">
+      <span>${escapeHtml(w.emoji || '📁')} ${escapeHtml(w.label || w.name || w.id)}</span>
+    </label>
+  `).join('');
   body.innerHTML = `
     <div class="callout callout-info" style="margin-bottom:var(--sp-3)">
       <div>
-        <strong>📥 Import depuis GitHub</strong>
+        <strong>📥 Import depuis GitHub vers la bibliothèque</strong>
         <p style="margin:4px 0 0;font-size:12px">
-          Clone un repo public GitHub, détecte les skills (dossiers contenant <code class="mono">SKILL.md</code>),
-          et copie ceux que tu sélectionnes vers le scope de ton choix.
-          Une trace de provenance (<code class="mono">.atelier-origin.json</code>) est ajoutée à chaque skill importé.
+          Clone un repo public, détecte les skills (dossiers contenant <code class="mono">SKILL.md</code>),
+          les ajoute à ta <strong>bibliothèque</strong> (le magasin), et — optionnel — les distribue
+          immédiatement vers Global et/ou des workspaces.
         </p>
       </div>
     </div>
@@ -5295,18 +5552,20 @@ function modalImportSkillsFromGitHub() {
         <input class="input mono" name="branch" placeholder="main" autocomplete="off">
       </div>
     </div>
-    <div class="field">
-      <label class="field-label">Cible *</label>
-      <select class="select" name="scope">
-        <option value="global">Global (~/.claude/skills/)</option>
-        ${wsOptions}
-      </select>
-    </div>
     <div class="field-row" style="align-items:flex-end">
       <button type="button" class="btn btn-primary" data-analyze>🔍 Analyser le repo</button>
-      <label class="ws-check" style="margin:0;padding:6px 10px"><input type="checkbox" name="overwrite"> <span>Écraser si existe déjà</span></label>
+      <label class="ws-check" style="margin:0;padding:6px 10px"><input type="checkbox" name="overwrite"> <span>Écraser dans la bibliothèque si existe déjà</span></label>
     </div>
     <div data-result style="margin-top:var(--sp-3)"></div>
+    <div data-distribute hidden style="margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border)">
+      <div class="section-label" style="margin-bottom:var(--sp-2)"><span class="num">📤</span> Distribuer immédiatement (optionnel)</div>
+      <p class="dim" style="font-size:11.5px;margin:0 0 var(--sp-2) 0">Si tu coches des cibles ici, les skills importés y seront copiés. Sinon ils restent uniquement dans la bibliothèque.</p>
+      <label class="ws-check" style="display:flex;gap:8px;align-items:center;padding:5px 8px;border:1px solid var(--border);border-radius:6px;margin:3px 0">
+        <input type="checkbox" data-target="global">
+        <span><strong>Global</strong> <span class="dim mono" style="font-size:11px">~/.claude/skills/</span></span>
+      </label>
+      ${wsRows}
+    </div>
   `;
 
   const cancel = btn('Fermer', 'btn-ghost');
@@ -5358,6 +5617,7 @@ function modalImportSkillsFromGitHub() {
         list.appendChild(card);
       }
       importBtn.disabled = false;
+      body.querySelector('[data-distribute]').hidden = false;
     } catch (e) {
       resultHost.innerHTML = `<div class="callout callout-warn">${escapeHtml(e.message || 'Échec analyse')}</div>`;
     }
@@ -5368,12 +5628,14 @@ function modalImportSkillsFromGitHub() {
     const selected = Array.from(resultHost.querySelectorAll('input[type=checkbox][data-rel]:checked'))
       .map(cb => cb.dataset.rel);
     if (!selected.length) { toastErr('Aucun skill sélectionné'); return; }
+    const distributeTo = Array.from(body.querySelectorAll('[data-distribute] input[type=checkbox]:checked'))
+      .map(cb => cb.dataset.target);
     const payload = {
       url: get('url'),
       branch: get('branch'),
-      scope: get('scope'),
       skills: selected,
       overwrite: body.querySelector('[name=overwrite]').checked,
+      distribute_to: distributeTo,
     };
     importBtn.disabled = true;
     try {
@@ -5396,28 +5658,24 @@ function modalImportSkillsFromGitHub() {
 function modalNewSkill() {
   const body = el('div');
   body.innerHTML = `
-    <div class="field-row">
-      <div class="field" style="flex:2"><label class="field-label">Nom * (a-z, 0-9, _, -)</label><input class="input mono" name="name" placeholder="mon-skill"></div>
-      <div class="field" style="flex:1"><label class="field-label">Scope</label><select class="select" name="scope"><option value="global">Global</option>${STATE.workspaces.map(w => `<option value="workspace:${escapeHtml(w.id)}">Workspace · ${escapeHtml(w.id)}</option>`).join('')}</select></div>
-    </div>
+    <p class="muted" style="margin-top:0">Créé dans la <strong>bibliothèque</strong> (le magasin). Tu pourras ensuite le distribuer vers Global et/ou des workspaces avec le bouton « Distribuer ».</p>
+    <div class="field"><label class="field-label">Nom * (a-z, 0-9, _, -)</label><input class="input mono" name="name" placeholder="mon-skill"></div>
     <div class="field"><label class="field-label">Description * (1 phrase)</label><input class="input" name="description" placeholder="Ce skill aide à…"></div>
     <div class="field"><label class="field-label">Instructions (corps du SKILL.md, optionnel)</label><textarea class="textarea textarea-code" name="body" rows="10" placeholder="Décris ici comment Claude doit utiliser ce skill : étapes, règles, exemples…"></textarea></div>
-    <div class="dim" style="font-size:11.5px">Tu pourras ajouter d'autres fichiers (références, exemples) en éditant le skill après création.</div>
   `;
   const cancel = btn('Annuler', 'btn-ghost');
   const ok = btn('Créer', 'btn-primary', I.plus);
-  const { close } = openModal({ title: 'Nouveau skill', body, footer: [cancel, ok], wide: true });
+  const { close } = openModal({ title: 'Nouveau skill (bibliothèque)', body, footer: [cancel, ok], wide: true });
   cancel.addEventListener('click', close);
   ok.addEventListener('click', async () => {
     const get = n => body.querySelector(`[name=${n}]`).value;
-    const payload = { name: get('name').trim(), scope: get('scope'), description: get('description').trim(), body: get('body') };
+    const payload = { name: get('name').trim(), description: get('description').trim(), body: get('body') };
     if (!payload.name) { toastErr('Nom requis'); return; }
     if (!payload.description) { toastErr('Description requise'); return; }
     try {
-      await API.post('/api/skills', payload);
-      toastOk('Skill créé'); close();
+      await API.post('/api/skills-library', payload);
+      toastOk('Skill ajouté à la bibliothèque'); close();
       STATE.loading = true;
-      // Navigue vers la page Skills si on était ailleurs
       if (location.hash !== '#/skills') location.hash = '#/skills'; else route();
     } catch (e) { toastErr(e.message); }
   });
