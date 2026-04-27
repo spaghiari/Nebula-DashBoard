@@ -2571,7 +2571,7 @@ async function modalSystemUpdate() {
         <div>
           <strong>Auto-update indisponible.</strong>
           ${escapeHtml(info.reason || 'Cette installation n\'est pas un dépôt git.')}
-          <p style="margin:var(--sp-2) 0 0">Pour activer l'auto-update, clone le repo officiel d'Atelier dans <code class="mono">C:\\claude-workspace</code>.</p>
+          <p style="margin:var(--sp-2) 0 0">Pour activer l'auto-update, ton install doit être un clone du repo officiel d'Atelier (le chemin importe peu — bureau, disque secondaire, etc.).</p>
         </div>
       </div>
     `;
@@ -3928,7 +3928,7 @@ async function renderHelp() {
 
     <section id="h-env">
       <h2>${I.key}<span>9. Variables d'environnement (.env.local)</span></h2>
-      <p>Pour ne <strong>jamais</strong> committer de secrets dans tes registres ou templates, Atelier utilise <code class="mono">C:\\claude-workspace\\.env.local</code> comme stockage centralisé.</p>
+      <p>Pour ne <strong>jamais</strong> committer de secrets dans tes registres ou templates, Atelier utilise un fichier <code class="mono">.env.local</code> à la racine de l'install comme stockage centralisé.</p>
 
       <h3>Format</h3>
       <pre class="help-code">OPENAI_API_KEY=sk-...
