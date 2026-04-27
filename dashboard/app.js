@@ -3698,6 +3698,13 @@ async function renderHelp() {
       <h3>Page détail d'un workspace</h3>
       <p>Clique sur une carte workspace pour voir : statistiques (sessions, tokens, coût), MCPs scopés, skills locaux, plugins overridés, agents/commandes, et accès rapide aux fichiers de config (<code class="mono">CLAUDE.md</code>, <code class="mono">settings.json</code>, permissions, hooks).</p>
 
+      <h3>Estimation du coût (précision ~5%)</h3>
+      <p>La tuile <strong>Coût ~$</strong> additionne tous les tokens des sessions <code class="mono">.jsonl</code> avec les <strong>vrais tarifs par modèle</strong> (Opus / Sonnet / Haiku, version 4.x ou plus ancienne) et inclut les tokens de <strong>cache</strong> (création + lecture). Sous les tuiles, un encart « Coût par modèle » détaille la répartition et l'économie réalisée grâce au cache.</p>
+      <p>Tarifs éditables dans <code class="mono">dashboard/data/pricing.json</code> — utile si Anthropic change ses prix ou si tu as des tarifs négociés. Le fichier est rechargé automatiquement à chaque appel (mtime).</p>
+      <div class="callout callout-info">
+        Estimation hors crédits/abonnement : si tu utilises un plan d'abonnement (Pro, Team, Enterprise), les chiffres affichés représentent ce que coûteraient ces tokens facturés à l'API publique, pas ce que tu paies réellement.
+      </div>
+
       <div class="callout callout-warn">
         <strong>Suppression :</strong> par défaut, supprimer un workspace ne retire que l'enregistrement (le dossier reste sur disque). Coche <em>Supprimer aussi le dossier</em> pour purger physiquement — irréversible.
       </div>
@@ -3812,26 +3819,39 @@ async function renderHelp() {
     </section>
 
     <section id="h-skills">
-      <h2>${I.sparkle}<span>6. Skills</span></h2>
+      <h2>${I.sparkle}<span>6. Skills — modèle "magasin"</span></h2>
       <p>Un skill = un dossier contenant <code class="mono">SKILL.md</code> (frontmatter + instructions Markdown). Optionnellement des fichiers de référence (<code class="mono">references/</code>, <code class="mono">examples/</code>).</p>
 
+      <h3>Bibliothèque centralisée (le magasin)</h3>
+      <p>Atelier maintient une <strong>bibliothèque</strong> dans <code class="mono">dashboard/data/skills-library/</code> : c'est ta source de vérité, le magasin où tu pioches. La page Skills affiche cette bibliothèque, pas <code class="mono">~/.claude/skills/</code> directement.</p>
+      <p>Pourquoi cette indirection : tu peux installer le même skill dans plusieurs workspaces (ex. <code class="mono">n8n-prod</code> + <code class="mono">n8n-dev</code>) avec une seule édition, sans copier-coller manuel.</p>
+
       <h3>Créer un skill</h3>
-      <p>Page <strong>Skills → Nouveau skill</strong>. Tu choisis le scope (global ou workspace), un nom court, une description (1 phrase), et le corps optionnel. Atelier crée le dossier et le <code class="mono">SKILL.md</code> avec le bon frontmatter.</p>
+      <p>Bouton <strong>Nouveau skill</strong> en haut de la page Skills. Le skill est créé dans la bibliothèque uniquement — non distribué tant que tu n'utilises pas <em>Distribuer</em>.</p>
 
-      <h3>Édition multi-fichiers</h3>
-      <p>Sur une carte de skill, le bouton <em>Éditer</em> ouvre une modale avec :</p>
+      <h3>Distribuer un skill</h3>
+      <p>Bouton <strong>📤 Distribuer</strong> sur une carte → modal avec checkboxes :</p>
       <ul class="help-list">
-        <li>Arborescence des fichiers à gauche (<code class="mono">SKILL.md</code> en premier, marqué d'une étoile)</li>
-        <li>Éditeur de contenu à droite avec sauvegarde par <kbd>Ctrl+S</kbd></li>
-        <li>Bouton <strong>+</strong> pour ajouter un fichier (sélection ou création de sous-dossier)</li>
+        <li><strong>Global</strong> (<code class="mono">~/.claude/skills/&lt;name&gt;/</code>) — actif dans tous les projets</li>
+        <li>Une ligne par <strong>workspace</strong> (<code class="mono">&lt;workspace&gt;/.claude/skills/&lt;name&gt;/</code>) — actif uniquement dans ce projet</li>
       </ul>
-      <p><code class="mono">SKILL.md</code> est protégé contre la suppression — pour s'en débarrasser, supprime le skill entier.</p>
+      <p>Coche pour installer/écraser, décoche pour retirer. C'est un <em>set complet</em> : tu modélises l'état désiré, Atelier ajoute/met à jour/retire en conséquence.</p>
 
-      <h3>Copier un skill global vers un workspace</h3>
-      <p>Bouton <em>Copier dans…</em> ouvre une liste cochable des workspaces. Atelier <code class="mono">copytree</code> le skill dans <code class="mono">&lt;workspace&gt;/.claude/skills/&lt;name&gt;/</code>, où Claude Code le découvre automatiquement.</p>
+      <h3>Importer depuis GitHub</h3>
+      <p>Bouton <strong>📥 Importer GitHub</strong> → colle <code class="mono">user/repo</code> ou une URL complète, choisis la branche (optionnel) → Analyser. Atelier clone en shallow, détecte tous les <code class="mono">SKILL.md</code> du repo, et te laisse choisir lesquels importer dans la bibliothèque + les distribuer immédiatement (Global / workspaces) si tu veux.</p>
+      <p>Chaque skill importé reçoit un <code class="mono">.atelier-origin.json</code> qui trace <code class="mono">repo</code>, <code class="mono">branch</code>, <code class="mono">commit</code>, <code class="mono">imported_at</code> — utile pour de futurs checks de mise à jour.</p>
+
+      <h3>Édition centralisée + désync</h3>
+      <p>Le bouton <em>Éditer</em> ouvre la version <strong>bibliothèque</strong> du skill. Les copies déjà distribuées <strong>ne sont pas écrasées en silence</strong> — un badge <em>« N désync. »</em> apparaît sur la carte si certaines copies ont divergé. Pour propager les changements : re-clique <em>Distribuer</em>.</p>
+
+      <h3>Ajouter depuis le magasin sur un workspace</h3>
+      <p>Sur la page d'un workspace, section <strong>Skills</strong> → bouton <strong>+ Ajouter depuis le magasin</strong>. Modale qui liste les skills de la bibliothèque non encore présents dans ce workspace, avec checkboxes multi-sélection.</p>
+
+      <h3>Migration depuis l'existant</h3>
+      <p>Si ta bibliothèque est vide mais qu'Atelier détecte des skills dans <code class="mono">~/.claude/skills/</code> ou dans des workspaces, un bandeau te propose <strong>Importer dans la bibliothèque</strong> en 1 clic. Migration purement additive, aucune copie écrasée.</p>
 
       <div class="callout callout-info">
-        Les skills <strong>globaux</strong> sont dans <code class="mono">~/.claude/skills/</code>, disponibles dans tous les projets. Les skills <strong>locaux</strong> à un workspace sont dans <code class="mono">&lt;workspace&gt;/.claude/skills/</code> et ne s'appliquent que là.
+        <strong>Activation par Claude :</strong> les skills sont auto-découverts par Claude Code au démarrage de la session — tu n'as rien à enregistrer manuellement. Vérifie qu'ils apparaissent avec <code class="mono">/help</code> ou via le menu skills de Claude.
       </div>
     </section>
 
@@ -4077,20 +4097,34 @@ async function renderSkills() {
     <div class="help-body">
       <div class="help-grid">
         <div>
-          <h4>Qu'est-ce qu'un skill ?</h4>
-          <p>Un dossier contenant un fichier <code class="mono">SKILL.md</code> (frontmatter <code class="mono">name</code> + <code class="mono">description</code> + corps Markdown). Optionnellement, des fichiers de référence (<code class="mono">references/*.md</code>, <code class="mono">examples/</code>, etc.) que Claude peut consulter.</p>
+          <h4>📚 La bibliothèque = ton magasin</h4>
+          <p>La page Skills affiche ta <strong>bibliothèque centralisée</strong> (<code class="mono">dashboard/data/skills-library/</code>). Chaque carte représente un skill que tu peux distribuer vers Global et/ou des workspaces — comme un magasin où tu piochais ce que tu veux où tu veux.</p>
         </div>
         <div>
-          <h4>Global vs workspace</h4>
-          <p><strong>Global</strong> : <code class="mono">~/.claude/skills/&lt;name&gt;/</code> — disponible partout.<br><strong>Workspace</strong> : <code class="mono">&lt;workspace&gt;/.claude/skills/&lt;name&gt;/</code> — actif uniquement dans ce projet.<br>Le bouton « Copier dans… » duplique un skill global vers un workspace.</p>
+          <h4>📤 Distribuer un skill</h4>
+          <p>Bouton <strong>Distribuer</strong> sur chaque carte → coche les cibles (Global + workspaces). Coche pour installer/écraser, décoche pour retirer. Une seule action peut installer le même skill dans plusieurs workspaces simultanément.</p>
         </div>
         <div>
-          <h4>Édition multi-fichiers</h4>
-          <p>Le bouton <strong>Éditer</strong> ouvre l'arborescence du skill avec un éditeur. Tu peux ajouter des fichiers <code class="mono">references/api.md</code>, <code class="mono">examples/usage.py</code>, etc. <code class="mono">SKILL.md</code> est obligatoire et ne peut pas être supprimé.</p>
+          <h4>📥 Importer depuis GitHub</h4>
+          <p>Bouton <strong>Importer GitHub</strong> en haut → colle <code class="mono">user/repo</code> (ex. <code class="mono">czlonkowski/n8n-skills</code>) → Analyser. Atelier détecte tous les <code class="mono">SKILL.md</code> et tu choisis ceux à importer dans ta bibliothèque, avec option de distribution immédiate.</p>
         </div>
         <div>
-          <h4>Activation</h4>
-          <p>Les skills sont auto-découverts par Claude Code au démarrage — pas besoin de les enregistrer manuellement. Vérifie qu'ils apparaissent avec <code class="mono">/help</code> ou via le menu skills.</p>
+          <h4>✏️ Édition centralisée</h4>
+          <p>Le bouton <strong>Éditer</strong> ouvre la version <em>bibliothèque</em>. Les copies déjà distribuées ne sont <strong>pas écrasées en silence</strong> — un badge « désync. » apparaît si elles divergent. Pour propager, re-clique <em>Distribuer</em>.</p>
+        </div>
+        <div>
+          <h4>🌍 Global vs workspace</h4>
+          <p><strong>Global</strong> : <code class="mono">~/.claude/skills/&lt;name&gt;/</code> — actif dans tous les projets.<br><strong>Workspace</strong> : <code class="mono">&lt;workspace&gt;/.claude/skills/&lt;name&gt;/</code> — actif uniquement dans ce projet. La bibliothèque te permet de gérer les deux d'un seul endroit.</p>
+        </div>
+        <div>
+          <h4>⚡ Activation par Claude</h4>
+          <p>Les skills sont <strong>auto-découverts</strong> par Claude Code au démarrage de la session — pas besoin de les enregistrer manuellement. Vérifie qu'ils apparaissent avec <code class="mono">/help</code> ou via le menu skills de Claude.</p>
+        </div>
+      </div>
+      <div class="callout callout-info" style="margin-top:var(--sp-3)">
+        <div>
+          <strong>💡 Tu as déjà des skills dans <code class="mono">~/.claude/skills/</code> ou des workspaces ?</strong>
+          Si ta bibliothèque est vide mais qu'Atelier détecte des skills existants, un bandeau te proposera de les importer en 1 clic. Aucune copie n'est écrasée — la migration est purement additive.
         </div>
       </div>
     </div>

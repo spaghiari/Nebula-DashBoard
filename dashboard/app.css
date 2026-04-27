@@ -1119,6 +1119,10 @@ body {
 .topbar-right {
   display: flex; align-items: center; gap: var(--sp-2);
 }
+#topbar-actions {
+  display: flex; align-items: center; gap: var(--sp-2);
+  flex-wrap: wrap;
+}
 #topbar-update-slot { display: flex; }
 .topbar-update-badge {
   display: inline-flex; align-items: center; gap: 6px;
