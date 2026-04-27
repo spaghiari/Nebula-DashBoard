@@ -2479,12 +2479,23 @@ async function startFirstRunWizard() {
    SYSTEM UPDATE — vérification & application via git
    ================================================================ */
 const UPDATE_CHECK_KEY = 'atelier-last-update-check';
-const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;  // 6h
+const UPDATE_SESSION_FLAG = 'atelier-update-checked-this-session';
+const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;  // 1h
 
 async function checkForUpdates({ force = false } = {}) {
+  // 1ère ouverture de session (sessionStorage vide) → toujours forcer un fetch.
+  // Ainsi un fermer/rouvrir d'onglet déclenche un check frais sans attendre l'intervalle.
+  let firstOfSession = false;
+  try {
+    if (!sessionStorage.getItem(UPDATE_SESSION_FLAG)) {
+      firstOfSession = true;
+      sessionStorage.setItem(UPDATE_SESSION_FLAG, '1');
+    }
+  } catch { /* sessionStorage indispo */ }
+
   // Anti-spam : ne check le distant qu'une fois par UPDATE_CHECK_INTERVAL_MS
-  let shouldCheckRemote = force;
-  if (!force) {
+  let shouldCheckRemote = force || firstOfSession;
+  if (!shouldCheckRemote) {
     try {
       const last = parseInt(localStorage.getItem(UPDATE_CHECK_KEY) || '0', 10);
       shouldCheckRemote = (Date.now() - last) > UPDATE_CHECK_INTERVAL_MS;
