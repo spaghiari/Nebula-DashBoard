@@ -190,7 +190,7 @@ def workspace_stats(ws: dict) -> dict:
             "sessions": 0, "messages": 0, "last": None,
             "input_tokens": 0, "output_tokens": 0,
             "cache_creation_tokens": 0, "cache_read_tokens": 0,
-            "cost_usd": 0.0, "cost_by_model": {}, "cache_savings_usd": 0.0,
+            "cost_usd": 0.0, "cost_by_model": [], "cache_savings_usd": 0.0,
         }
     pricing = _load_pricing()
     sessions = 0

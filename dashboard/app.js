@@ -770,7 +770,7 @@ async function renderWorkspace(wsId) {
   // Tooltip détaillé sur la tuile coût
   const costTile = tiles.querySelector('[data-cost-tile]');
   if (costTile) {
-    const breakdown = stats.cost_by_model || [];
+    const breakdown = Array.isArray(stats.cost_by_model) ? stats.cost_by_model : [];
     const total = stats.cost_usd || 0;
     const lines = breakdown.map(b => {
       const pct = total > 0 ? (b.cost_usd / total * 100).toFixed(0) : 0;
