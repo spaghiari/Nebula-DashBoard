@@ -1,4 +1,4 @@
-# 🧩 Atelier — Claude Workspace Dashboard
+# 🌌 Nebula — Claude Workspace Dashboard
 
 Un environnement local pour gérer plusieurs workspaces Claude Code depuis une
 interface web unique : workspaces, MCPs, skills, plugins, templates, hooks,
@@ -21,7 +21,7 @@ hooks) vit éparpillée dans `~/.claude.json`, un `.mcp.json` par projet,
 - Activer un plugin seulement sur 2 workspaces sur 5 → usine à gaz
 - Retrouver quelle session correspond à quel projet → galère
 
-Atelier centralise tout ça.
+Nebula centralise tout ça.
 
 ---
 
@@ -60,7 +60,7 @@ Atelier centralise tout ça.
 - **Hooks & permissions** — éditeur GUI pour `settings.json` global + local.
 
 ### Confort & UX
-- **5 thèmes** — Atelier sombre/clair, Marine (bleu), Forêt (émeraude),
+- **5 thèmes** — Nebula sombre/clair, Marine (bleu), Forêt (émeraude),
   Brique (orange). Persisté **côté serveur** (`dashboard/data/ui_state.json`)
   + cache localStorage pour éviter le flash au chargement.
 - **Command palette** — `/` ou `Ctrl+K`, recherche globale.
@@ -79,7 +79,7 @@ Atelier centralise tout ça.
   dans `projects.<path>.mcpServers`), `settings.json` et `settings.local.json`
   pour récupérer MCPs et projets existants en un clic.
 - **Détection des conflits** — repère les MCPs présents à la fois dans
-  `~/.claude.json`/`settings.json` et dans le registre Atelier, propose la
+  `~/.claude.json`/`settings.json` et dans le registre Nebula, propose la
   migration ou le nettoyage avec backup automatique.
 - **Auto-update bulletproof** — vérification git en arrière-plan (au démarrage
   + toutes les 30 min), badge gradient pulsant **"X MAJ"** dans le topbar
@@ -394,16 +394,16 @@ Tous les utilisateurs reçoivent la mise à jour automatiquement.
 ## 🛠 Détection des conflits avec la config Claude globale
 
 Si des MCPs existent à la fois dans `~/.claude.json` ou
-`~/.claude/settings.json` **et** dans le registre Atelier, ils sont
+`~/.claude/settings.json` **et** dans le registre Nebula, ils sont
 dupliqués (ça marche par précédence project > user > global, mais c'est
 fragile).
 
 **Page MCPs** affiche un bandeau jaune si des conflits sont détectés. Clic
 sur **Examiner** → modale avec :
 - **Doublons** (mêmes IDs des deux côtés) → bouton "Retirer du global"
-  (Atelier reste source de vérité, backup `.bak` créé)
+  (Nebula reste source de vérité, backup `.bak` créé)
 - **Orphelins** (uniquement dans Claude global) → bouton "Migrer" pour les
-  importer dans Atelier en un coup, ou poubelle si obsolètes
+  importer dans Nebula en un coup, ou poubelle si obsolètes
 
 ---
 
@@ -413,8 +413,8 @@ sur **Examiner** → modale avec :
 
 | Thème | Style |
 |---|---|
-| Atelier | Sombre · violet & ocre (défaut) |
-| Atelier clair | Clair · violet profond |
+| Nebula | Sombre · violet & ocre (défaut) |
+| Nebula clair | Clair · violet profond |
 | Marine | Sombre · bleu profond |
 | Forêt | Sombre · vert émeraude |
 | Brique | Sombre · orange chaud |

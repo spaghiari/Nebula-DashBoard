@@ -1,5 +1,5 @@
 /* ================================================================
-   Atelier — Command Center for Claude Workspace
+   Nebula — Command Center for Claude Workspace
    Design system : dark editorial, hairline rules, tabular numerics
    ================================================================ */
 
@@ -108,10 +108,10 @@ body {
 }
 
 /* === THEMES =================================================== */
-/* Atelier (défaut) : dark + violet/ocre — défini via :root au-dessus */
+/* Nebula (défaut) : dark + violet/ocre — défini via :root au-dessus */
 
-/* Atelier clair : light + violet */
-:root[data-theme="atelier-clair"] {
+/* Nebula clair : light + violet */
+:root[data-theme="nebula-clair"] {
   --bg: #f8f7fb;
   --bg-grid: rgba(0, 0, 0, 0.025);
   --bg-glow-1: rgba(124, 58, 237, 0.07);
@@ -135,21 +135,21 @@ body {
   --shadow-1: 0 1px 0 rgba(0, 0, 0, 0.02) inset;
   --shadow-2: 0 12px 32px rgba(20, 14, 30, 0.12), 0 0 0 1px var(--border-strong);
 }
-:root[data-theme="atelier-clair"] body {
+:root[data-theme="nebula-clair"] body {
   background-image:
     radial-gradient(ellipse 60% 40% at 80% -10%, var(--bg-glow-1), transparent 60%),
     radial-gradient(ellipse 40% 30% at 0% 100%, var(--bg-glow-2), transparent 60%),
     linear-gradient(var(--bg-grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
 }
-:root[data-theme="atelier-clair"] .topbar { background: rgba(248, 247, 251, 0.75); }
-:root[data-theme="atelier-clair"] .modal-overlay,
-:root[data-theme="atelier-clair"] .palette-overlay { background: rgba(20, 14, 30, 0.45); }
-:root[data-theme="atelier-clair"] .btn-primary { color: #ffffff; }
-:root[data-theme="atelier-clair"] .switch input:checked + .switch-slider::before { background: #ffffff; }
-:root[data-theme="atelier-clair"] .modal-footer { background: rgba(0, 0, 0, 0.025); }
-:root[data-theme="atelier-clair"] .banner-error { background: #fff1f1; color: #b91c1c; border-color: #fca5a5; }
-:root[data-theme="atelier-clair"] .input-search {
+:root[data-theme="nebula-clair"] .topbar { background: rgba(248, 247, 251, 0.75); }
+:root[data-theme="nebula-clair"] .modal-overlay,
+:root[data-theme="nebula-clair"] .palette-overlay { background: rgba(20, 14, 30, 0.45); }
+:root[data-theme="nebula-clair"] .btn-primary { color: #ffffff; }
+:root[data-theme="nebula-clair"] .switch input:checked + .switch-slider::before { background: #ffffff; }
+:root[data-theme="nebula-clair"] .modal-footer { background: rgba(0, 0, 0, 0.025); }
+:root[data-theme="nebula-clair"] .banner-error { background: #fff1f1; color: #b91c1c; border-color: #fca5a5; }
+:root[data-theme="nebula-clair"] .input-search {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%234a4658' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><path d='m21 21-4.35-4.35'/></svg>");
 }
 
@@ -2032,14 +2032,14 @@ body {
 }
 
 /* Adapté pour thème clair (preview en clair) */
-.theme-card[data-theme="atelier-clair"] .theme-preview {
+.theme-card[data-theme="nebula-clair"] .theme-preview {
   border-color: rgba(0,0,0,0.1);
 }
-.theme-card[data-theme="atelier-clair"] .theme-preview-sidebar {
+.theme-card[data-theme="nebula-clair"] .theme-preview-sidebar {
   background: rgba(0,0,0,0.025);
   border-right-color: rgba(0,0,0,0.07);
 }
-.theme-card[data-theme="atelier-clair"] .theme-preview-sidebar::after {
+.theme-card[data-theme="nebula-clair"] .theme-preview-sidebar::after {
   background: rgba(0,0,0,0.08);
   box-shadow:
     0 12px 0 rgba(0,0,0,0.05),
@@ -2047,8 +2047,8 @@ body {
     0 36px 0 var(--p-accent),
     0 48px 0 rgba(0,0,0,0.05);
 }
-.theme-card[data-theme="atelier-clair"] .theme-preview-bar { background: rgba(0,0,0,0.1); }
-.theme-card[data-theme="atelier-clair"] .theme-preview-card {
+.theme-card[data-theme="nebula-clair"] .theme-preview-bar { background: rgba(0,0,0,0.1); }
+.theme-card[data-theme="nebula-clair"] .theme-preview-card {
   background: rgba(0,0,0,0.03);
   border-color: rgba(0,0,0,0.08);
 }

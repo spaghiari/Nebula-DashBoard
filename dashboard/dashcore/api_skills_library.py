@@ -39,14 +39,14 @@ def _target_parent(target: str) -> Path | None:
 
 
 def _hash_dir(d: Path) -> str:
-    """Hash récursif du contenu d'un dossier (ignore .atelier-origin.json)."""
+    """Hash récursif du contenu d'un dossier (ignore .nebula-origin.json)."""
     h = hashlib.sha256()
     if not d.exists():
         return ""
     for f in sorted(d.rglob("*")):
         if not f.is_file():
             continue
-        if f.name == ".atelier-origin.json":
+        if f.name == ".nebula-origin.json":
             continue
         try:
             h.update(f.relative_to(d).as_posix().encode("utf-8"))
@@ -253,7 +253,7 @@ def import_dir_into_library(src_dir: Path, requested_name: str | None = None,
     if origin:
         import json as _json
         try:
-            (dst / ".atelier-origin.json").write_text(_json.dumps(origin, indent=2), encoding="utf-8")
+            (dst / ".nebula-origin.json").write_text(_json.dumps(origin, indent=2), encoding="utf-8")
         except OSError:
             pass
     return 201, {"ok": True, "name": name}

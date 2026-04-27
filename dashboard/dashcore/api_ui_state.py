@@ -6,8 +6,9 @@ import threading
 from dashcore.config import DASHBOARD_DIR, log
 
 UI_STATE_FILE = DASHBOARD_DIR / "data" / "ui_state.json"
-_DEFAULTS: dict = {"theme": "atelier", "onboarded": False}
+_DEFAULTS: dict = {"theme": "nebula", "onboarded": False}
 _ALLOWED_KEYS = frozenset(_DEFAULTS)
+_THEME_LEGACY = {"atelier": "nebula", "atelier-clair": "nebula-clair"}
 _lock = threading.RLock()
 
 
@@ -16,7 +17,11 @@ def _read() -> dict:
         if UI_STATE_FILE.exists():
             data = json.loads(UI_STATE_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                return {**_DEFAULTS, **{k: v for k, v in data.items() if k in _ALLOWED_KEYS}}
+                merged = {**_DEFAULTS, **{k: v for k, v in data.items() if k in _ALLOWED_KEYS}}
+                # Migration douce : ancien thème "atelier*" → "nebula*"
+                if merged.get("theme") in _THEME_LEGACY:
+                    merged["theme"] = _THEME_LEGACY[merged["theme"]]
+                return merged
     except Exception:
         pass
     return dict(_DEFAULTS)

@@ -463,11 +463,11 @@ CLAUDE_GLOBAL_SOURCES = (
 
 
 def find_global_mcp_conflicts() -> dict:
-    """Détecte les MCPs présents à la fois dans la config Claude globale et dans le registre Atelier.
+    """Détecte les MCPs présents à la fois dans la config Claude globale et dans le registre Nebula.
 
     Pour chaque MCP du registre, on regarde s'il existe une entrée homonyme dans
     `~/.claude.json`, `~/.claude/settings.json` ou `~/.claude/settings.local.json`.
-    Les doublons créent une config zombie : Atelier sync vers le `.mcp.json` du
+    Les doublons créent une config zombie : Nebula sync vers le `.mcp.json` du
     workspace, mais l'entrée globale reste et peut diverger silencieusement.
     """
     registry = read_json(MCP_REGISTRY, {"mcps": []}).get("mcps", [])
@@ -497,7 +497,7 @@ def find_global_mcp_conflicts() -> dict:
                     "global_transport": cfg.get("type") or cfg.get("transport") or ("http" if cfg.get("url") else "stdio"),
                 })
 
-    # MCPs uniquement dans la config globale (jamais importés dans Atelier)
+    # MCPs uniquement dans la config globale (jamais importés dans Nebula)
     orphans = []
     for src in CLAUDE_GLOBAL_SOURCES:
         if not src.exists():
@@ -562,7 +562,7 @@ def remove_mcp_from_claude_global(mcp_id: str, source: str) -> tuple[int, dict]:
 
 
 def migrate_global_mcp_to_registry(mcp_id: str, source: str, workspaces: list | None = None) -> tuple[int, dict]:
-    """Importe un MCP de la config globale dans le registre Atelier puis le retire de la source.
+    """Importe un MCP de la config globale dans le registre Nebula puis le retire de la source.
 
     Pour les "orphelins" — MCPs présents dans ~/.claude/settings.json mais pas
     dans le registre. Évite la double action import + cleanup manuel.

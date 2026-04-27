@@ -1,5 +1,5 @@
 /* ================================================================
-   Atelier — Claude Workspace Dashboard
+   Nebula — Claude Workspace Dashboard
    Vanilla JS SPA — no dependencies, no CDN
    ================================================================ */
 'use strict';
@@ -50,27 +50,27 @@ I.message   = _icon('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2
 
 /* === THEMES ======================================================= */
 const THEMES = [
-  { id: 'atelier',        label: 'Atelier',        desc: 'Sombre · violet & ocre',        accent: '#a78bfa', warm: '#f4a672', bg: '#0a0a0f' },
-  { id: 'atelier-clair',  label: 'Atelier clair',  desc: 'Clair · violet',                accent: '#7c3aed', warm: '#c2410c', bg: '#f8f7fb' },
+  { id: 'nebula',        label: 'Nebula',        desc: 'Sombre · violet & ocre',        accent: '#a78bfa', warm: '#f4a672', bg: '#0a0a0f' },
+  { id: 'nebula-clair',  label: 'Nebula clair',  desc: 'Clair · violet',                accent: '#7c3aed', warm: '#c2410c', bg: '#f8f7fb' },
   { id: 'marine',         label: 'Marine',         desc: 'Sombre · bleu profond',         accent: '#60a5fa', warm: '#fbbf24', bg: '#08101c' },
   { id: 'foret',          label: 'Forêt',          desc: 'Sombre · vert émeraude',        accent: '#34d399', warm: '#fbbf24', bg: '#08120e' },
   { id: 'brique',         label: 'Brique',         desc: 'Sombre · orange chaud',         accent: '#fb923c', warm: '#facc15', bg: '#120a08' },
 ];
 
 function applyTheme(id, { save = true } = {}) {
-  const valid = THEMES.find(t => t.id === id) ? id : 'atelier';
-  if (valid === 'atelier') document.documentElement.removeAttribute('data-theme');
+  const valid = THEMES.find(t => t.id === id) ? id : 'nebula';
+  if (valid === 'nebula') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', valid);
-  try { localStorage.setItem('atelier-theme', valid); } catch {}
+  try { localStorage.setItem('nebula-theme', valid); } catch {}
   if (save) API.post('/api/ui-state', { theme: valid }).catch(() => {});
 }
 
 function getCurrentTheme() {
   try {
-    const stored = localStorage.getItem('atelier-theme');
+    const stored = localStorage.getItem('nebula-theme');
     if (stored && THEMES.find(t => t.id === stored)) return stored;
   } catch {}
-  return 'atelier';
+  return 'nebula';
 }
 
 // Appliquer immédiatement au chargement depuis le cache local (évite le flash)
@@ -339,7 +339,7 @@ async function loadAll() {
     safe('/api/templates',  { templates: [] }),
     safe('/api/plugins',    { enabled: {}, count: 0 }),
     safe('/api/skills',     { global: [] }),
-    safe('/api/ui-state',   { theme: 'atelier', onboarded: false }),
+    safe('/api/ui-state',   { theme: 'nebula', onboarded: false }),
     safe('/api/skills-library', { skills: [] }),
   ]);
   STATE.workspaces = ws.workspaces || [];
@@ -400,7 +400,7 @@ function buildHomeQuickstart() {
   // Mêmes 6 critères que dans buildOnboardingChecklist (Outils → A. Démarrage)
   const onboardedDone = !!(STATE.uiState && STATE.uiState.onboarded);
   const themePicked = (function() {
-    try { return !!localStorage.getItem('atelier-theme'); } catch { return false; }
+    try { return !!localStorage.getItem('nebula-theme'); } catch { return false; }
   })();
   const hasMcps = (STATE.mcps || []).length > 0;
   const hasWorkspaces = (STATE.workspaces || []).length > 0;
@@ -473,7 +473,7 @@ async function renderHome() {
   page.appendChild(el('div', 'page-header', `
     <div class="page-header-text">
       <div class="page-eyebrow"><span class="index">00.</span><span>Accueil</span></div>
-      <h1 class="page-title">Atelier</h1>
+      <h1 class="page-title">Nebula</h1>
       <p class="page-subtitle">Pilotage des workspaces, MCPs, plugins et skills Claude Code.</p>
     </div>
   `));
@@ -520,7 +520,7 @@ async function renderHome() {
   if (wsCount === 0) {
     const empty = el('div', 'empty');
     empty.innerHTML = `
-      <div class="empty-title">Pas encore de workspace dans Atelier</div>
+      <div class="empty-title">Pas encore de workspace dans Nebula</div>
       <p class="muted">Tu peux <strong>créer un nouveau workspace</strong>, <strong>importer ta config Claude existante</strong> (MCPs et projets de <code>~/.claude/</code>), ou <strong>enregistrer un dossier déjà présent</strong> sur ton disque.</p>
     `;
     const ea = el('div', 'empty-action');
@@ -1219,7 +1219,7 @@ async function renderMCPs() {
         <div class="mcp-conflict-icon">${I.alert}</div>
         <div class="mcp-conflict-text">
           <strong>${total} MCP(s) trouvé(s) dans ta config Claude globale</strong>
-          <span class="dim">${(r.conflicts || []).length} doublon(s) avec le registre Atelier · ${(r.orphans || []).length} orphelin(s) à migrer</span>
+          <span class="dim">${(r.conflicts || []).length} doublon(s) avec le registre Nebula · ${(r.orphans || []).length} orphelin(s) à migrer</span>
         </div>
       `;
       const fixBtn = btn('Examiner', 'btn-sm btn-primary', I.right);
@@ -1583,7 +1583,7 @@ async function modalMcpRecipes() {
     body.appendChild(grid);
   };
 
-  renderSection('Recettes Atelier (catalogue public)', publicRecipes);
+  renderSection('Recettes Nebula (catalogue public)', publicRecipes);
   renderSection('Recettes locales (perso, non partagées)', localRecipes);
 }
 
@@ -1616,7 +1616,7 @@ function modalInstallRecipe(recipe) {
       </div>
     </div>
     <div class="field">
-      <label class="field-label">ID dans Atelier</label>
+      <label class="field-label">ID dans Nebula</label>
       <input class="input mono" name="mcp_id" value="${escapeHtml(suggestedId)}" autocomplete="off">
       <div class="dim" style="font-size:11px;margin-top:4px">Tu peux personnaliser pour distinguer (ex: <code class="mono">opnsense-prod</code>, <code class="mono">opnsense-dev</code>). Auto-suffix si l'ID est déjà pris.</div>
     </div>
@@ -2167,7 +2167,7 @@ async function startFirstRunWizard() {
     header.innerHTML = `
       <div class="firstrun-brand">
         <span class="brand-mark"></span>
-        <span class="brand-name">atelier</span>
+        <span class="brand-name">nebula</span>
       </div>
       <div class="firstrun-steps">
         ${steps.map((s, i) => `<span class="firstrun-step-dot${i === stepIdx ? ' is-active' : ''}${i < stepIdx ? ' is-done' : ''}"></span>`).join('')}
@@ -2199,7 +2199,7 @@ async function startFirstRunWizard() {
       next.addEventListener('click', goNext);
       footer.appendChild(next);
     } else {
-      const done = btn('Commencer à utiliser Atelier', 'btn-primary', I.sparkle);
+      const done = btn('Commencer à utiliser Nebula', 'btn-primary', I.sparkle);
       done.addEventListener('click', () => close(true));
       footer.appendChild(done);
     }
@@ -2213,7 +2213,7 @@ async function startFirstRunWizard() {
         <div class="firstrun-hero-mark">
           <div class="brand-mark" style="width:48px;height:48px"></div>
         </div>
-        <h1>Bienvenue dans Atelier</h1>
+        <h1>Bienvenue dans Nebula</h1>
         <p class="firstrun-lead">Le tableau de bord local pour piloter ton écosystème <strong>Claude Code</strong> : workspaces, MCPs, skills, plugins, templates — tout au même endroit.</p>
       </div>
       <div class="firstrun-features">
@@ -2311,7 +2311,7 @@ async function startFirstRunWizard() {
           <div>
             <strong>Rien à importer.</strong>
             ${scanResult.mcps.length || scanResult.projects.length
-              ? ' Ce qui était dans ta config Claude est déjà connu d\'Atelier.'
+              ? ' Ce qui était dans ta config Claude est déjà connu d\'Nebula.'
               : ' Aucun MCP ni projet trouvé dans <code class="mono">~/.claude/</code> — c\'est un démarrage propre, c\'est parfait.'}
           </div>
         </div>
@@ -2408,7 +2408,7 @@ async function startFirstRunWizard() {
         <button class="firstrun-ws-card" data-act="register">
           <div class="firstrun-ws-icon">${I.folder}</div>
           <h4>Enregistrer un dossier existant</h4>
-          <p>Pointe Atelier vers un projet déjà sur ton disque, sans le déplacer.</p>
+          <p>Pointe Nebula vers un projet déjà sur ton disque, sans le déplacer.</p>
         </button>
         <button class="firstrun-ws-card" data-act="skip">
           <div class="firstrun-ws-icon">${I.right}</div>
@@ -2480,8 +2480,8 @@ async function startFirstRunWizard() {
 /* ================================================================
    SYSTEM UPDATE — vérification & application via git
    ================================================================ */
-const UPDATE_CHECK_KEY = 'atelier-last-update-check';
-const UPDATE_SESSION_FLAG = 'atelier-update-checked-this-session';
+const UPDATE_CHECK_KEY = 'nebula-last-update-check';
+const UPDATE_SESSION_FLAG = 'nebula-update-checked-this-session';
 const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;  // 1h
 
 async function checkForUpdates({ force = false } = {}) {
@@ -2557,7 +2557,7 @@ async function modalSystemUpdate() {
   const body = el('div');
   body.innerHTML = `<div class="page-loader"><div class="spinner"></div><span>Vérification…</span></div>`;
   const closeBtn = btn('Fermer', 'btn-ghost');
-  const { close } = openModal({ title: 'Mises à jour Atelier', body, footer: closeBtn, wide: true });
+  const { close } = openModal({ title: 'Mises à jour Nebula', body, footer: closeBtn, wide: true });
   closeBtn.addEventListener('click', close);
 
   // Force un fetch frais à l'ouverture
@@ -2573,7 +2573,7 @@ async function modalSystemUpdate() {
         <div>
           <strong>Auto-update indisponible.</strong>
           ${escapeHtml(info.reason || 'Cette installation n\'est pas un dépôt git.')}
-          <p style="margin:var(--sp-2) 0 0">Pour activer l'auto-update, ton install doit être un clone du repo officiel d'Atelier (le chemin importe peu — bureau, disque secondaire, etc.).</p>
+          <p style="margin:var(--sp-2) 0 0">Pour activer l'auto-update, ton install doit être un clone du repo officiel d'Nebula (le chemin importe peu — bureau, disque secondaire, etc.).</p>
         </div>
       </div>
     `;
@@ -2647,7 +2647,7 @@ async function modalSystemUpdate() {
     body.appendChild(el('div', 'callout callout-info', `
       <div>
         <strong>ℹ ${info.dirty_files.length}+ modification(s) locale(s)</strong> détectée(s).
-        Atelier va automatiquement les <code class="mono">stash</code> avant le pull et les <code class="mono">pop</code> après — pas besoin de commit/stash manuel.
+        Nebula va automatiquement les <code class="mono">stash</code> avant le pull et les <code class="mono">pop</code> après — pas besoin de commit/stash manuel.
         <ul class="help-list" style="margin-top:6px">${info.dirty_files.slice(0, 6).map(f => `<li class="mono" style="font-size:11px">${escapeHtml(f)}</li>`).join('')}</ul>
       </div>
     `));
@@ -2656,7 +2656,7 @@ async function modalSystemUpdate() {
   // Action button
   body.appendChild(el('div', 'callout callout-info', `
     <div>
-      Atelier va exécuter <code class="mono">git pull --ff-only</code> (avec auto-stash si nécessaire). Tes données personnelles (registre, workspaces, .env.local) sont préservées via <code class="mono">.gitignore</code>.
+      Nebula va exécuter <code class="mono">git pull --ff-only</code> (avec auto-stash si nécessaire). Tes données personnelles (registre, workspaces, .env.local) sont préservées via <code class="mono">.gitignore</code>.
     </div>
   `));
 
@@ -2786,7 +2786,7 @@ async function modalGlobalConflicts() {
     body.appendChild(el('div', 'callout callout-info', `
       <div>
         <strong>Pourquoi c'est important ?</strong>
-        Les MCPs déclarés dans <code class="mono">~/.claude.json</code> ou <code class="mono">~/.claude/settings.json</code> sont actifs <strong>globalement</strong>, partout. Si Atelier en sync un avec le même nom dans un workspace, Claude Code voit la définition deux fois (project &gt; user). Ça marche, mais tu peux te retrouver avec une vieille version qui traîne.
+        Les MCPs déclarés dans <code class="mono">~/.claude.json</code> ou <code class="mono">~/.claude/settings.json</code> sont actifs <strong>globalement</strong>, partout. Si Nebula en sync un avec le même nom dans un workspace, Claude Code voit la définition deux fois (project &gt; user). Ça marche, mais tu peux te retrouver avec une vieille version qui traîne.
       </div>
     `));
 
@@ -2795,9 +2795,9 @@ async function modalGlobalConflicts() {
     body.appendChild(el('div', 'section-label', `<span class="num">A.</span> Doublons (${conflicts.length})`));
 
     if (!conflicts.length) {
-      body.appendChild(el('div', 'callout', `<div>${I.check} Aucun doublon : ton registre Atelier et ta config Claude globale sont disjoints.</div>`));
+      body.appendChild(el('div', 'callout', `<div>${I.check} Aucun doublon : ton registre Nebula et ta config Claude globale sont disjoints.</div>`));
     } else {
-      body.appendChild(el('p', 'muted', `<small>Ces MCPs sont présents dans Atelier <strong>et</strong> dans la config Claude globale. Tu peux les retirer de la config globale (Atelier reste la source de vérité) — un backup <code class="mono">.bak</code> est créé automatiquement.</small>`));
+      body.appendChild(el('p', 'muted', `<small>Ces MCPs sont présents dans Nebula <strong>et</strong> dans la config Claude globale. Tu peux les retirer de la config globale (Nebula reste la source de vérité) — un backup <code class="mono">.bak</code> est créé automatiquement.</small>`));
       const list = el('div', 'conflict-list');
       for (const c of conflicts) {
         const item = el('div', 'conflict-item');
@@ -2810,14 +2810,14 @@ async function modalGlobalConflicts() {
             </div>
             <div class="dim mono" style="font-size:11px;margin-top:4px">${escapeHtml(c.global_command || c.global_url || '—')}</div>
             <div class="dim" style="font-size:11.5px;margin-top:4px">
-              Atelier : statut <strong>${escapeHtml(c.registry_status)}</strong>${c.registry_workspaces.length ? ` · scope <span class="mono">${c.registry_workspaces.map(escapeHtml).join(', ')}</span>` : ' · <span class="text-warn">aucun workspace ciblé</span>'}
+              Nebula : statut <strong>${escapeHtml(c.registry_status)}</strong>${c.registry_workspaces.length ? ` · scope <span class="mono">${c.registry_workspaces.map(escapeHtml).join(', ')}</span>` : ' · <span class="text-warn">aucun workspace ciblé</span>'}
             </div>
           </div>
         `;
         const removeBtn = btn('Retirer du global', 'btn-sm btn-danger', I.trash);
         removeBtn.title = `Retire ${c.id} de ${c.source_label}`;
         removeBtn.addEventListener('click', () => confirmDialog(
-          `Retirer "${c.id}" de ${c.source_label} ? La définition reste dans le registre Atelier (un backup .bak est créé).`,
+          `Retirer "${c.id}" de ${c.source_label} ? La définition reste dans le registre Nebula (un backup .bak est créé).`,
           async () => {
             try {
               await API.post('/api/mcps/conflicts/remove', { id: c.id, source: c.source });
@@ -2833,14 +2833,14 @@ async function modalGlobalConflicts() {
       body.appendChild(list);
     }
 
-    // ─── Section ORPHELINS (dans Claude global mais pas dans Atelier) ───
+    // ─── Section ORPHELINS (dans Claude global mais pas dans Nebula) ───
     const orphans = data.orphans || [];
     body.appendChild(el('div', 'section-label', `<span class="num">B.</span> Orphelins (${orphans.length})`));
 
     if (!orphans.length) {
-      body.appendChild(el('div', 'callout', `<div>${I.check} Aucun MCP global non géré par Atelier.</div>`));
+      body.appendChild(el('div', 'callout', `<div>${I.check} Aucun MCP global non géré par Nebula.</div>`));
     } else {
-      body.appendChild(el('p', 'muted', `<small>Ces MCPs sont présents dans la config Claude globale mais Atelier ne les connaît pas. Tu peux les <strong>migrer</strong> vers Atelier (import + retrait de la source) ou simplement les <strong>retirer</strong> s'ils sont obsolètes.</small>`));
+      body.appendChild(el('p', 'muted', `<small>Ces MCPs sont présents dans la config Claude globale mais Nebula ne les connaît pas. Tu peux les <strong>migrer</strong> vers Nebula (import + retrait de la source) ou simplement les <strong>retirer</strong> s'ils sont obsolètes.</small>`));
       const list = el('div', 'conflict-list');
       for (const o of orphans) {
         const item = el('div', 'conflict-item');
@@ -2857,13 +2857,13 @@ async function modalGlobalConflicts() {
         const actions = el('div', 'row');
         actions.style.gap = '4px';
         const migrate = btn('Migrer', 'btn-sm btn-primary', I.download);
-        migrate.title = 'Importer dans le registre Atelier puis retirer de la source';
+        migrate.title = 'Importer dans le registre Nebula puis retirer de la source';
         migrate.addEventListener('click', () => confirmDialog(
-          `Migrer "${o.id}" vers Atelier ? Il sera importé dans le registre (sans workspace ciblé) et retiré de ${o.source_label}.`,
+          `Migrer "${o.id}" vers Nebula ? Il sera importé dans le registre (sans workspace ciblé) et retiré de ${o.source_label}.`,
           async () => {
             try {
               await API.post('/api/mcps/conflicts/migrate', { id: o.id, source: o.source });
-              toastOk(`${o.id} migré vers Atelier`);
+              toastOk(`${o.id} migré vers Nebula`);
               STATE.loading = true;
               await refresh();
             } catch (e) { toastErr(e.message); }
@@ -2922,7 +2922,7 @@ async function modalSetupWizard() {
   // Build form
   body.innerHTML = '';
   body.appendChild(el('div', 'wizard-intro', `
-    <p style="margin:0 0 var(--sp-2);font-size:13px">Le scan a trouvé <strong>${mcps.length}</strong> MCP(s) et <strong>${projects.length}</strong> projet(s) Claude Code. Coche ceux que tu veux importer dans Atelier.</p>
+    <p style="margin:0 0 var(--sp-2);font-size:13px">Le scan a trouvé <strong>${mcps.length}</strong> MCP(s) et <strong>${projects.length}</strong> projet(s) Claude Code. Coche ceux que tu veux importer dans Nebula.</p>
     <p class="dim" style="margin:0;font-size:12px">Les éléments déjà enregistrés sont grisés.</p>
   `));
 
@@ -3575,7 +3575,7 @@ async function renderHelp() {
     <div class="page-header-text">
       <div class="page-eyebrow"><span class="index">??</span><span>Documentation</span></div>
       <h1 class="page-title">Aide & guide d'utilisation</h1>
-      <p class="page-subtitle">Tout ce qu'il faut savoir pour piloter ton écosystème Claude Code depuis Atelier.</p>
+      <p class="page-subtitle">Tout ce qu'il faut savoir pour piloter ton écosystème Claude Code depuis Nebula.</p>
     </div>
   `));
 
@@ -3614,7 +3614,7 @@ async function renderHelp() {
   content.innerHTML = `
     <section id="h-overview">
       <h2>${I.home}<span>1. Vue d'ensemble du dashboard</span></h2>
-      <p>Atelier est un <strong>tableau de bord local</strong> qui pilote ton écosystème Claude Code : workspaces (projets), MCPs (serveurs Model Context Protocol), skills, plugins, templates et hooks. Tout est servi par un petit serveur Python sur <code class="mono">127.0.0.1:4777</code> — aucune donnée ne sort de ta machine.</p>
+      <p>Nebula est un <strong>tableau de bord local</strong> qui pilote ton écosystème Claude Code : workspaces (projets), MCPs (serveurs Model Context Protocol), skills, plugins, templates et hooks. Tout est servi par un petit serveur Python sur <code class="mono">127.0.0.1:4777</code> — aucune donnée ne sort de ta machine.</p>
       <div class="help-grid help-grid-3">
         <div class="help-tile">
           <div class="help-tile-icon">${I.box}</div>
@@ -3651,7 +3651,7 @@ async function renderHelp() {
 
     <section id="h-onboarding">
       <h2>${I.download}<span>2. Premier lancement & import depuis Claude</span></h2>
-      <p>Si tu utilises déjà Claude Code, Atelier peut <strong>récupérer ta config existante</strong> en un clic. Trois portes d'entrée :</p>
+      <p>Si tu utilises déjà Claude Code, Nebula peut <strong>récupérer ta config existante</strong> en un clic. Trois portes d'entrée :</p>
       <div class="help-step">
         <div class="help-step-num">1</div>
         <div>
@@ -3663,18 +3663,18 @@ async function renderHelp() {
         <div class="help-step-num">2</div>
         <div>
           <h4>Enregistrer un dossier existant</h4>
-          <p>Pour pointer Atelier vers un projet déjà sur disque (sans le déplacer), utilise <em>Enregistrer un dossier</em>. Tu donnes l'ID, le label et le chemin absolu — aucun fichier n'est touché, juste un enregistrement dans <code class="mono">data/workspaces.json</code>.</p>
+          <p>Pour pointer Nebula vers un projet déjà sur disque (sans le déplacer), utilise <em>Enregistrer un dossier</em>. Tu donnes l'ID, le label et le chemin absolu — aucun fichier n'est touché, juste un enregistrement dans <code class="mono">data/workspaces.json</code>.</p>
         </div>
       </div>
       <div class="help-step">
         <div class="help-step-num">3</div>
         <div>
           <h4>Coller du JSON MCP</h4>
-          <p>Si tu as un bloc <code class="mono">{"mcpServers": {...}}</code> ou un objet MCP brut, colle-le via <strong>MCPs → Importer</strong>. Atelier détecte automatiquement le format.</p>
+          <p>Si tu as un bloc <code class="mono">{"mcpServers": {...}}</code> ou un objet MCP brut, colle-le via <strong>MCPs → Importer</strong>. Nebula détecte automatiquement le format.</p>
         </div>
       </div>
       <div class="callout callout-info">
-        <strong>Bon à savoir :</strong> l'import ne touche jamais à <code class="mono">~/.claude/settings.json</code>. Atelier maintient son propre registre dans <code class="mono">mcp/registry.json</code> et distribue ensuite vers les <code class="mono">.mcp.json</code> de chaque workspace via <em>Sync</em>.
+        <strong>Bon à savoir :</strong> l'import ne touche jamais à <code class="mono">~/.claude/settings.json</code>. Nebula maintient son propre registre dans <code class="mono">mcp/registry.json</code> et distribue ensuite vers les <code class="mono">.mcp.json</code> de chaque workspace via <em>Sync</em>.
       </div>
     </section>
 
@@ -3689,7 +3689,7 @@ async function renderHelp() {
         <li><strong>Description</strong> et <strong>Outils / contexte</strong> — utilisés comme placeholders dans le template.</li>
         <li><strong>Template</strong> — sélectionne un modèle parmi ceux de la page Templates.</li>
       </ul>
-      <p>Atelier crée le dossier <code class="mono">workspaces/&lt;id&gt;/</code>, copie le template en remplaçant les placeholders, génère un <code class="mono">launch-&lt;id&gt;.bat</code> dans <code class="mono">scripts/</code>, et enregistre l'entrée.</p>
+      <p>Nebula crée le dossier <code class="mono">workspaces/&lt;id&gt;/</code>, copie le template en remplaçant les placeholders, génère un <code class="mono">launch-&lt;id&gt;.bat</code> dans <code class="mono">scripts/</code>, et enregistre l'entrée.</p>
 
       <h3>Importer un dossier existant</h3>
       <p>Si ton projet est déjà ailleurs sur le disque (ex. <code class="mono">D:\\projets\\monapp</code>), utilise <em>+ Dossier</em> sur la Home. Aucun fichier n'est créé ni copié, juste un enregistrement.</p>
@@ -3714,7 +3714,7 @@ async function renderHelp() {
 
     <section id="h-mcps">
       <h2>${I.cpu}<span>4. MCPs (Model Context Protocol)</span></h2>
-      <p>Les MCPs sont des serveurs externes que Claude peut interroger pour accéder à des données ou fonctionnalités. Atelier centralise leur config dans un registre, puis les distribue aux workspaces.</p>
+      <p>Les MCPs sont des serveurs externes que Claude peut interroger pour accéder à des données ou fonctionnalités. Nebula centralise leur config dans un registre, puis les distribue aux workspaces.</p>
 
       <h3>Ajouter un MCP</h3>
       <p>Page <strong>MCPs → Nouveau MCP</strong>. Le formulaire change selon le transport choisi.</p>
@@ -3774,7 +3774,7 @@ async function renderHelp() {
       <p>Dans le formulaire MCP, le champ <em>Workspaces ciblés</em> liste tes workspaces existants en cases à cocher. Coche ceux qui doivent recevoir ce MCP. Case "★ Tous les workspaces" pour activer partout. <strong>Auto-sync</strong> : le <code class="mono">.mcp.json</code> de chaque workspace ciblé est régénéré immédiatement après le save (toast "MCP créé et synchronisé vers N workspace(s)").</p>
 
       <div class="callout callout-info">
-        <strong>Le registre vs Claude :</strong> le fichier <code class="mono">mcp/registry.json</code> est la source de vérité d'Atelier. À chaque modif, Atelier régénère automatiquement les <code class="mono">.mcp.json</code> dans les workspaces concernés en interpolant les <code class="mono">\${VAR}</code>. Le bouton <em>Sync MCPs</em> sur un workspace n'est plus nécessaire dans le flow normal — utile uniquement pour forcer un re-sync (ex: après changement de <code class="mono">.env.local</code>).
+        <strong>Le registre vs Claude :</strong> le fichier <code class="mono">mcp/registry.json</code> est la source de vérité d'Nebula. À chaque modif, Nebula régénère automatiquement les <code class="mono">.mcp.json</code> dans les workspaces concernés en interpolant les <code class="mono">\${VAR}</code>. Le bouton <em>Sync MCPs</em> sur un workspace n'est plus nécessaire dans le flow normal — utile uniquement pour forcer un re-sync (ex: après changement de <code class="mono">.env.local</code>).
       </div>
     </section>
 
@@ -3785,7 +3785,7 @@ async function renderHelp() {
       <h3>Accès</h3>
       <p>Page <strong>MCPs → Recettes</strong> (bouton dans le topbar). Modale avec deux sections :</p>
       <ul class="help-list">
-        <li><strong>📦 Recettes Atelier (catalogue public)</strong> — 8 recettes embarquées : Filesystem, GitHub, Brave Search, Fetch HTTP, Memory, Puppeteer, PostgreSQL, Slack. Mises à jour via auto-update du dashboard.</li>
+        <li><strong>📦 Recettes Nebula (catalogue public)</strong> — 8 recettes embarquées : Filesystem, GitHub, Brave Search, Fetch HTTP, Memory, Puppeteer, PostgreSQL, Slack. Mises à jour via auto-update du dashboard.</li>
         <li><strong>🔒 Recettes locales (perso, non partagées)</strong> — Tes recettes propres, stockées dans <code class="mono">dashboard/data/mcp_recipes.local.json</code> (gitignored). Parfait pour les MCPs privés ou propriétaires (OPNsense interne, BDD perso, etc.).</li>
       </ul>
 
@@ -3825,7 +3825,7 @@ async function renderHelp() {
       <p>Un skill = un dossier contenant <code class="mono">SKILL.md</code> (frontmatter + instructions Markdown). Optionnellement des fichiers de référence (<code class="mono">references/</code>, <code class="mono">examples/</code>).</p>
 
       <h3>Bibliothèque centralisée (le magasin)</h3>
-      <p>Atelier maintient une <strong>bibliothèque</strong> dans <code class="mono">dashboard/data/skills-library/</code> : c'est ta source de vérité, le magasin où tu pioches. La page Skills affiche cette bibliothèque, pas <code class="mono">~/.claude/skills/</code> directement.</p>
+      <p>Nebula maintient une <strong>bibliothèque</strong> dans <code class="mono">dashboard/data/skills-library/</code> : c'est ta source de vérité, le magasin où tu pioches. La page Skills affiche cette bibliothèque, pas <code class="mono">~/.claude/skills/</code> directement.</p>
       <p>Pourquoi cette indirection : tu peux installer le même skill dans plusieurs workspaces (ex. <code class="mono">n8n-prod</code> + <code class="mono">n8n-dev</code>) avec une seule édition, sans copier-coller manuel.</p>
 
       <h3>Créer un skill</h3>
@@ -3837,11 +3837,11 @@ async function renderHelp() {
         <li><strong>Global</strong> (<code class="mono">~/.claude/skills/&lt;name&gt;/</code>) — actif dans tous les projets</li>
         <li>Une ligne par <strong>workspace</strong> (<code class="mono">&lt;workspace&gt;/.claude/skills/&lt;name&gt;/</code>) — actif uniquement dans ce projet</li>
       </ul>
-      <p>Coche pour installer/écraser, décoche pour retirer. C'est un <em>set complet</em> : tu modélises l'état désiré, Atelier ajoute/met à jour/retire en conséquence.</p>
+      <p>Coche pour installer/écraser, décoche pour retirer. C'est un <em>set complet</em> : tu modélises l'état désiré, Nebula ajoute/met à jour/retire en conséquence.</p>
 
       <h3>Importer depuis GitHub</h3>
-      <p>Bouton <strong>📥 Importer GitHub</strong> → colle <code class="mono">user/repo</code> ou une URL complète, choisis la branche (optionnel) → Analyser. Atelier clone en shallow, détecte tous les <code class="mono">SKILL.md</code> du repo, et te laisse choisir lesquels importer dans la bibliothèque + les distribuer immédiatement (Global / workspaces) si tu veux.</p>
-      <p>Chaque skill importé reçoit un <code class="mono">.atelier-origin.json</code> qui trace <code class="mono">repo</code>, <code class="mono">branch</code>, <code class="mono">commit</code>, <code class="mono">imported_at</code> — utile pour de futurs checks de mise à jour.</p>
+      <p>Bouton <strong>📥 Importer GitHub</strong> → colle <code class="mono">user/repo</code> ou une URL complète, choisis la branche (optionnel) → Analyser. Nebula clone en shallow, détecte tous les <code class="mono">SKILL.md</code> du repo, et te laisse choisir lesquels importer dans la bibliothèque + les distribuer immédiatement (Global / workspaces) si tu veux.</p>
+      <p>Chaque skill importé reçoit un <code class="mono">.nebula-origin.json</code> qui trace <code class="mono">repo</code>, <code class="mono">branch</code>, <code class="mono">commit</code>, <code class="mono">imported_at</code> — utile pour de futurs checks de mise à jour.</p>
 
       <h3>Édition centralisée + désync</h3>
       <p>Le bouton <em>Éditer</em> ouvre la version <strong>bibliothèque</strong> du skill. Les copies déjà distribuées <strong>ne sont pas écrasées en silence</strong> — un badge <em>« N désync. »</em> apparaît sur la carte si certaines copies ont divergé. Pour propager les changements : re-clique <em>Distribuer</em>.</p>
@@ -3850,7 +3850,7 @@ async function renderHelp() {
       <p>Sur la page d'un workspace, section <strong>Skills</strong> → bouton <strong>+ Ajouter depuis le magasin</strong>. Modale qui liste les skills de la bibliothèque non encore présents dans ce workspace, avec checkboxes multi-sélection.</p>
 
       <h3>Migration depuis l'existant</h3>
-      <p>Si ta bibliothèque est vide mais qu'Atelier détecte des skills dans <code class="mono">~/.claude/skills/</code> ou dans des workspaces, un bandeau te propose <strong>Importer dans la bibliothèque</strong> en 1 clic. Migration purement additive, aucune copie écrasée.</p>
+      <p>Si ta bibliothèque est vide mais qu'Nebula détecte des skills dans <code class="mono">~/.claude/skills/</code> ou dans des workspaces, un bandeau te propose <strong>Importer dans la bibliothèque</strong> en 1 clic. Migration purement additive, aucune copie écrasée.</p>
 
       <div class="callout callout-info">
         <strong>Activation par Claude :</strong> les skills sont auto-découverts par Claude Code au démarrage de la session — tu n'as rien à enregistrer manuellement. Vérifie qu'ils apparaissent avec <code class="mono">/help</code> ou via le menu skills de Claude.
@@ -3859,7 +3859,7 @@ async function renderHelp() {
 
     <section id="h-plugins">
       <h2>${I.plug}<span>7. Plugins</span></h2>
-      <p>Les plugins Claude Code sont gérés par la CLI <code class="mono">claude plugin</code>. Atelier propose un browser et la gestion du scope par workspace.</p>
+      <p>Les plugins Claude Code sont gérés par la CLI <code class="mono">claude plugin</code>. Nebula propose un browser et la gestion du scope par workspace.</p>
 
       <h3>Installer un plugin</h3>
       <p><strong>Plugins → Installer</strong> ouvre le browser :</p>
@@ -3930,7 +3930,7 @@ async function renderHelp() {
 
     <section id="h-env">
       <h2>${I.key}<span>9. Variables d'environnement (.env.local)</span></h2>
-      <p>Pour ne <strong>jamais</strong> committer de secrets dans tes registres ou templates, Atelier utilise un fichier <code class="mono">.env.local</code> à la racine de l'install comme stockage centralisé.</p>
+      <p>Pour ne <strong>jamais</strong> committer de secrets dans tes registres ou templates, Nebula utilise un fichier <code class="mono">.env.local</code> à la racine de l'install comme stockage centralisé.</p>
 
       <h3>Format</h3>
       <pre class="help-code">OPENAI_API_KEY=sk-...
@@ -3948,10 +3948,10 @@ DB_PASSWORD=mon_mdp
       </ul>
 
       <h3>Interpolation <code class="mono">\${VAR}</code></h3>
-      <p>Dans n'importe quel champ MCP (<code class="mono">command</code>, <code class="mono">args</code>, <code class="mono">env</code>, <code class="mono">cwd</code>, <code class="mono">url</code>, <code class="mono">headers</code>), tu peux écrire <code class="mono">\${MA_VAR}</code> et Atelier le remplacera par la valeur depuis <code class="mono">.env.local</code> au moment de la sync vers le workspace. Si la variable est manquante, le sanity check te le signale.</p>
+      <p>Dans n'importe quel champ MCP (<code class="mono">command</code>, <code class="mono">args</code>, <code class="mono">env</code>, <code class="mono">cwd</code>, <code class="mono">url</code>, <code class="mono">headers</code>), tu peux écrire <code class="mono">\${MA_VAR}</code> et Nebula le remplacera par la valeur depuis <code class="mono">.env.local</code> au moment de la sync vers le workspace. Si la variable est manquante, le sanity check te le signale.</p>
 
       <div class="callout callout-warn">
-        <strong>Important :</strong> ajoute <code class="mono">.env.local</code> dans ton <code class="mono">.gitignore</code> ! Atelier ne le fait pas pour toi. Le fichier reste local à ta machine.
+        <strong>Important :</strong> ajoute <code class="mono">.env.local</code> dans ton <code class="mono">.gitignore</code> ! Nebula ne le fait pas pour toi. Le fichier reste local à ta machine.
       </div>
     </section>
 
@@ -3978,8 +3978,8 @@ DB_PASSWORD=mon_mdp
     <section id="h-tools">
       <h2>${I.tools}<span>11. Outils & maintenance</span></h2>
       <ul class="help-list">
-        <li><strong>Apparence</strong> — choix du thème (Atelier sombre/clair, Marine, Forêt, Brique). Persisté côté serveur (<code class="mono">data/ui_state.json</code>) avec cache localStorage pour éviter le flash au chargement.</li>
-        <li><strong>Onboarding</strong> — checklist de découverte + bouton <em>Conflits Claude global</em> (détecte les MCPs en doublon entre Atelier et <code class="mono">~/.claude.json</code> ou <code class="mono">settings.json</code>, avec backup auto avant nettoyage).</li>
+        <li><strong>Apparence</strong> — choix du thème (Nebula sombre/clair, Marine, Forêt, Brique). Persisté côté serveur (<code class="mono">data/ui_state.json</code>) avec cache localStorage pour éviter le flash au chargement.</li>
+        <li><strong>Onboarding</strong> — checklist de découverte + bouton <em>Conflits Claude global</em> (détecte les MCPs en doublon entre Nebula et <code class="mono">~/.claude.json</code> ou <code class="mono">settings.json</code>, avec backup auto avant nettoyage).</li>
         <li><strong>Accès rapide</strong> — boutons pour ouvrir directement les fichiers de config dans l'explorateur ou le bloc-notes.</li>
         <li><strong>Hooks globaux</strong> — édition des hooks Claude Code de <code class="mono">~/.claude/settings.json</code>.</li>
         <li><strong>Sauvegardes</strong> — copie horodatée de <code class="mono">~/.claude.json</code> et <code class="mono">~/.claude/settings.json</code> dans <code class="mono">backups/</code>.</li>
@@ -4034,7 +4034,7 @@ DB_PASSWORD=mon_mdp
       </ul>
 
       <h3>Zéro blocage : auto-stash systématique</h3>
-      <p>Si tu as des modifs locales (fichiers édités, supprimés, ou untracked) au moment de l'update, Atelier fait un <code class="mono">git stash --include-untracked</code> automatique avec un label horodaté <strong>avant</strong> le pull, puis <code class="mono">git stash pop</code> pour restaurer après. Aucune intervention manuelle requise.</p>
+      <p>Si tu as des modifs locales (fichiers édités, supprimés, ou untracked) au moment de l'update, Nebula fait un <code class="mono">git stash --include-untracked</code> automatique avec un label horodaté <strong>avant</strong> le pull, puis <code class="mono">git stash pop</code> pour restaurer après. Aucune intervention manuelle requise.</p>
       <p>Si le pop échoue (vraie collision avec les changements distants), tes modifs sont <strong>préservées dans la pile stash</strong> (visibles via <code class="mono">git stash list</code>) — aucune perte de données possible. Un warning explicite te donne le label de stash pour récupération CLI.</p>
 
       <h3>Escape hatch : Réinitialiser à la version distante</h3>
@@ -4078,8 +4078,8 @@ DB_PASSWORD=mon_mdp
       <h3>Test MCP échoue avec "Commande introuvable"</h3>
       <p>L'exécutable de la commande n'est pas dans le PATH. Vérifie que <code class="mono">node</code> / <code class="mono">python</code> / <code class="mono">uvx</code> sont accessibles depuis un terminal système. Sur Windows, <code class="mono">npx</code> s'appelle parfois <code class="mono">npx.cmd</code>.</p>
 
-      <h3>MCPs en doublon entre Atelier et la config Claude globale</h3>
-      <p>Si tu avais des MCPs dans <code class="mono">~/.claude.json</code> ou <code class="mono">~/.claude/settings.json</code> avant d'utiliser Atelier, ils peuvent maintenant exister à deux endroits. Ouvre <strong>Outils → Onboarding → Conflits Claude global</strong> pour les détecter et les nettoyer (avec backup automatique). Une bannière jaune apparaît aussi sur la page MCPs si des conflits sont présents.</p>
+      <h3>MCPs en doublon entre Nebula et la config Claude globale</h3>
+      <p>Si tu avais des MCPs dans <code class="mono">~/.claude.json</code> ou <code class="mono">~/.claude/settings.json</code> avant d'utiliser Nebula, ils peuvent maintenant exister à deux endroits. Ouvre <strong>Outils → Onboarding → Conflits Claude global</strong> pour les détecter et les nettoyer (avec backup automatique). Une bannière jaune apparaît aussi sur la page MCPs si des conflits sont présents.</p>
 
       <h3>Réinitialiser un workspace cassé</h3>
       <p>Supprime via le GUI <strong>sans</strong> cocher la purge — ça retire seulement l'entrée du registre, le dossier reste intact. Tu peux ensuite réimporter avec <em>+ Dossier</em>.</p>
@@ -4137,7 +4137,7 @@ async function renderSkills() {
         </div>
         <div>
           <h4>📥 Importer depuis GitHub</h4>
-          <p>Bouton <strong>Importer GitHub</strong> en haut → colle <code class="mono">user/repo</code> (ex. <code class="mono">czlonkowski/n8n-skills</code>) → Analyser. Atelier détecte tous les <code class="mono">SKILL.md</code> et tu choisis ceux à importer dans ta bibliothèque, avec option de distribution immédiate.</p>
+          <p>Bouton <strong>Importer GitHub</strong> en haut → colle <code class="mono">user/repo</code> (ex. <code class="mono">czlonkowski/n8n-skills</code>) → Analyser. Nebula détecte tous les <code class="mono">SKILL.md</code> et tu choisis ceux à importer dans ta bibliothèque, avec option de distribution immédiate.</p>
         </div>
         <div>
           <h4>✏️ Édition centralisée</h4>
@@ -4155,7 +4155,7 @@ async function renderSkills() {
       <div class="callout callout-info" style="margin-top:var(--sp-3)">
         <div>
           <strong>💡 Tu as déjà des skills dans <code class="mono">~/.claude/skills/</code> ou des workspaces ?</strong>
-          Si ta bibliothèque est vide mais qu'Atelier détecte des skills existants, un bandeau te proposera de les importer en 1 clic. Aucune copie n'est écrasée — la migration est purement additive.
+          Si ta bibliothèque est vide mais qu'Nebula détecte des skills existants, un bandeau te proposera de les importer en 1 clic. Aucune copie n'est écrasée — la migration est purement additive.
         </div>
       </div>
     </div>
@@ -4179,7 +4179,7 @@ async function renderSkills() {
       <div>
         <strong>📚 Importer mes skills existants dans la bibliothèque ?</strong>
         <p style="margin:4px 0 0;font-size:12px">
-          Atelier a détecté ${STATE.skills.length} skill(s) dans <code class="mono">~/.claude/skills/</code>.
+          Nebula a détecté ${STATE.skills.length} skill(s) dans <code class="mono">~/.claude/skills/</code>.
           Importe-les dans la bibliothèque pour les gérer comme un magasin (édition centralisée + distribution multi-workspaces).
         </p>
       </div>
@@ -4728,7 +4728,7 @@ async function renderTemplates() {
       <div class="help-grid">
         <div>
           <h4>📦 Qu'est-ce qu'un template ?</h4>
-          <p>Un <strong>dossier modèle</strong> dans <code class="mono">templates/&lt;id&gt;/</code>. À chaque "Nouveau workspace" qui le sélectionne, Atelier copie tout le contenu et remplace les <code class="mono">{{placeholders}}</code> par les valeurs saisies dans le formulaire.</p>
+          <p>Un <strong>dossier modèle</strong> dans <code class="mono">templates/&lt;id&gt;/</code>. À chaque "Nouveau workspace" qui le sélectionne, Nebula copie tout le contenu et remplace les <code class="mono">{{placeholders}}</code> par les valeurs saisies dans le formulaire.</p>
         </div>
         <div>
           <h4>✨ Exemple concret avant/après</h4>
@@ -5247,7 +5247,7 @@ function buildOnboardingChecklist() {
   // Détection de l'état de chaque étape — non-bloquant si une donnée manque
   const onboardedDone = !!(STATE.uiState && STATE.uiState.onboarded);
   const themePicked = (function() {
-    try { return !!localStorage.getItem('atelier-theme'); } catch { return false; }
+    try { return !!localStorage.getItem('nebula-theme'); } catch { return false; }
   })();
   const hasMcps = (STATE.mcps || []).length > 0;
   const hasWorkspaces = (STATE.workspaces || []).length > 0;
@@ -5400,7 +5400,7 @@ async function renderTools() {
   updateRow.innerHTML = `
     <div>
       <div style="font-size:13px;font-weight:500;margin-bottom:2px">Mises à jour</div>
-      <div class="dim" style="font-size:11.5px">Synchronisation avec le dépôt git officiel d'Atelier</div>
+      <div class="dim" style="font-size:11.5px">Synchronisation avec le dépôt git officiel d'Nebula</div>
     </div>
   `;
   const updateBtn = btn('Vérifier maintenant', 'btn-sm', I.refresh);

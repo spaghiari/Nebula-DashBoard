@@ -753,7 +753,7 @@ def _parse_github_url(url: str) -> tuple[str, str] | None:
 def _clone_github_shallow(owner: str, repo: str, branch: str | None) -> tuple[Path, str] | None:
     """Clone shallow dans un temp dir. Retourne (path, commit_sha) ou None."""
     import tempfile
-    tmp = Path(tempfile.mkdtemp(prefix="atelier-skill-import-"))
+    tmp = Path(tempfile.mkdtemp(prefix="nebula-skill-import-"))
     url = f"https://github.com/{owner}/{repo}.git"
     cmd = ["git", "clone", "--depth", "1"]
     if branch:

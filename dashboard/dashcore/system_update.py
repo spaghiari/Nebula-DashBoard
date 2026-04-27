@@ -252,7 +252,7 @@ def system_apply_update() -> tuple[int, dict]:
 
     stash_applied = False
     stash_pop_warning = None
-    stash_label = f"atelier-autostash-{int(time.time())}"
+    stash_label = f"nebula-autostash-{int(time.time())}"
 
     if has_local_changes:
         rc_s, _, stash_err = _git(
@@ -352,7 +352,7 @@ def system_reset_to_upstream() -> tuple[int, dict]:
 
     # 1. Stash de sauvegarde (au cas où, label horodaté)
     rc_st, status, _ = _git("status", "--porcelain")
-    stash_label = f"atelier-pre-reset-{int(time.time())}"
+    stash_label = f"nebula-pre-reset-{int(time.time())}"
     stash_applied = False
     if status.strip():
         rc_s, _, _ = _git("stash", "push", "--include-untracked", "-m", stash_label,
