@@ -1255,6 +1255,30 @@ async function renderMCPs() {
     </div>
   `));
 
+  // Bandeau .env.local manquant si des MCPs utilisent ${VAR}
+  const usesInterpolation = (STATE.mcps || []).some(m => {
+    const fields = [m.command || '', (m.args || []).join(' '), m.url || '',
+                    Object.entries(m.env || {}).map(([k, v]) => `${k}=${v}`).join(' '),
+                    Object.entries(m.headers || {}).map(([k, v]) => `${k}=${v}`).join(' '),
+                    m.cwd || ''];
+    return fields.some(s => /\$\{[A-Z0-9_]+\}/.test(s));
+  });
+  if (usesInterpolation && !STATE.envExists) {
+    const envBanner = el('div', 'callout callout-warn');
+    envBanner.style.cssText = 'margin-bottom:var(--sp-3);display:flex;align-items:center;gap:12px;flex-wrap:wrap';
+    envBanner.innerHTML = `
+      <div style="font-size:24px">⚠</div>
+      <div style="flex:1;min-width:240px">
+        <strong>Tes MCPs utilisent <code class="mono">\${VAR}</code> mais <code class="mono">.env.local</code> n'existe pas</strong>
+        <p style="margin:4px 0 0;font-size:12.5px">Les variables ne seront pas substituées et les MCPs vont planter à la sync. Crée <code class="mono">.env.local</code> à la racine et ajoute tes secrets.</p>
+      </div>
+    `;
+    const goEnv = btn('Configurer .env.local', 'btn-sm btn-primary', I.key);
+    goEnv.addEventListener('click', () => { location.hash = '#/outils'; });
+    envBanner.appendChild(goEnv);
+    page.appendChild(envBanner);
+  }
+
   // Bandeau conflits éventuels avec ~/.claude/
   const conflictsBanner = el('div');
   page.appendChild(conflictsBanner);
@@ -5555,8 +5579,34 @@ async function loadEnvVars(host) {
     const r = await API.get('/api/env/values');
     const vals = r.values || {};
     const allKeys = Object.keys(vals).sort((a, b) => a.localeCompare(b));
+    const fileExists = !!r.exists;
     const wrap = el('div', 'card');
-    wrap.innerHTML = `<div class="card-header"><h3 class="card-title">${allKeys.length} variable${allKeys.length > 1 ? 's' : ''}</h3></div>`;
+    wrap.innerHTML = `<div class="card-header"><h3 class="card-title">${allKeys.length} variable${allKeys.length > 1 ? 's' : ''}${fileExists ? '' : ' <span class="badge badge-warn" style="margin-left:6px">.env.local absent</span>'}</h3></div>`;
+
+    // Bloc pédagogique si vraiment vide (pas de fichier OU aucune variable)
+    if (!allKeys.length) {
+      const intro = el('div', 'callout callout-info');
+      intro.style.marginBottom = 'var(--sp-3)';
+      intro.innerHTML = `
+        <div>
+          <strong>🔐 Stockage centralisé pour tes secrets</strong>
+          <p style="margin:4px 0 6px;font-size:12.5px">
+            <code class="mono">.env.local</code> est un fichier à la racine de Nebula où tu mets tes tokens, API keys, mots de passe.
+            Tu y fais référence dans n'importe quel champ MCP avec <code class="mono">\${KEY}</code> — Nebula substitue à la sync vers les workspaces.
+            Le fichier reste local, jamais commité.
+          </p>
+          <pre class="help-code" style="margin:4px 0 6px;font-size:11.5px">GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+OPENAI_API_KEY=sk-xxxxxxxxxxxx
+DB_PASSWORD=mon_mot_de_passe</pre>
+          <p style="margin:0;font-size:11.5px" class="dim">
+            ${fileExists
+              ? `Le fichier existe (<code class="mono">${escapeHtml(r.file || '.env.local')}</code>) mais est vide. Ajoute ta première variable ci-dessous.`
+              : `Le fichier sera <strong>créé automatiquement</strong> à ton premier ajout (chemin : <code class="mono">${escapeHtml(r.file || '.env.local')}</code>).`}
+          </p>
+        </div>
+      `;
+      wrap.appendChild(intro);
+    }
 
     // Toolbar : ajout + filtre
     const toolbar = el('div');
@@ -5580,7 +5630,6 @@ async function loadEnvVars(host) {
     wrap.appendChild(addRow);
 
     if (!allKeys.length) {
-      wrap.appendChild(el('div', 'dim', '<small>Aucune variable. Le fichier sera créé au premier ajout.</small>'));
       host.innerHTML = ''; host.appendChild(wrap);
       return;
     }
@@ -6259,8 +6308,14 @@ const TOURS = {
     {
       title: '🔌 MCPs — super-pouvoirs de Claude',
       body: `<p>Les <strong>MCPs</strong> (Model Context Protocol) donnent à Claude accès à des outils externes : filesystem, GitHub, n8n, ta base de données…</p>
-        <p>Pas besoin d'écrire du JSON : utilise les <strong>recettes</strong> (catalogue 1-clic) ou le formulaire visuel. Atelier sync automatiquement vers les workspaces ciblés.</p>`,
+        <p>Pas besoin d'écrire du JSON : utilise les <strong>recettes</strong> (catalogue 1-clic) ou le formulaire visuel. Nebula sync automatiquement vers les workspaces ciblés.</p>`,
       target: '.page', navigate: '#/mcps',
+    },
+    {
+      title: '🔐 Secrets — <code class="mono">.env.local</code>',
+      body: `<p>Tokens, API keys, mots de passe : <strong>jamais en dur</strong> dans tes configs MCP ou templates. Tu les mets dans <code class="mono">.env.local</code> à la racine de Nebula, et tu les référence dans n'importe quel champ MCP avec <code class="mono">\${MA_VAR}</code>.</p>
+        <p>Nebula substitue à la sync vers les workspaces. <code class="mono">.env.local</code> reste sur ta machine, jamais commité.</p>`,
+      target: '.page', navigate: '#/outils',
     },
     {
       title: '🧠 Skills — bibliothèque centrale',
