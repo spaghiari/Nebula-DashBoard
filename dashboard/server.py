@@ -491,6 +491,11 @@ class Handler(BaseHTTPRequestHandler):
     def handle_one_request(self):
         try:
             super().handle_one_request()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError) as e:
+            # Le client a fermé la connexion avant la fin de la réponse
+            # (refresh navigateur, navigation, fetch annulé). Pas un vrai
+            # bug — log en debug pour ne pas polluer.
+            log.debug("Client a fermé la connexion : %s", e)
         except Exception:
             log.exception("Unhandled exception in request handler")
             try:
