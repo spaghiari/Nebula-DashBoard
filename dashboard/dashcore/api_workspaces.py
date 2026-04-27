@@ -86,6 +86,239 @@ def duplicate_template(payload: dict) -> tuple[int, dict]:
     return 201, {"ok": True, "id": new_id}
 
 
+_TEMPLATE_STARTERS: dict[str, dict[str, str]] = {
+    "empty": {},
+    "standard": {
+        "CLAUDE.md": (
+            "# {{label}}\n\n"
+            "{{description}}\n\n"
+            "## Contexte\n\n"
+            "- ID : `{{name}}`\n"
+            "- Créé le : {{date}}\n"
+            "- Outils / contexte : {{tools}}\n\n"
+            "## Conventions\n\n"
+            "- Réponds en français.\n"
+            "- Privilégie des solutions locales / self-hosted.\n"
+            "- Toujours fournir une version testable immédiatement.\n"
+        ),
+        "README.md": (
+            "# {{emoji}} {{label}}\n\n"
+            "{{description}}\n\n"
+            "## Démarrage\n\n"
+            "```bash\n"
+            "claude\n"
+            "```\n"
+        ),
+        ".gitignore": (
+            "# Secrets & env\n"
+            ".env\n.env.local\n\n"
+            "# OS\n"
+            ".DS_Store\nThumbs.db\n\n"
+            "# Editors\n"
+            ".vscode/\n.idea/\n*.swp\n"
+        ),
+    },
+    "python": {
+        "CLAUDE.md": (
+            "# {{label}}\n\n{{description}}\n\n"
+            "## Stack\n\n- Python 3.10+\n- Outils : {{tools}}\n\n"
+            "## Conventions\n\n- Type hints partout\n- `requirements.txt` à jour\n"
+        ),
+        "requirements.txt": "# Ajoute tes dépendances ici, une par ligne\n",
+        ".gitignore": (
+            "# Python\n__pycache__/\n*.py[cod]\n*$py.class\n*.so\n.Python\n"
+            "build/\ndist/\n*.egg-info/\n.venv/\nvenv/\nenv/\n\n"
+            "# Secrets\n.env\n.env.local\n\n"
+            "# Editors\n.vscode/\n.idea/\n"
+        ),
+        "README.md": "# {{emoji}} {{label}}\n\n{{description}}\n\n## Setup\n\n```bash\npython -m venv .venv\n.venv\\Scripts\\activate\npip install -r requirements.txt\n```\n",
+    },
+    "node": {
+        "CLAUDE.md": (
+            "# {{label}}\n\n{{description}}\n\n"
+            "## Stack\n\n- Node.js\n- Outils : {{tools}}\n"
+        ),
+        "package.json": (
+            "{\n"
+            "  \"name\": \"{{name}}\",\n"
+            "  \"version\": \"0.1.0\",\n"
+            "  \"description\": \"{{description}}\",\n"
+            "  \"scripts\": {\n"
+            "    \"start\": \"node index.js\"\n"
+            "  }\n"
+            "}\n"
+        ),
+        ".gitignore": (
+            "# Node\nnode_modules/\nnpm-debug.log*\nyarn-debug.log*\nyarn-error.log*\n"
+            ".pnpm-debug.log*\ndist/\nbuild/\n\n"
+            "# Secrets\n.env\n.env.local\n\n"
+            "# Editors\n.vscode/\n.idea/\n"
+        ),
+        "README.md": "# {{emoji}} {{label}}\n\n{{description}}\n\n## Setup\n\n```bash\nnpm install\nnpm start\n```\n",
+    },
+    "docker": {
+        "CLAUDE.md": (
+            "# {{label}}\n\n{{description}}\n\n"
+            "## Stack\n\n- Docker / docker-compose\n- Outils : {{tools}}\n"
+        ),
+        "Dockerfile": (
+            "FROM alpine:latest\n\n"
+            "WORKDIR /app\n\n"
+            "# COPY . .\n"
+            "# RUN ...\n\n"
+            "CMD [\"sh\"]\n"
+        ),
+        "docker-compose.yml": (
+            "version: '3.8'\n\n"
+            "services:\n"
+            "  {{name}}:\n"
+            "    build: .\n"
+            "    container_name: {{name}}\n"
+            "    restart: unless-stopped\n"
+            "    # ports:\n"
+            "    #   - \"8080:8080\"\n"
+            "    # environment:\n"
+            "    #   - KEY=VALUE\n"
+        ),
+        ".dockerignore": "node_modules/\n.git/\n.env\n.env.local\n*.log\n",
+        ".gitignore": ".env\n.env.local\n*.log\n",
+        "README.md": "# {{emoji}} {{label}}\n\n{{description}}\n\n## Setup\n\n```bash\ndocker compose up -d\n```\n",
+    },
+}
+
+
+def create_template(payload: dict) -> tuple[int, dict]:
+    tpl_id = (payload.get("id") or "").strip()
+    label = (payload.get("label") or tpl_id).strip()
+    description = (payload.get("description") or "").strip()
+    emoji = (payload.get("emoji") or "📦").strip()
+    starter = (payload.get("starter") or "empty").strip()
+
+    if not safe_id(tpl_id):
+        return 400, {"error": "id invalide (a-z, 0-9, _, -, max 40)"}
+    if starter not in _TEMPLATE_STARTERS:
+        return 400, {"error": f"starter inconnu : {starter}"}
+
+    dst = TEMPLATES_DIR / tpl_id
+    if dst.exists():
+        return 409, {"error": f"Template déjà existant : {tpl_id}"}
+
+    dst.mkdir(parents=True)
+    write_json(dst / ".template.json", {"label": label, "description": description, "emoji": emoji})
+    for rel_path, content in _TEMPLATE_STARTERS[starter].items():
+        f = dst / rel_path
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(content, encoding="utf-8")
+    return 201, {"ok": True, "id": tpl_id, "starter": starter}
+
+
+_PLACEHOLDER_RE = re.compile(r"\{\{(name|label|description|tools|emoji|date)\}\}")
+
+
+def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
+    """Scan d'un template et retourne suggestions/problèmes (badges qualité)."""
+    if not safe_id(tpl_id):
+        return 400, {"error": "id invalide"}
+    base = TEMPLATES_DIR / tpl_id
+    if not base.exists():
+        return 404, {"error": "introuvable"}
+
+    suggestions: list[dict] = []
+    placeholders_used: set[str] = set()
+    has_claude_md = False
+    has_gitignore = False
+    has_readme = False
+    forbidden = []
+    big_files = []
+
+    for entry in base.rglob("*"):
+        if entry.is_dir():
+            if entry.name in {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build"}:
+                forbidden.append(str(entry.relative_to(base)).replace("\\", "/"))
+            continue
+        if not entry.is_file() or entry.name == ".template.json":
+            continue
+        rel = entry.relative_to(base).as_posix()
+        if rel.lower() == "claude.md":
+            has_claude_md = True
+        elif rel == ".gitignore":
+            has_gitignore = True
+        elif rel.lower() == "readme.md":
+            has_readme = True
+        try:
+            size = entry.stat().st_size
+            if size > 512 * 1024:
+                big_files.append({"path": rel, "size": size})
+                continue
+            text = entry.read_text(encoding="utf-8", errors="ignore")
+            for m in _PLACEHOLDER_RE.finditer(text):
+                placeholders_used.add(m.group(1))
+        except OSError:
+            continue
+
+    if not has_claude_md:
+        suggestions.append({"level": "warn", "msg": "Pas de CLAUDE.md — Claude n'aura pas de contexte projet à la session."})
+    if not has_gitignore:
+        suggestions.append({"level": "warn", "msg": "Pas de .gitignore — risque de committer des secrets ou des artefacts."})
+    if not has_readme:
+        suggestions.append({"level": "info", "msg": "Pas de README.md — bonne pratique pour documenter le projet."})
+    for f in forbidden:
+        suggestions.append({"level": "error", "msg": f"Dossier interdit dans un template : {f} (sera copié dans chaque workspace)."})
+    for bf in big_files:
+        suggestions.append({"level": "warn", "msg": f"Fichier > 512 Kio non éditable : {bf['path']}."})
+    declared = {"name", "label", "description", "tools", "emoji", "date"}
+    unused_critical = {"name", "label"} - placeholders_used
+    if unused_critical:
+        suggestions.append({"level": "info", "msg": f"Placeholders critiques jamais utilisés : {', '.join(sorted(unused_critical))} — le template ne s'adapte pas au workspace créé."})
+
+    score = "ok"
+    if any(s["level"] == "error" for s in suggestions):
+        score = "error"
+    elif any(s["level"] == "warn" for s in suggestions):
+        score = "warn"
+
+    return 200, {
+        "score": score,
+        "suggestions": suggestions,
+        "placeholders_used": sorted(placeholders_used),
+        "stats": {
+            "has_claude_md": has_claude_md,
+            "has_gitignore": has_gitignore,
+            "has_readme": has_readme,
+        },
+    }
+
+
+def preview_template_file(tpl_id: str, rel_path: str) -> tuple[int, dict]:
+    """Retourne le contenu du fichier après substitution des placeholders avec
+    des valeurs de test (pour l'aperçu GUI)."""
+    target, err = _resolve_template_file(tpl_id, rel_path)
+    if err:
+        return 400, err
+    if not target.exists() or not target.is_file():
+        return 404, {"error": "fichier introuvable"}
+    test_vars = {
+        "name": "mon-projet",
+        "label": "Mon Projet",
+        "description": "Description de test",
+        "tools": "VS Code, Claude Code",
+        "emoji": "🚀",
+        "date": dt.date.today().isoformat(),
+    }
+    try:
+        size = target.stat().st_size
+        if size > 512 * 1024:
+            return 200, {"path": rel_path, "preview": "", "binary": True, "error": "fichier > 512 Kio"}
+        try:
+            content = target.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            return 200, {"path": rel_path, "preview": "", "binary": True}
+        rendered = _PLACEHOLDER_RE.sub(lambda m: test_vars.get(m.group(1), m.group(0)), content)
+        return 200, {"path": rel_path, "preview": rendered, "test_vars": test_vars}
+    except OSError as e:
+        return 500, {"error": str(e)}
+
+
 def delete_template(tpl_id: str) -> tuple[int, dict]:
     if not safe_id(tpl_id):
         return 400, {"error": "id invalide"}

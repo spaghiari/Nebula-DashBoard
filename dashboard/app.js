@@ -3884,21 +3884,46 @@ async function renderHelp() {
 
     <section id="h-templates">
       <h2>${I.layers}<span>8. Templates</span></h2>
-      <p>Un template = un dossier dans <code class="mono">templates/&lt;id&gt;/</code> qui sera copié à chaque création de workspace. Le fichier <code class="mono">.template.json</code> contient les méta (label, description, emoji).</p>
+      <p>Un template = un dossier dans <code class="mono">templates/&lt;id&gt;/</code> qui sera copié à chaque création de workspace, en remplaçant les placeholders par les valeurs saisies dans le formulaire "Nouveau workspace".</p>
 
-      <h3>Édition complète depuis le GUI</h3>
-      <p>Bouton <em>Éditer</em> sur une carte template ouvre la modale avec arborescence + éditeur, comme pour les skills. Tu peux ajouter/modifier/supprimer des fichiers et organiser des sous-dossiers.</p>
-
-      <h3>Placeholders</h3>
-      <p>Dans le contenu des fichiers texte du template, ces marqueurs sont remplacés à la création par les <strong>infos saisies dans le formulaire "Nouveau workspace"</strong> :</p>
+      <h3>Créer un template — bouton "+ Nouveau template"</h3>
+      <p>Choix d'un <strong>starter</strong> pré-rempli :</p>
       <ul class="help-list">
-        <li><code class="mono">{{name}}</code> → champ <strong>ID</strong></li>
+        <li>⭐ <strong>Standard</strong> (recommandé) — CLAUDE.md + .gitignore + README.md déjà câblés avec tous les placeholders.</li>
+        <li>📭 <strong>Vide</strong> — juste le <code class="mono">.template.json</code>, à toi de tout construire.</li>
+        <li>🐍 <strong>Python</strong>, 🟢 <strong>Node.js</strong>, 🐳 <strong>Docker</strong> — starters spécialisés stack.</li>
+      </ul>
+      <p>Après création, l'éditeur s'ouvre directement sur le nouveau template — tu peux modifier le contenu, ajouter des fichiers, etc.</p>
+
+      <h3>Les 6 placeholders</h3>
+      <ul class="help-list">
+        <li><code class="mono">{{name}}</code> → champ <strong>ID</strong> du workspace</li>
         <li><code class="mono">{{label}}</code> → champ <strong>Label</strong></li>
         <li><code class="mono">{{description}}</code> → champ <strong>Description</strong></li>
         <li><code class="mono">{{tools}}</code> → champ <strong>Outils / contexte</strong></li>
         <li><code class="mono">{{emoji}}</code> → champ <strong>Emoji</strong></li>
         <li><code class="mono">{{date}}</code> → date du jour à la création (ISO)</li>
       </ul>
+
+      <h3>Panneau "Conseils & qualité"</h3>
+      <p>L'éditeur scanne automatiquement le template et propose des suggestions :</p>
+      <ul class="help-list">
+        <li>⚠️ Pas de <code class="mono">CLAUDE.md</code> — Claude n'aura pas de contexte projet</li>
+        <li>⚠️ Pas de <code class="mono">.gitignore</code> — risque de committer des secrets</li>
+        <li>❌ Dossiers interdits détectés (<code class="mono">.git</code>, <code class="mono">node_modules</code>, <code class="mono">__pycache__</code>…)</li>
+        <li>ℹ️ Placeholders critiques (<code class="mono">{{name}}</code>, <code class="mono">{{label}}</code>) jamais utilisés</li>
+      </ul>
+      <p>Score de qualité affiché en badge sur chaque card de la grid Templates.</p>
+
+      <h3>Bouton "👁 Aperçu"</h3>
+      <p>Dans l'éditeur, sur la barre d'un fichier ouvert, le bouton <strong>👁 Aperçu</strong> ouvre un modal en lecture seule qui montre le contenu après substitution avec des valeurs de test (<code class="mono">name=mon-projet</code>, <code class="mono">label=Mon Projet</code>, etc.). Pratique pour vérifier que les placeholders sont bien câblés.</p>
+
+      <h3>Édition complète depuis le GUI</h3>
+      <p>Bouton <em>Éditer</em> sur une carte template ouvre la modale avec arborescence + éditeur. Ctrl+S pour sauvegarder le fichier ouvert. Le panneau qualité se rafraîchit automatiquement après chaque enregistrement.</p>
+
+      <div class="callout callout-warn">
+        <strong>Pièges à éviter :</strong> ne jamais inclure <code class="mono">.git/</code>, <code class="mono">node_modules/</code>, <code class="mono">__pycache__/</code>, ni de fichiers binaires &gt; 512 Kio (non éditables ensuite). Pas de secrets en dur — utilise <code class="mono">\${VAR}</code> + <code class="mono">.env.local</code>.
+      </div>
     </section>
 
     <section id="h-env">
@@ -4669,7 +4694,9 @@ async function modalEditSkillFiles(scope, name) {
    ================================================================ */
 async function renderTemplates() {
   setBreadcrumbs([{ label: 'Templates' }]);
-  setTopbarActions([]);
+  const newBtn = btn('Nouveau template', 'btn-primary', I.plus);
+  newBtn.addEventListener('click', () => modalNewTemplate());
+  setTopbarActions([newBtn]);
 
   const c = $('#content');
   c.innerHTML = '';
@@ -4678,12 +4705,13 @@ async function renderTemplates() {
     <div class="page-header-text">
       <div class="page-eyebrow"><span class="index">03.</span><span>Bibliothèque</span></div>
       <h1 class="page-title">Templates</h1>
-      <p class="page-subtitle">Modèles réutilisables pour créer de nouveaux workspaces.</p>
+      <p class="page-subtitle">Modèles réutilisables pour créer de nouveaux workspaces — clique <strong>+ Nouveau template</strong> pour démarrer.</p>
     </div>
   `));
 
-  // Note "Comment utiliser" (collapsible)
+  // Note "Comment utiliser" (collapsible) — refondu
   const help = el('details', 'help-card');
+  help.open = !STATE.templates.length;  // ouvert par défaut si aucun template
   help.innerHTML = `
     <summary>
       <span class="help-icon">${I.info}</span>
@@ -4693,33 +4721,54 @@ async function renderTemplates() {
     <div class="help-body">
       <div class="help-grid">
         <div>
-          <h4>Qu'est-ce qu'un template ?</h4>
-          <p>Un dossier dans <code class="mono">C:\\claude-workspace\\templates\\&lt;id&gt;\\</code> contenant l'arborescence à dupliquer pour chaque nouveau workspace. Tous les fichiers texte sont copiés et leurs placeholders sont remplacés à la création.</p>
+          <h4>📦 Qu'est-ce qu'un template ?</h4>
+          <p>Un <strong>dossier modèle</strong> dans <code class="mono">templates/&lt;id&gt;/</code>. À chaque "Nouveau workspace" qui le sélectionne, Atelier copie tout le contenu et remplace les <code class="mono">{{placeholders}}</code> par les valeurs saisies dans le formulaire.</p>
         </div>
         <div>
-          <h4>Le fichier <code class="mono">.template.json</code></h4>
-          <p>Méta du template (label, description, emoji). Géré automatiquement par cet éditeur — tu n'as pas à le toucher à la main.</p>
+          <h4>✨ Exemple concret avant/après</h4>
+          <p style="margin-bottom:6px">Dans <code class="mono">CLAUDE.md</code> du template :</p>
+          <pre class="help-code"># {{label}}
+
+Projet : {{name}}
+Créé : {{date}}</pre>
+          <p style="margin:6px 0">Devient à la création (ID=<code class="mono">audit</code>, Label=<code class="mono">Audit Prod</code>) :</p>
+          <pre class="help-code"># Audit Prod
+
+Projet : audit
+Créé : 2026-04-27</pre>
         </div>
         <div>
-          <h4>Placeholders disponibles</h4>
-          <p style="margin-bottom:var(--sp-2)">À l'intérieur des fichiers du template, ces marqueurs sont remplacés à la création par les <strong>infos saisies dans le formulaire « Nouveau workspace »</strong> :</p>
+          <h4>🔤 Les 6 placeholders</h4>
+          <table style="font-size:12px;width:100%;border-collapse:collapse">
+            <tr><td><code class="mono">{{name}}</code></td><td>ID technique du workspace</td></tr>
+            <tr><td><code class="mono">{{label}}</code></td><td>Libellé lisible</td></tr>
+            <tr><td><code class="mono">{{emoji}}</code></td><td>Emoji choisi</td></tr>
+            <tr><td><code class="mono">{{description}}</code></td><td>Description courte</td></tr>
+            <tr><td><code class="mono">{{tools}}</code></td><td>Outils / contexte</td></tr>
+            <tr><td><code class="mono">{{date}}</code></td><td>Date du jour ISO</td></tr>
+          </table>
+        </div>
+        <div>
+          <h4>✅ Anatomie d'un bon template</h4>
           <ul class="help-list">
-            <li><code class="mono">{{name}}</code> → champ <strong>ID</strong> du workspace (ex. <code class="mono">audit-prod</code>)</li>
-            <li><code class="mono">{{label}}</code> → champ <strong>Label</strong> (ex. <code class="mono">Audit Prod</code>)</li>
-            <li><code class="mono">{{description}}</code> → champ <strong>Description</strong></li>
-            <li><code class="mono">{{tools}}</code> → champ <strong>Outils / contexte</strong></li>
-            <li><code class="mono">{{emoji}}</code> → champ <strong>Emoji</strong></li>
-            <li><code class="mono">{{date}}</code> → date du jour à la création (ISO)</li>
+            <li><strong>CLAUDE.md</strong> — contexte projet (Claude le lit à chaque session)</li>
+            <li><strong>.gitignore</strong> — adapté au stack (Python, Node, etc.)</li>
+            <li><strong>README.md</strong> — pour humains</li>
+            <li>Structure plate, &lt; 50 fichiers</li>
           </ul>
         </div>
         <div>
-          <h4>Bonnes pratiques</h4>
+          <h4>⚠️ Pièges classiques</h4>
           <ul class="help-list">
-            <li>Inclure systématiquement un <code class="mono">CLAUDE.md</code> avec le contexte projet</li>
-            <li>Ajouter un <code class="mono">.gitignore</code> adapté</li>
-            <li>Pour les configs MCP partagées, utiliser plutôt le registre global et lier via le scope MCPs</li>
-            <li>Garder les templates &lt; 50 fichiers pour rester rapides à créer</li>
+            <li>Ne jamais inclure <code class="mono">.git/</code>, <code class="mono">node_modules/</code>, <code class="mono">__pycache__/</code></li>
+            <li>Pas de fichiers binaires &gt; 512 Kio (non éditables ensuite)</li>
+            <li>Pas de secrets en dur — utilise <code class="mono">\${VAR}</code> et <code class="mono">.env.local</code></li>
+            <li>Toujours utiliser <code class="mono">{{name}}</code> et <code class="mono">{{label}}</code> au moins 1 fois</li>
           </ul>
+        </div>
+        <div>
+          <h4>🚀 Démarrage rapide</h4>
+          <p>Clique <strong>+ Nouveau template</strong> → choisis un starter (Standard recommandé pour les novices) → édite le contenu → c'est prêt à être utilisé pour créer des workspaces.</p>
         </div>
       </div>
     </div>
@@ -4728,42 +4777,177 @@ async function renderTemplates() {
 
   const tpls = STATE.templates;
   if (!tpls.length) {
-    page.appendChild(el('div', 'empty', `<div class="empty-title">Aucun template</div><p class="muted">Crée un dossier dans <code>templates/</code> avec un <code>.template.json</code>.</p>`));
+    const empty = el('div', 'empty');
+    empty.innerHTML = `
+      <div class="empty-title">Aucun template</div>
+      <p class="muted">Clique <strong>+ Nouveau template</strong> en haut à droite pour démarrer avec un starter pré-rempli.</p>
+    `;
+    const newCta = btn('+ Nouveau template', 'btn-primary', I.plus);
+    newCta.style.marginTop = '12px';
+    newCta.addEventListener('click', () => modalNewTemplate());
+    empty.appendChild(newCta);
+    page.appendChild(empty);
   } else {
     const grid = el('div', 'template-grid');
     for (const t of tpls) {
-      const card = el('div', 'template-card');
-      card.innerHTML = `
-        <div class="template-emoji">${escapeHtml(t.emoji || '📦')}</div>
-        <h3 class="template-name">${escapeHtml(t.label || t.id)}</h3>
-        <p class="template-desc">${escapeHtml(t.description || '—')}</p>
-        <div class="template-meta">${t.file_count} fichier${t.file_count > 1 ? 's' : ''} · <span class="mono">${escapeHtml(t.id)}</span></div>
-      `;
-      const actions = el('div', 'template-actions');
-      const ed = btn('Éditer', 'btn-sm btn-primary', I.edit);
-      ed.addEventListener('click', () => modalEditTemplate(t.id));
-      const open = btn('Dossier', 'btn-sm btn-ghost', I.folder);
-      open.title = 'Ouvrir dans l\'explorateur';
-      open.addEventListener('click', async () => {
-        try { const r = await API.post('/api/open', { target: `template:${t.id}` }); toastOk(r.message || 'Ouvert'); }
-        catch (e) { toastErr(e.message); }
-      });
-      const dup = btn('', 'btn-sm btn-ghost btn-icon-only', I.copy);
-      dup.title = 'Dupliquer';
-      dup.addEventListener('click', () => modalDuplicateTemplate(t));
-      const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
-      rm.title = 'Supprimer';
-      rm.addEventListener('click', () => confirmDialog(`Supprimer le template ${t.id} ?`, async () => {
-        try { await API.del(`/api/templates/${t.id}`); toastOk('Supprimé'); STATE.loading = true; route(); }
-        catch (e) { toastErr(e.message); }
-      }, { danger: true }));
-      actions.append(ed, open, dup, rm);
-      card.appendChild(actions);
-      grid.appendChild(card);
+      grid.appendChild(templateCard(t));
     }
     page.appendChild(grid);
   }
   c.appendChild(page);
+}
+
+function templateCard(t) {
+  const card = el('div', 'template-card');
+  // Le starter "Standard" est mis en avant si présent
+  const isRecommended = t.id === 'standard';
+  card.innerHTML = `
+    ${isRecommended ? '<div class="template-recommended">⭐ Recommandé</div>' : ''}
+    <div class="template-emoji">${escapeHtml(t.emoji || '📦')}</div>
+    <h3 class="template-name">${escapeHtml(t.label || t.id)}</h3>
+    <p class="template-desc">${escapeHtml(t.description || '—')}</p>
+    <div class="template-meta">${t.file_count} fichier${t.file_count > 1 ? 's' : ''} · <span class="mono">${escapeHtml(t.id)}</span></div>
+    <div class="template-quality" data-quality>
+      <span class="dim" style="font-size:11px">⏳ qualité…</span>
+    </div>
+  `;
+  const actions = el('div', 'template-actions');
+  const ed = btn('Éditer', 'btn-sm btn-primary', I.edit);
+  ed.addEventListener('click', () => modalEditTemplate(t.id));
+  const open = btn('Dossier', 'btn-sm btn-ghost', I.folder);
+  open.title = 'Ouvrir dans l\'explorateur';
+  open.addEventListener('click', async () => {
+    try { const r = await API.post('/api/open', { target: `template:${t.id}` }); toastOk(r.message || 'Ouvert'); }
+    catch (e) { toastErr(e.message); }
+  });
+  const dup = btn('', 'btn-sm btn-ghost btn-icon-only', I.copy);
+  dup.title = 'Dupliquer';
+  dup.addEventListener('click', () => modalDuplicateTemplate(t));
+  const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
+  rm.title = 'Supprimer';
+  rm.addEventListener('click', () => confirmDialog(`Supprimer le template ${t.id} ?`, async () => {
+    try { await API.del(`/api/templates/${t.id}`); toastOk('Supprimé'); STATE.loading = true; route(); }
+    catch (e) { toastErr(e.message); }
+  }, { danger: true }));
+  actions.append(ed, open, dup, rm);
+  card.appendChild(actions);
+
+  // Fetch qualité en async (non-bloquant)
+  const qualHost = card.querySelector('[data-quality]');
+  API.get(`/api/templates/${t.id}/quality`).then(q => {
+    const cls = q.score === 'ok' ? 'badge-ok' : q.score === 'warn' ? 'badge-warn' : 'badge-err';
+    const icon = q.score === 'ok' ? '✅' : q.score === 'warn' ? '⚠️' : '❌';
+    const count = (q.suggestions || []).length;
+    const summary = q.score === 'ok' ? 'Qualité OK' : `${count} suggestion${count > 1 ? 's' : ''}`;
+    qualHost.innerHTML = `<span class="badge ${cls}" title="${escapeHtml((q.suggestions || []).map(s => '• ' + s.msg).join('\n') || 'Aucune suggestion')}">${icon} ${summary}</span>`;
+  }).catch(() => {
+    qualHost.innerHTML = '';
+  });
+
+  return card;
+}
+
+function modalNewTemplate() {
+  const body = el('div');
+  const STARTERS = [
+    { id: 'standard', emoji: '⭐', name: 'Standard', recommended: true,
+      desc: 'CLAUDE.md + .gitignore + README.md pré-remplis avec tous les placeholders. Idéal pour démarrer.' },
+    { id: 'empty',    emoji: '📭', name: 'Vide',
+      desc: 'Juste le .template.json. Tu construis tout à la main.' },
+    { id: 'python',   emoji: '🐍', name: 'Python',
+      desc: 'CLAUDE.md + requirements.txt + .gitignore Python + README.md.' },
+    { id: 'node',     emoji: '🟢', name: 'Node.js',
+      desc: 'CLAUDE.md + package.json + .gitignore Node + README.md.' },
+    { id: 'docker',   emoji: '🐳', name: 'Docker',
+      desc: 'CLAUDE.md + Dockerfile + docker-compose.yml + .dockerignore.' },
+  ];
+
+  body.innerHTML = `
+    <div class="callout callout-info" style="margin-bottom:var(--sp-3)">
+      <div>
+        <strong>2 étapes :</strong> 1) choisis un starter ; 2) renseigne les méta. Tu pourras tout éditer ensuite.
+      </div>
+    </div>
+    <div class="section-label" style="margin-bottom:var(--sp-2)"><span class="num">1</span> Choisis un starter</div>
+    <div class="recipes-grid" data-starters></div>
+    <div class="section-label" style="margin-top:var(--sp-3);margin-bottom:var(--sp-2)"><span class="num">2</span> Méta du template</div>
+    <div class="field-row">
+      <div class="field" style="flex:0 0 80px"><label class="field-label">Emoji</label><input class="input" name="emoji" value="📦" maxlength="4"></div>
+      <div class="field" style="flex:1"><label class="field-label">ID *</label><input class="input mono" name="id" placeholder="mon-template" autocomplete="off"></div>
+      <div class="field" style="flex:2"><label class="field-label">Label *</label><input class="input" name="label" placeholder="Mon Template"></div>
+    </div>
+    <div class="field"><label class="field-label">Description</label><input class="input" name="description" placeholder="À quoi sert ce template (1 phrase)"></div>
+  `;
+
+  const startersHost = body.querySelector('[data-starters]');
+  let selectedStarter = 'standard';
+  for (const s of STARTERS) {
+    const card = el('label', 'recipe-card');
+    card.style.cursor = 'pointer';
+    card.innerHTML = `
+      <input type="radio" name="starter" value="${s.id}" ${s.id === 'standard' ? 'checked' : ''} style="margin-right:8px">
+      <div class="recipe-emoji">${s.emoji}</div>
+      <div class="recipe-body">
+        <div class="recipe-name">${escapeHtml(s.name)}${s.recommended ? ' <span class="badge badge-ok" style="margin-left:6px">recommandé novices</span>' : ''}</div>
+        <div class="recipe-desc">${escapeHtml(s.desc)}</div>
+      </div>
+    `;
+    card.querySelector('input').addEventListener('change', (e) => {
+      if (e.target.checked) selectedStarter = s.id;
+    });
+    startersHost.appendChild(card);
+  }
+
+  const cancel = btn('Annuler', 'btn-ghost');
+  const ok = btn('Créer le template', 'btn-primary', I.plus);
+  const { close } = openModal({ title: 'Nouveau template', body, footer: [cancel, ok], wide: true });
+  cancel.addEventListener('click', close);
+  ok.addEventListener('click', async () => {
+    const get = (n) => body.querySelector(`[name=${n}]`).value.trim();
+    const payload = {
+      id: get('id'),
+      label: get('label') || get('id'),
+      emoji: get('emoji') || '📦',
+      description: get('description'),
+      starter: selectedStarter,
+    };
+    if (!/^[a-zA-Z0-9_-]{1,40}$/.test(payload.id)) { toastErr('ID invalide (a-z, 0-9, _, -, max 40)'); return; }
+    ok.disabled = true;
+    try {
+      await API.post('/api/templates', payload);
+      toastOk(`Template '${payload.id}' créé (starter: ${selectedStarter})`);
+      close();
+      STATE.loading = true;
+      // Ouvre directement l'éditeur sur le nouveau
+      await route();
+      modalEditTemplate(payload.id);
+    } catch (e) {
+      toastErr(e.message);
+      ok.disabled = false;
+    }
+  });
+}
+
+function modalPreviewTemplateFile(path, data) {
+  const body = el('div');
+  if (data.binary || data.error) {
+    body.innerHTML = `<div class="error-box">${escapeHtml(data.error || 'Fichier binaire')}</div>`;
+  } else {
+    const vars = data.test_vars || {};
+    const varList = Object.entries(vars).map(([k, v]) => `<code class="mono">{{${k}}}</code> → <code class="mono">${escapeHtml(v)}</code>`).join(' · ');
+    body.innerHTML = `
+      <div class="callout callout-info" style="margin-bottom:var(--sp-3)">
+        <div>
+          <strong>Aperçu avec valeurs de test</strong>
+          <div class="dim" style="font-size:11.5px;margin-top:4px">${varList}</div>
+        </div>
+      </div>
+      <pre class="help-code" style="max-height:60vh;overflow:auto">${escapeHtml(data.preview || '')}</pre>
+    `;
+  }
+  const close = btn('Fermer', 'btn-ghost');
+  const { close: doClose } = openModal({ title: `Aperçu · ${path}`, body, footer: close, wide: true });
+  close.addEventListener('click', doClose);
 }
 
 async function modalEditTemplate(tplId) {
@@ -4785,6 +4969,7 @@ async function modalEditTemplate(tplId) {
       <button class="btn btn-sm btn-primary" data-save-meta>Enregistrer</button>
     </div>
     <div class="dim mono" style="font-size:11px;margin-bottom:var(--sp-3)">${escapeHtml(detail.path)}</div>
+    <div data-quality-panel></div>
     <div class="tpl-editor">
       <aside class="tpl-tree">
         <div class="tpl-tree-header">
@@ -4808,6 +4993,31 @@ async function modalEditTemplate(tplId) {
       STATE.loading = true;  // Refresh list later
     } catch (e) { toastErr(e.message); }
   });
+
+  // Panneau "Conseils & qualité" (async, refresh-able)
+  const qualHost = body.querySelector('[data-quality-panel]');
+  const refreshQuality = async () => {
+    try {
+      const q = await API.get(`/api/templates/${tplId}/quality`);
+      const cls = q.score === 'ok' ? 'callout-success' : q.score === 'warn' ? 'callout-warn' : 'callout-error';
+      const icon = q.score === 'ok' ? '✅' : q.score === 'warn' ? '⚠️' : '❌';
+      const lines = (q.suggestions || []).map(s => {
+        const li = s.level === 'error' ? '❌' : s.level === 'warn' ? '⚠️' : 'ℹ️';
+        return `<li>${li} ${escapeHtml(s.msg)}</li>`;
+      }).join('');
+      const placeholders = (q.placeholders_used || []).length
+        ? `<div class="dim" style="font-size:11px;margin-top:6px">Placeholders détectés : ${q.placeholders_used.map(p => `<code class="mono">{{${p}}}</code>`).join(' ')}</div>`
+        : `<div class="dim" style="font-size:11px;margin-top:6px">Aucun placeholder utilisé — le template ne s'adapte pas au workspace créé.</div>`;
+      qualHost.innerHTML = `
+        <details class="callout ${cls}" style="margin-bottom:var(--sp-3)" ${q.score !== 'ok' ? 'open' : ''}>
+          <summary style="cursor:pointer;font-weight:600">${icon} Conseils & qualité ${q.score === 'ok' ? '— rien à signaler' : `(${(q.suggestions || []).length})`}</summary>
+          ${lines ? `<ul class="help-list" style="margin:8px 0 0">${lines}</ul>` : ''}
+          ${placeholders}
+        </details>
+      `;
+    } catch { qualHost.innerHTML = ''; }
+  };
+  refreshQuality();
 
   const treeList = body.querySelector('.tpl-tree-list');
   const pane = body.querySelector('.tpl-pane');
@@ -4861,9 +5071,11 @@ async function modalEditTemplate(tplId) {
       <div class="tpl-pane-header">
         <span class="mono" style="font-size:13px;flex:1">${escapeHtml(path)}</span>
         <span class="dim mono" style="font-size:11px">${fmtBytes(data.size)}</span>
+        <button class="btn btn-sm btn-ghost" data-preview-file title="Aperçu avec valeurs de test">👁 Aperçu</button>
         <button class="btn btn-sm btn-primary" data-save-file>Enregistrer</button>
       </div>
       <textarea class="textarea textarea-code tpl-editor-textarea" spellcheck="false"></textarea>
+      <div class="dim" style="font-size:11px;margin-top:6px">💡 Astuce : Ctrl+S enregistre. Bouton 👁 pour voir le rendu après substitution des <code class="mono">{{placeholders}}</code>.</div>
     `;
     const ta = pane.querySelector('textarea');
     ta.value = data.content;
@@ -4874,7 +5086,14 @@ async function modalEditTemplate(tplId) {
         const f = files.find(x => x.path === path);
         if (f) f.size = r.size;
         renderTree();
+        refreshQuality();
         toastOk('Enregistré');
+      } catch (e) { toastErr(e.message); }
+    });
+    pane.querySelector('[data-preview-file]').addEventListener('click', async () => {
+      try {
+        const r = await API.get(`/api/templates/${tplId}/preview?path=${encodeURIComponent(path)}`);
+        modalPreviewTemplateFile(path, r);
       } catch (e) { toastErr(e.message); }
     });
     // Ctrl+S to save

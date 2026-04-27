@@ -36,6 +36,7 @@ from dashcore.api_workspaces import (
     list_templates, duplicate_template, delete_template,
     get_template_detail, get_template_file, write_template_file,
     delete_template_file, update_template_meta,
+    create_template, analyze_template_quality, preview_template_file,
     create_workspace, update_workspace, delete_workspace, duplicate_workspace,
     read_workspace_config, write_workspace_file, export_workspace, launch_resume,
     list_sessions_for_workspace, read_session_messages,
@@ -193,6 +194,11 @@ def h_get_template_file(q, b, tid):
     return get_template_file(tid, rel)
 
 def h_post_dup_template(q, b):              return duplicate_template(b)
+def h_post_create_template(q, b):           return create_template(b)
+def h_get_template_quality(q, b, tpl_id):   return analyze_template_quality(tpl_id)
+def h_get_template_preview(q, b, tpl_id):
+    rel = q.get("path", [""])[0]
+    return preview_template_file(tpl_id, rel)
 def h_post_template_meta(q, b, tid):        return update_template_meta(tid, b)
 def h_post_template_file(q, b, tid):        return write_template_file(tid, b.get("path", ""), b.get("content", ""))
 
@@ -351,6 +357,8 @@ ROUTES_GET = [
     # Templates
     (re.compile(rf"^/api/templates$"),                                                      h_get_templates),
     (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_get_template_file),
+    (re.compile(rf"^/api/templates/({_ID})/quality$"),                                      h_get_template_quality),
+    (re.compile(rf"^/api/templates/({_ID})/preview$"),                                      h_get_template_preview),
     (re.compile(rf"^/api/templates/({_ID})$"),                                              h_get_template_detail),
     # Skills
     (re.compile(rf"^/api/skills$"),                                                         h_get_skills),
@@ -411,6 +419,7 @@ ROUTES_POST = [
     (re.compile(rf"^/api/sync-all$"),                                                       h_post_sync_all),
     # Templates
     (re.compile(rf"^/api/templates/duplicate$"),                                            h_post_dup_template),
+    (re.compile(rf"^/api/templates$"),                                                      h_post_create_template),
     (re.compile(rf"^/api/templates/({_ID})/meta$"),                                         h_post_template_meta),
     (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_post_template_file),
     # Skills
