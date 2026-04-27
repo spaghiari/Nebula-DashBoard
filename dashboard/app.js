@@ -3587,7 +3587,7 @@ async function renderHelp() {
       <li><a href="#h-workspaces">Workspaces : créer, importer, gérer</a></li>
       <li><a href="#h-mcps">MCPs : configurer un Model Context Protocol</a></li>
       <li><a href="#h-recipes">Recettes MCP : catalogue 1-clic & recettes locales</a></li>
-      <li><a href="#h-skills">Skills : créer, multi-fichiers, copier</a></li>
+      <li><a href="#h-skills">Skills : bibliothèque, distribution, import GitHub</a></li>
       <li><a href="#h-plugins">Plugins : installation et scope</a></li>
       <li><a href="#h-templates">Templates : modèles de workspaces</a></li>
       <li><a href="#h-env">Variables d'environnement (.env.local)</a></li>
@@ -3976,14 +3976,17 @@ DB_PASSWORD=mon_mdp
     <section id="h-tools">
       <h2>${I.tools}<span>11. Outils & maintenance</span></h2>
       <ul class="help-list">
-        <li><strong>Apparence</strong> — choix du thème (Atelier sombre/clair, Marine, Forêt, Brique). Persisté localement.</li>
-        <li><strong>Onboarding</strong> — wizards d'import (vu en section 2).</li>
+        <li><strong>Apparence</strong> — choix du thème (Atelier sombre/clair, Marine, Forêt, Brique). Persisté côté serveur (<code class="mono">data/ui_state.json</code>) avec cache localStorage pour éviter le flash au chargement.</li>
+        <li><strong>Onboarding</strong> — checklist de découverte + bouton <em>Conflits Claude global</em> (détecte les MCPs en doublon entre Atelier et <code class="mono">~/.claude.json</code> ou <code class="mono">settings.json</code>, avec backup auto avant nettoyage).</li>
         <li><strong>Accès rapide</strong> — boutons pour ouvrir directement les fichiers de config dans l'explorateur ou le bloc-notes.</li>
         <li><strong>Hooks globaux</strong> — édition des hooks Claude Code de <code class="mono">~/.claude/settings.json</code>.</li>
         <li><strong>Sauvegardes</strong> — copie horodatée de <code class="mono">~/.claude.json</code> et <code class="mono">~/.claude/settings.json</code> dans <code class="mono">backups/</code>.</li>
-        <li><strong>Skills globaux</strong> — vue rapide depuis Outils (sinon page Skills dédiée).</li>
+        <li><strong>Variables d'environnement</strong> — éditeur GUI pour <code class="mono">.env.local</code> (cf section 9).</li>
         <li><strong>Maintenance</strong> — nettoyage des <code class="mono">.bat</code> orphelins (workspaces supprimés mais script de lancement encore présent).</li>
       </ul>
+      <div class="callout callout-info">
+        <strong>Note :</strong> l'import de MCPs depuis du JSON brut se fait directement sur la page MCPs (bouton <em>Importer</em>) — pas de doublon dans Outils.
+      </div>
     </section>
 
     <section id="h-shortcuts">
@@ -4014,9 +4017,10 @@ DB_PASSWORD=mon_mdp
 
       <h3>Vérification automatique</h3>
       <ul class="help-list">
-        <li>Check au démarrage (1.5s après l'init) puis toutes les <strong>30 minutes</strong> en arrière-plan.</li>
-        <li>Si des commits sont en attente : <strong>badge gradient pulsant "X MAJ"</strong> apparaît dans le topbar à droite (visible sur toutes les pages).</li>
-        <li>Badge secondaire descriptif dans la sidebar footer.</li>
+        <li><strong>1ʳᵉ vérif de session</strong> — un fermer/rouvrir d'onglet (ou un nouveau navigateur) déclenche systématiquement un <code class="mono">git fetch</code> frais, peu importe quand le dernier check a eu lieu. Garantit qu'un refresh montre toujours les MAJ disponibles.</li>
+        <li><strong>Anti-spam</strong> — au sein d'une même session, l'intervalle entre 2 fetchs distants est de <strong>1h</strong> (pour ne pas marteler le remote).</li>
+        <li><strong>Re-check périodique</strong> — toutes les 30 min en arrière-plan tant que l'onglet reste ouvert.</li>
+        <li>Si des commits sont en attente : <strong>badge gradient pulsant "X MAJ"</strong> apparaît dans le topbar à droite (visible sur toutes les pages), plus un badge descriptif dans la sidebar footer.</li>
       </ul>
 
       <h3>Appliquer une mise à jour</h3>
