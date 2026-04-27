@@ -1118,10 +1118,10 @@ body {
 /* ── Tour guidé ────────────────────────────────────────────────── */
 #tour-overlay {
   position: fixed; inset: 0; z-index: 9999;
-  pointer-events: none;
+  display: none;
   opacity: 0; transition: opacity 0.2s ease;
 }
-#tour-overlay.is-active { opacity: 1; pointer-events: auto; }
+#tour-overlay.is-active { display: block; opacity: 1; }
 .tour-mask {
   position: absolute; inset: 0;
   background: rgba(0, 0, 0, 0.55);
