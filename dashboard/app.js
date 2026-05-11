@@ -5618,6 +5618,7 @@ DB_PASSWORD=mon_mot_de_passe</pre>
     addRow.style.cssText = 'display:flex;gap:8px;margin-bottom:var(--sp-3)';
     addRow.innerHTML = `<input class="input mono" name="k" placeholder="KEY (ex. OPENAI_API_KEY)" style="max-width:260px"><input class="input" name="v" placeholder="value" style="flex:1">`;
     const addBtn = btn('Ajouter', 'btn-primary btn-sm', I.plus);
+    addBtn.type = 'submit';
     addRow.appendChild(addBtn);
     addRow.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -5673,9 +5674,10 @@ DB_PASSWORD=mon_mot_de_passe</pre>
           const tr = el('tr');
           tr.innerHTML = `
             <td style="width:280px"><span class="mono" style="font-size:12.5px">${escapeHtml(k)}</span></td>
-            <td class="mono" style="font-size:12.5px;color:var(--text-muted);max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span data-revealed="0" data-real="${escapeHtml(vals[k])}">••••••••</span></td>
-            <td style="text-align:right;width:80px"></td>
+            <td class="mono" data-cell-val style="font-size:12.5px;color:var(--text-muted);max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><span data-revealed="0" data-real="${escapeHtml(vals[k])}">••••••••</span></td>
+            <td style="text-align:right;width:120px;white-space:nowrap"></td>
           `;
+          const valCell = tr.querySelector('[data-cell-val]');
           const valSpan = tr.querySelector('[data-real]');
           const eyeBtn = el('button', 'icon-btn btn-icon-only', I.eye);
           eyeBtn.title = 'Afficher / masquer';
@@ -5685,13 +5687,40 @@ DB_PASSWORD=mon_mot_de_passe</pre>
             valSpan.dataset.revealed = shown ? '0' : '1';
             eyeBtn.innerHTML = shown ? I.eye : I.eyeoff;
           });
+          const editBtn = el('button', 'icon-btn btn-icon-only', I.edit);
+          editBtn.title = 'Modifier';
+          editBtn.addEventListener('click', () => {
+            const current = valSpan.dataset.real;
+            const input = document.createElement('input');
+            input.className = 'input mono';
+            input.type = 'text';
+            input.value = current;
+            input.style.cssText = 'width:100%;font-size:12.5px;padding:4px 8px';
+            valCell.replaceChildren(input);
+            input.focus();
+            input.select();
+            let done = false;
+            const save = async () => {
+              if (done) return; done = true;
+              const newVal = input.value;
+              if (newVal === current) { loadEnvVars(host); return; }
+              try { await API.post('/api/env', { key: k, value: newVal }); toastOk('Modifié'); loadEnvVars(host); }
+              catch (e) { toastErr(e.message); loadEnvVars(host); }
+            };
+            const cancel = () => { if (done) return; done = true; loadEnvVars(host); };
+            input.addEventListener('keydown', (ev) => {
+              if (ev.key === 'Enter') { ev.preventDefault(); save(); }
+              else if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+            });
+            input.addEventListener('blur', save);
+          });
           const rm = el('button', 'icon-btn btn-icon-only btn-danger', I.trash);
           rm.title = 'Supprimer';
           rm.addEventListener('click', () => confirmDialog(`Supprimer ${k} ?`, async () => {
             try { await API.del('/api/env/' + encodeURIComponent(k)); toastOk('Supprimé'); loadEnvVars(host); }
             catch (e) { toastErr(e.message); }
           }, { danger: true }));
-          tr.children[2].append(eyeBtn, rm);
+          tr.children[2].append(eyeBtn, editBtn, rm);
           tb.appendChild(tr);
         }
         listHost.appendChild(tbl);
