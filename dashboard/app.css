@@ -3483,7 +3483,12 @@ body {
 
 .refx-row { cursor: pointer; }
 .refx-row:hover { background: var(--hover); }
-.refx-summary { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.refx-summary {
+  max-width: 380px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .refx-meta { margin-top: var(--sp-2); font-size: 12px; }
 
 .refx-outcome {

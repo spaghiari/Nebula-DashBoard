@@ -5661,7 +5661,11 @@ async function renderReflexiveInteractions(host) {
     tr.tabIndex = 0;
     const td1 = el('td', 'mono dim'); td1.textContent = fmtDate(it.started_at);
     const td2 = el('td'); td2.textContent = it.workspace_id || '—';
-    const td3 = el('td', 'refx-summary'); td3.textContent = it.task_summary || '(non résumée)';
+    const td3 = el('td');
+    const sumDiv = el('div', 'refx-summary');
+    sumDiv.textContent = it.task_summary || '(non résumée)';
+    sumDiv.title = it.task_summary || '';
+    td3.appendChild(sumDiv);
     const td4 = el('td');
     const oc = it.outcome || 'unknown';
     const ocSpan = el('span', 'refx-outcome refx-outcome-' + oc); ocSpan.textContent = oc;
