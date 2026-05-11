@@ -5556,10 +5556,13 @@ async function renderReflexiveOverview(host) {
   }
 
   const kpiRow = el('div', 'refx-kpi-row');
-  // Score moyen + trend
+  // Score moyen : DB stocke un total /40 (somme des 4 dims), on affiche
+  // la moyenne par dimension sur 12 (plafond visuel, max réel = 10).
+  const avgPerDim = stats.avg_total != null ? stats.avg_total / 4 : null;
+  const prevPerDim = stats.avg_total_prev != null ? stats.avg_total_prev / 4 : null;
   const trendSub = el('span');
-  if (stats.avg_total != null && stats.avg_total_prev != null) {
-    const d = stats.avg_total - stats.avg_total_prev;
+  if (avgPerDim != null && prevPerDim != null) {
+    const d = avgPerDim - prevPerDim;
     let cls = 'refx-trend-flat', txt = '±0';
     if (Math.abs(d) >= 0.05) {
       cls = d > 0 ? 'refx-trend-up' : 'refx-trend-down';
@@ -5571,7 +5574,7 @@ async function renderReflexiveOverview(host) {
     trendSub.className = 'muted';
     trendSub.textContent = 'pas encore de tendance';
   }
-  kpiRow.appendChild(refxKpi('Score moyen (30j)', refxScore(stats.avg_total), trendSub));
+  kpiRow.appendChild(refxKpi('Score moyen (30j)', refxScore(avgPerDim), trendSub));
 
   const interSub = el('span', 'muted'); interSub.textContent = 'sur 30 derniers jours';
   kpiRow.appendChild(refxKpi('Interactions', fmtNum(stats.interactions), interSub));
@@ -5593,7 +5596,14 @@ async function renderReflexiveOverview(host) {
     empty.textContent = 'Aucune donnée encore — active Reflexive sur un workspace pour commencer.';
     sparkCard.appendChild(empty);
   } else {
-    const wrap = el('div'); wrap.innerHTML = refxSparkline(stats.series);
+    // Convertir sum-of-4-dims (0-40) → moyenne par dim (0-10) pour rester
+    // cohérent avec le KPI "Score moyen"
+    const seriesPerDim = stats.series.map(p => ({
+      day: p.day,
+      avg_total: p.avg_total != null ? p.avg_total / 4 : null,
+      n: p.n,
+    }));
+    const wrap = el('div'); wrap.innerHTML = refxSparkline(seriesPerDim);
     sparkCard.appendChild(wrap);
   }
   host.appendChild(sparkCard);
