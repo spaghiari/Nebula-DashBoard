@@ -20,64 +20,6 @@ from dashcore.env_local import load_env_local
 from dashcore.helpers import read_json
 
 
-_PRICING_FILE = DASHBOARD_DIR / "data" / "pricing.json"
-_PRICING_CACHE: dict | None = None
-_PRICING_MTIME: float = 0.0
-
-
-def _load_pricing() -> dict:
-    """Charge la table de prix avec cache (invalidé si mtime change)."""
-    global _PRICING_CACHE, _PRICING_MTIME
-    try:
-        m = _PRICING_FILE.stat().st_mtime
-    except OSError:
-        return _DEFAULT_PRICING
-    if _PRICING_CACHE is None or m != _PRICING_MTIME:
-        try:
-            _PRICING_CACHE = json.loads(_PRICING_FILE.read_text(encoding="utf-8"))
-            _PRICING_MTIME = m
-        except (OSError, json.JSONDecodeError) as e:
-            log.warning("pricing.json illisible : %s — utilisation des tarifs par défaut", e)
-            return _DEFAULT_PRICING
-    return _PRICING_CACHE
-
-
-_DEFAULT_PRICING = {
-    "models": [
-        {"match": "claude-opus-4",   "label": "Opus 4.x",   "input": 15.0, "output": 75.0, "cache_create": 18.75, "cache_read": 1.50},
-        {"match": "claude-sonnet-4", "label": "Sonnet 4.x", "input":  3.0, "output": 15.0, "cache_create":  3.75, "cache_read": 0.30},
-        {"match": "claude-haiku-4",  "label": "Haiku 4.x",  "input":  1.0, "output":  5.0, "cache_create":  1.25, "cache_read": 0.10},
-    ],
-    "fallback": {"label": "Inconnu (tarif Sonnet)", "input": 3.0, "output": 15.0, "cache_create": 3.75, "cache_read": 0.30},
-}
-
-
-def _resolve_model(model_id: str | None, pricing: dict) -> dict:
-    """Trouve l'entrée tarif via match (préfixe le plus long gagne)."""
-    if model_id:
-        candidates = sorted(pricing.get("models", []), key=lambda m: -len(m.get("match", "")))
-        for entry in candidates:
-            if model_id.startswith(entry.get("match", "")):
-                return entry
-    return pricing.get("fallback") or _DEFAULT_PRICING["fallback"]
-
-
-def _entry_cost(usage: dict, model_id: str | None, pricing: dict) -> tuple[float, str]:
-    """Coût d'une entry assistant (toutes dimensions). Retourne (cost_usd, model_label)."""
-    rate = _resolve_model(model_id, pricing)
-    inp = int(usage.get("input_tokens") or 0)
-    out = int(usage.get("output_tokens") or 0)
-    cc = int(usage.get("cache_creation_input_tokens") or 0)
-    cr = int(usage.get("cache_read_input_tokens") or 0)
-    cost = (
-        inp / 1_000_000 * float(rate.get("input", 0))
-        + out / 1_000_000 * float(rate.get("output", 0))
-        + cc / 1_000_000 * float(rate.get("cache_create", 0))
-        + cr / 1_000_000 * float(rate.get("cache_read", 0))
-    )
-    return cost, rate.get("label") or model_id or "Inconnu"
-
-
 def list_workspaces() -> list[dict]:
     data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
     return data.get("workspaces", [])
@@ -190,16 +132,11 @@ def workspace_stats(ws: dict) -> dict:
             "sessions": 0, "messages": 0, "last": None,
             "input_tokens": 0, "output_tokens": 0,
             "cache_creation_tokens": 0, "cache_read_tokens": 0,
-            "cost_usd": 0.0, "cost_by_model": [], "cache_savings_usd": 0.0,
         }
-    pricing = _load_pricing()
     sessions = 0
     messages = 0
     last_mtime = 0.0
     inp = out = cc = cr = 0
-    cost_total = 0.0
-    cache_savings = 0.0
-    cost_by_model: dict[str, dict] = {}
 
     for jsonl in pdir.glob("*.jsonl"):
         sessions += 1
@@ -222,45 +159,13 @@ def workspace_stats(ws: dict) -> dict:
                     usage = msg.get("usage") or entry.get("usage") or {}
                     if not usage:
                         continue
-                    e_inp = int(usage.get("input_tokens") or 0)
-                    e_out = int(usage.get("output_tokens") or 0)
-                    e_cc = int(usage.get("cache_creation_input_tokens") or 0)
-                    e_cr = int(usage.get("cache_read_input_tokens") or 0)
-                    inp += e_inp; out += e_out; cc += e_cc; cr += e_cr
-
-                    model_id = msg.get("model") or entry.get("model")
-                    rate = _resolve_model(model_id, pricing)
-                    label = rate.get("label") or model_id or "Inconnu"
-                    cost = (
-                        e_inp / 1_000_000 * float(rate.get("input", 0))
-                        + e_out / 1_000_000 * float(rate.get("output", 0))
-                        + e_cc / 1_000_000 * float(rate.get("cache_create", 0))
-                        + e_cr / 1_000_000 * float(rate.get("cache_read", 0))
-                    )
-                    cost_total += cost
-                    bucket = cost_by_model.setdefault(label, {
-                        "label": label, "cost_usd": 0.0,
-                        "input_tokens": 0, "output_tokens": 0,
-                        "cache_creation_tokens": 0, "cache_read_tokens": 0,
-                    })
-                    bucket["cost_usd"] += cost
-                    bucket["input_tokens"] += e_inp
-                    bucket["output_tokens"] += e_out
-                    bucket["cache_creation_tokens"] += e_cc
-                    bucket["cache_read_tokens"] += e_cr
-                    # Économie cache = (ce que les cache_read_tokens auraient coûté en input plein) - (ce qu'ils ont coûté en cache_read)
-                    if e_cr:
-                        cache_savings += e_cr / 1_000_000 * (float(rate.get("input", 0)) - float(rate.get("cache_read", 0)))
+                    inp += int(usage.get("input_tokens") or 0)
+                    out += int(usage.get("output_tokens") or 0)
+                    cc += int(usage.get("cache_creation_input_tokens") or 0)
+                    cr += int(usage.get("cache_read_input_tokens") or 0)
         except OSError as e:
             log.warning("workspace_stats: skip %s (%s)", jsonl, e)
             continue
-
-    # Round + sort by_model
-    by_model = []
-    for v in cost_by_model.values():
-        v["cost_usd"] = round(v["cost_usd"], 4)
-        by_model.append(v)
-    by_model.sort(key=lambda x: -x["cost_usd"])
 
     last_iso = dt.datetime.fromtimestamp(last_mtime).isoformat(timespec="seconds") if last_mtime else None
     return {
@@ -271,9 +176,6 @@ def workspace_stats(ws: dict) -> dict:
         "output_tokens": out,
         "cache_creation_tokens": cc,
         "cache_read_tokens": cr,
-        "cost_usd": round(cost_total, 4),
-        "cost_by_model": by_model,
-        "cache_savings_usd": round(cache_savings, 4),
     }
 
 

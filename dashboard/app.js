@@ -814,51 +814,9 @@ async function renderWorkspace(wsId) {
     <div class="info-tile"><div class="info-tile-label">Messages</div><div class="info-tile-value tabular">${fmtNum(stats.messages || 0)}</div></div>
     <div class="info-tile"><div class="info-tile-label">Tokens in</div><div class="info-tile-value tabular">${fmtNum(stats.input_tokens || 0)}</div></div>
     <div class="info-tile"><div class="info-tile-label">Tokens out</div><div class="info-tile-value tabular">${fmtNum(stats.output_tokens || 0)}</div></div>
-    <div class="info-tile" data-cost-tile style="cursor:help"><div class="info-tile-label">Coût ~$</div><div class="info-tile-value tabular">${stats.cost_usd != null ? stats.cost_usd.toFixed(2) : '—'}</div></div>
     <div class="info-tile"><div class="info-tile-label">Dernière</div><div class="info-tile-value" style="font-size:14px">${stats.last ? fmtDate(stats.last) : '—'}</div></div>
   `;
   page.appendChild(tiles);
-
-  // Tooltip détaillé sur la tuile coût
-  const costTile = tiles.querySelector('[data-cost-tile]');
-  if (costTile) {
-    const breakdown = Array.isArray(stats.cost_by_model) ? stats.cost_by_model : [];
-    const total = stats.cost_usd || 0;
-    const lines = breakdown.map(b => {
-      const pct = total > 0 ? (b.cost_usd / total * 100).toFixed(0) : 0;
-      return `${b.label}: $${b.cost_usd.toFixed(4)} (${pct}%)`;
-    });
-    if (stats.cache_savings_usd > 0) {
-      lines.push(`— Économies cache : $${stats.cache_savings_usd.toFixed(4)}`);
-    }
-    lines.push('');
-    lines.push('Estimation hors crédits/abonnement.');
-    lines.push('Édite dashboard/data/pricing.json pour ajuster.');
-    costTile.title = lines.join('\n') || 'Aucune donnée de coût.';
-
-    if (breakdown.length || stats.cache_savings_usd > 0) {
-      const detail = el('div');
-      detail.style.cssText = 'margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:6px;font-size:11.5px';
-      const rows = breakdown.map(b => {
-        const pct = total > 0 ? (b.cost_usd / total * 100).toFixed(0) : 0;
-        const tk = (b.input_tokens + b.output_tokens + b.cache_creation_tokens + b.cache_read_tokens);
-        return `<div style="display:flex;justify-content:space-between;gap:12px">
-          <span><strong>${escapeHtml(b.label)}</strong> <span class="dim">${fmtNum(tk)} tokens</span></span>
-          <span class="mono tabular">$${b.cost_usd.toFixed(4)} <span class="dim">(${pct}%)</span></span>
-        </div>`;
-      }).join('');
-      const savings = stats.cache_savings_usd > 0
-        ? `<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--border);color:var(--ok,#27ae60)">Économies cache : <strong class="mono tabular">$${stats.cache_savings_usd.toFixed(4)}</strong></div>`
-        : '';
-      detail.innerHTML = `
-        <div class="dim" style="font-size:10.5px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px">Coût par modèle</div>
-        ${rows || '<div class="dim">Aucune donnée.</div>'}
-        ${savings}
-        <div class="dim" style="margin-top:8px;font-size:10.5px">Estimation hors crédits/abonnement. Tarifs : <code class="mono">dashboard/data/pricing.json</code>.</div>
-      `;
-      page.appendChild(detail);
-    }
-  }
 
   // ── Config toolbar (horizontal full width) ──
   page.appendChild(el('div', 'section-label', '<span class="num">A.</span> Configuration'));
@@ -3611,14 +3569,7 @@ function _helpSections() {
       <p>Bouton <strong>Lancer</strong> ouvre une nouvelle console et exécute <code class="mono">claude</code> dans le dossier. <strong>Reprendre</strong> fait <code class="mono">claude -c</code> pour continuer la dernière session.</p>
 
       <h3>Page détail d'un workspace</h3>
-      <p>Clique sur une carte workspace pour voir : statistiques (sessions, tokens, coût), MCPs scopés, skills locaux, plugins overridés, agents/commandes, et accès rapide aux fichiers de config (<code class="mono">CLAUDE.md</code>, <code class="mono">settings.json</code>, permissions, hooks).</p>
-
-      <h3>Estimation du coût (précision ~5%)</h3>
-      <p>La tuile <strong>Coût ~$</strong> additionne tous les tokens des sessions <code class="mono">.jsonl</code> avec les <strong>vrais tarifs par modèle</strong> (Opus / Sonnet / Haiku, version 4.x ou plus ancienne) et inclut les tokens de <strong>cache</strong> (création + lecture). Sous les tuiles, un encart « Coût par modèle » détaille la répartition et l'économie réalisée grâce au cache.</p>
-      <p>Tarifs éditables dans <code class="mono">dashboard/data/pricing.json</code> — utile si Anthropic change ses prix ou si tu as des tarifs négociés. Le fichier est rechargé automatiquement à chaque appel (mtime).</p>
-      <div class="callout callout-info">
-        Estimation hors crédits/abonnement : si tu utilises un plan d'abonnement (Pro, Team, Enterprise), les chiffres affichés représentent ce que coûteraient ces tokens facturés à l'API publique, pas ce que tu paies réellement.
-      </div>
+      <p>Clique sur une carte workspace pour voir : statistiques (sessions, tokens consommés), MCPs scopés, skills locaux, plugins overridés, agents/commandes, et accès rapide aux fichiers de config (<code class="mono">CLAUDE.md</code>, <code class="mono">settings.json</code>, permissions, hooks).</p>
 
       <div class="callout callout-warn">
         <strong>Suppression :</strong> par défaut, supprimer un workspace ne retire que l'enregistrement (le dossier reste sur disque). Coche <em>Supprimer aussi le dossier</em> pour purger physiquement — irréversible.
