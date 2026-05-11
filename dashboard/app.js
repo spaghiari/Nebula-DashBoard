@@ -53,8 +53,8 @@ const THEMES = [
   { id: 'nebula',        label: 'Nebula',        desc: 'Sombre · violet & ocre',        accent: '#a78bfa', warm: '#f4a672', bg: '#0a0a0f' },
   { id: 'nebula-clair',  label: 'Nebula clair',  desc: 'Clair · violet',                accent: '#7c3aed', warm: '#c2410c', bg: '#f8f7fb' },
   { id: 'marine',         label: 'Marine',         desc: 'Sombre · bleu profond',         accent: '#60a5fa', warm: '#fbbf24', bg: '#08101c' },
-  { id: 'foret',          label: 'Forêt',          desc: 'Sombre · vert émeraude',        accent: '#34d399', warm: '#fbbf24', bg: '#08120e' },
-  { id: 'brique',         label: 'Brique',         desc: 'Sombre · orange chaud',         accent: '#fb923c', warm: '#facc15', bg: '#120a08' },
+  { id: 'solarized',     label: 'Solarized',     desc: 'Sombre · cyan & ambre',         accent: '#2aa198', warm: '#b58900', bg: '#002b36' },
+  { id: 'cuivre',        label: 'Cuivre',        desc: 'Sombre · bronze chaleureux',    accent: '#d97706', warm: '#fde68a', bg: '#1a0e05' },
 ];
 
 function applyTheme(id, { save = true } = {}) {
@@ -386,8 +386,11 @@ async function loadAll() {
 async function route() {
   clearPagePollers();
   updateActiveNav();
-  if (STATE.loading) await loadAll();
   const hash = location.hash || '#/';
+  // Ancres intra-page (ex. #h-env depuis le TOC d'Aide) : on laisse le
+  // navigateur scroller, on ne re-render rien — sinon on perd la page courante.
+  if (hash && !hash.startsWith('#/')) return;
+  if (STATE.loading) await loadAll();
   const content = $('#content');
   content.innerHTML = '<div class="page-loader"><div class="spinner"></div><span>Chargement…</span></div>';
   try {
@@ -397,7 +400,7 @@ async function route() {
     if (hash === '#/skills') return await renderSkills();
     if (hash === '#/templates') return await renderTemplates();
     if (hash === '#/tools') return await renderTools();
-    if (hash === '#/aide') return await renderHelp();
+    if (hash === '#/aide' || hash.startsWith('#/aide/')) return await renderHelp();
     const m = hash.match(/^#\/workspace\/([a-zA-Z0-9_-]+)$/);
     if (m) return await renderWorkspace(m[1]);
     location.hash = '#/';
@@ -1268,7 +1271,7 @@ async function renderMCPs() {
       </div>
     `;
     const goEnv = btn('Configurer .env.local', 'btn-sm btn-primary', I.key);
-    goEnv.addEventListener('click', () => { location.hash = '#/outils'; });
+    goEnv.addEventListener('click', () => { location.hash = '#/tools'; });
     envBanner.appendChild(goEnv);
     page.appendChild(envBanner);
   }
@@ -3519,78 +3522,11 @@ async function modalPluginReadme(mktId, kind, pluginId, name) {
 /* ================================================================
    PAGE: AIDE
    ================================================================ */
-async function renderHelp() {
-  setBreadcrumbs([{ label: 'Aide' }]);
-  const tourBtn = btn('🎯 Visite guidée', 'btn-primary', null);
-  tourBtn.title = 'Lance un tour interactif en 8 étapes (~2 min)';
-  tourBtn.addEventListener('click', () => startTour('main'));
-  setTopbarActions([tourBtn]);
-
-  const c = $('#content');
-  c.innerHTML = '';
-  const page = el('div', 'page');
-  page.appendChild(el('div', 'page-header', `
-    <div class="page-header-text">
-      <div class="page-eyebrow"><span class="index">??</span><span>Documentation</span></div>
-      <h1 class="page-title">Aide & guide d'utilisation</h1>
-      <p class="page-subtitle">Tout ce qu'il faut savoir pour piloter ton écosystème Claude Code depuis Nebula.</p>
-    </div>
-  `));
-
-  // Banner promo de la visite guidée si jamais lancée
-  let tourCompleted = false;
-  try { tourCompleted = localStorage.getItem('nebula-tour-completed') === '1'; } catch {}
-  if (!tourCompleted) {
-    const promo = el('div', 'callout callout-info');
-    promo.style.marginBottom = 'var(--sp-4)';
-    promo.innerHTML = `
-      <div>
-        <strong>🎯 Première fois ici ?</strong>
-        <p style="margin:4px 0 0;font-size:12.5px">Lance la <strong>visite guidée interactive</strong> (~2 min) — elle te montre les fonctions essentielles avec spotlight sur l'UI réelle.</p>
-      </div>
-    `;
-    const launchBtn = btn('Démarrer la visite', 'btn-primary', null);
-    launchBtn.style.marginTop = '8px';
-    launchBtn.addEventListener('click', () => startTour('main'));
-    promo.querySelector('div').appendChild(launchBtn);
-    page.appendChild(promo);
-  }
-
-  // Table des matières
-  const toc = el('nav', 'help-toc');
-  toc.innerHTML = `
-    <div class="help-toc-title">Sommaire</div>
-    <ol>
-      <li><a href="#h-overview">Vue d'ensemble du dashboard</a></li>
-      <li><a href="#h-onboarding">Premier lancement & import depuis Claude</a></li>
-      <li><a href="#h-workspaces">Workspaces : créer, importer, gérer</a></li>
-      <li><a href="#h-mcps">MCPs : configurer un Model Context Protocol</a></li>
-      <li><a href="#h-recipes">Recettes MCP : catalogue 1-clic & recettes locales</a></li>
-      <li><a href="#h-skills">Skills : bibliothèque, distribution, import GitHub</a></li>
-      <li><a href="#h-plugins">Plugins : installation et scope</a></li>
-      <li><a href="#h-templates">Templates : modèles de workspaces</a></li>
-      <li><a href="#h-env">Variables d'environnement (.env.local)</a></li>
-      <li><a href="#h-scope">Lier MCPs / skills / plugins à un workspace</a></li>
-      <li><a href="#h-tools">Outils & maintenance</a></li>
-      <li><a href="#h-update">Auto-update bulletproof</a></li>
-      <li><a href="#h-shortcuts">Raccourcis clavier</a></li>
-      <li><a href="#h-troubleshoot">Dépannage</a></li>
-    </ol>
-  `;
-  toc.addEventListener('click', (e) => {
-    const a = e.target.closest('a');
-    if (!a) return;
-    e.preventDefault();
-    const target = $(a.getAttribute('href'));
-    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
-  page.appendChild(toc);
-
-  // Contenu : sections HTML
-  const content = el('div', 'help-content');
-  content.innerHTML = `
-    <section id="h-overview">
-      <h2>${I.home}<span>1. Vue d'ensemble du dashboard</span></h2>
+// ── Aide : contenu des sections (réutilisé par les sous-pages) ─────────────
+function _helpSections() {
+  return {
+'overview': `
+      <h2>${I.home}<span>Vue d'ensemble du dashboard</span></h2>
       <p>Nebula est un <strong>tableau de bord local</strong> qui pilote ton écosystème Claude Code : workspaces (projets), MCPs (serveurs Model Context Protocol), skills, plugins, templates et hooks. Tout est servi par un petit serveur Python sur <code class="mono">127.0.0.1:4777</code> — aucune donnée ne sort de ta machine.</p>
       <div class="help-grid help-grid-3">
         <div class="help-tile">
@@ -3624,10 +3560,10 @@ async function renderHelp() {
           <p>Variables d'env, hooks globaux, sauvegardes, accès rapide aux fichiers de config. Tout ce qui est transverse au système.</p>
         </div>
       </div>
-    </section>
 
-    <section id="h-onboarding">
-      <h2>${I.download}<span>2. Premier lancement & import depuis Claude</span></h2>
+`,
+'onboarding': `
+      <h2>${I.download}<span>Premier lancement & import depuis Claude</span></h2>
       <p>Si tu utilises déjà Claude Code, Nebula peut <strong>récupérer ta config existante</strong> en un clic. Trois portes d'entrée :</p>
       <div class="help-step">
         <div class="help-step-num">1</div>
@@ -3653,10 +3589,10 @@ async function renderHelp() {
       <div class="callout callout-info">
         <strong>Bon à savoir :</strong> l'import ne touche jamais à <code class="mono">~/.claude/settings.json</code>. Nebula maintient son propre registre dans <code class="mono">mcp/registry.json</code> et distribue ensuite vers les <code class="mono">.mcp.json</code> de chaque workspace via <em>Sync</em>.
       </div>
-    </section>
 
-    <section id="h-workspaces">
-      <h2>${I.box}<span>3. Workspaces</span></h2>
+`,
+'workspaces': `
+      <h2>${I.box}<span>Workspaces</span></h2>
       <h3>Créer un nouveau workspace</h3>
       <p>Bouton <em>Nouveau workspace</em> sur la Home (ou raccourci <kbd>n</kbd>). Tu fournis :</p>
       <ul class="help-list">
@@ -3687,10 +3623,10 @@ async function renderHelp() {
       <div class="callout callout-warn">
         <strong>Suppression :</strong> par défaut, supprimer un workspace ne retire que l'enregistrement (le dossier reste sur disque). Coche <em>Supprimer aussi le dossier</em> pour purger physiquement — irréversible.
       </div>
-    </section>
 
-    <section id="h-mcps">
-      <h2>${I.cpu}<span>4. MCPs (Model Context Protocol)</span></h2>
+`,
+'mcps': `
+      <h2>${I.cpu}<span>MCPs (Model Context Protocol)</span></h2>
       <p>Les MCPs sont des serveurs externes que Claude peut interroger pour accéder à des données ou fonctionnalités. Nebula centralise leur config dans un registre, puis les distribue aux workspaces.</p>
 
       <h3>Ajouter un MCP</h3>
@@ -3709,20 +3645,6 @@ async function renderHelp() {
       <ul class="help-list">
         <li><strong>URL</strong> — endpoint du serveur MCP.</li>
         <li><strong>Headers</strong> — auth & headers custom, format <code class="mono">KEY=VALUE</code> par ligne. Ex. <code class="mono">Authorization=Bearer \${API_TOKEN}</code>.</li>
-      </ul>
-
-      <h3>Tester un MCP</h3>
-      <p>Bouton <em>Tester</em> sur la card. Pour stdio, lance le process 2.5s pour vérifier qu'il démarre. Pour http/sse, fait un GET sur l'URL. Le statut affiché t'indique si la commande est trouvée et si l'env est complet.</p>
-
-      <h3>Diagnostic complet (bouton <em>Diag</em>)</h3>
-      <p>Quand un MCP plante et tu ne sais pas pourquoi, clic <em>Diag</em> sur la card → modale avec 6 sections :</p>
-      <ul class="help-list">
-        <li><strong>Binaire / Endpoint</strong> — résolution de la commande via <code class="mono">shutil.which</code> + hint si introuvable (ex: <em>npx s'appelle npx.cmd sur Windows</em>).</li>
-        <li><strong>Variables d'env</strong> — chaque var est marquée résolue ou manquante (avec liste des vars à définir dans <code class="mono">.env.local</code>).</li>
-        <li><strong>CWD</strong> — vérifie que le working dir existe sur disque.</li>
-        <li><strong>Test live</strong> — relance <em>Tester</em> pour avoir le statut courant.</li>
-        <li><strong>Vue Claude CLI</strong> — sortie de <code class="mono">claude mcp get &lt;id&gt;</code> pour comparer ta config vs ce que Claude voit.</li>
-        <li><strong>Erreurs récentes</strong> — scan des sessions Claude Code pour trouver les erreurs liées à ce MCP (snippets + horodatage).</li>
       </ul>
 
       <h3>Statut calculé automatiquement</h3>
@@ -3753,10 +3675,10 @@ async function renderHelp() {
       <div class="callout callout-info">
         <strong>Le registre vs Claude :</strong> le fichier <code class="mono">mcp/registry.json</code> est la source de vérité d'Nebula. À chaque modif, Nebula régénère automatiquement les <code class="mono">.mcp.json</code> dans les workspaces concernés en interpolant les <code class="mono">\${VAR}</code>. Le bouton <em>Sync MCPs</em> sur un workspace n'est plus nécessaire dans le flow normal — utile uniquement pour forcer un re-sync (ex: après changement de <code class="mono">.env.local</code>).
       </div>
-    </section>
 
-    <section id="h-recipes">
-      <h2>${I.sparkle}<span>5. Recettes MCP — installation 1-clic</span></h2>
+`,
+'recipes': `
+      <h2>${I.sparkle}<span>Recettes MCP — installation 1-clic</span></h2>
       <p>Les <strong>recettes</strong> sont des templates pré-configurés pour les MCPs courants. Plus besoin de chercher la commande, les args, la doc — tu cliques, tu remplis 2 champs, c'est installé.</p>
 
       <h3>Accès</h3>
@@ -3795,10 +3717,10 @@ async function renderHelp() {
       <div class="callout callout-info">
         <strong>Avantage du modèle recette :</strong> tes recettes locales survivent aux <code class="mono">git pull</code> du dashboard (gitignored) et restent strictement sur ta machine. Le catalogue public, lui, est versionné et reçoit les updates Anthropic / nouveaux MCPs populaires automatiquement via auto-update.
       </div>
-    </section>
 
-    <section id="h-skills">
-      <h2>${I.sparkle}<span>6. Skills — modèle "magasin"</span></h2>
+`,
+'skills': `
+      <h2>${I.sparkle}<span>Skills — modèle "magasin"</span></h2>
       <p>Un skill = un dossier contenant <code class="mono">SKILL.md</code> (frontmatter + instructions Markdown). Optionnellement des fichiers de référence (<code class="mono">references/</code>, <code class="mono">examples/</code>).</p>
 
       <h3>Bibliothèque centralisée (le magasin)</h3>
@@ -3832,10 +3754,10 @@ async function renderHelp() {
       <div class="callout callout-info">
         <strong>Activation par Claude :</strong> les skills sont auto-découverts par Claude Code au démarrage de la session — tu n'as rien à enregistrer manuellement. Vérifie qu'ils apparaissent avec <code class="mono">/help</code> ou via le menu skills de Claude.
       </div>
-    </section>
 
-    <section id="h-plugins">
-      <h2>${I.plug}<span>7. Plugins</span></h2>
+`,
+'plugins': `
+      <h2>${I.plug}<span>Plugins</span></h2>
       <p>Les plugins Claude Code sont gérés par la CLI <code class="mono">claude plugin</code>. Nebula propose un browser et la gestion du scope par workspace.</p>
 
       <h3>Installer un plugin</h3>
@@ -3859,10 +3781,10 @@ async function renderHelp() {
         <li><strong>Hériter</strong> — pas d'override : suit l'état global du plugin</li>
       </ul>
       <p>Actions de masse (Activer / Désactiver / Réinitialiser pour tous les workspaces filtrés) en haut de la section.</p>
-    </section>
 
-    <section id="h-templates">
-      <h2>${I.layers}<span>8. Templates</span></h2>
+`,
+'templates': `
+      <h2>${I.layers}<span>Templates</span></h2>
       <p>Un template = un dossier dans <code class="mono">templates/&lt;id&gt;/</code> qui sera copié à chaque création de workspace, en remplaçant les placeholders par les valeurs saisies dans le formulaire "Nouveau workspace".</p>
 
       <h3>Créer un template — bouton "+ Nouveau template"</h3>
@@ -3903,37 +3825,57 @@ async function renderHelp() {
       <div class="callout callout-warn">
         <strong>Pièges à éviter :</strong> ne jamais inclure <code class="mono">.git/</code>, <code class="mono">node_modules/</code>, <code class="mono">__pycache__/</code>, ni de fichiers binaires &gt; 512 Kio (non éditables ensuite). Pas de secrets en dur — utilise <code class="mono">\${VAR}</code> + <code class="mono">.env.local</code>.
       </div>
-    </section>
 
-    <section id="h-env">
-      <h2>${I.key}<span>9. Variables d'environnement (.env.local)</span></h2>
-      <p>Pour ne <strong>jamais</strong> committer de secrets dans tes registres ou templates, Nebula utilise un fichier <code class="mono">.env.local</code> à la racine de l'install comme stockage centralisé.</p>
+`,
+'env': `
+      <h2>${I.key}<span>Variables d'environnement (.env.local)</span></h2>
+      <p>Tes tokens, clés d'API et mots de passe ne doivent jamais se retrouver écrits en dur dans tes fichiers de config. Nebula te propose un emplacement unique pour les stocker : le fichier <code class="mono">.env.local</code>, qui reste local à ta machine et n'est jamais partagé.</p>
 
-      <h3>Format</h3>
-      <pre class="help-code">OPENAI_API_KEY=sk-...
-GITHUB_TOKEN=ghp_...
-DB_PASSWORD=mon_mdp
-# Les commentaires sont OK</pre>
-
-      <h3>Édition depuis le GUI</h3>
-      <p>Page <strong>Outils → Variables d'environnement</strong> :</p>
+      <h3>À quoi ça sert</h3>
+      <p>Tu mets une fois tes secrets dans Nebula, et tu les réutilises dans n'importe quel MCP en écrivant <code class="mono">\${NOM_DE_LA_CLE}</code>. Au moment où Nebula configure le MCP pour ton workspace, il remplace automatiquement par la vraie valeur. Avantages :</p>
       <ul class="help-list">
-        <li>Variables groupées par préfixe (<code class="mono">OPENAI_*</code>, <code class="mono">DB_*</code>…)</li>
-        <li>Filtre rapide par nom</li>
-        <li>Bouton œil pour révéler la valeur masquée</li>
-        <li>Ajout/suppression atomique avec backup</li>
+        <li>Tu peux partager ou versionner tes configs MCP sans risque de fuite</li>
+        <li>Quand un token expire, tu le mets à jour une fois et tous tes MCPs sont à jour</li>
+        <li>Plus de copier-coller à l'aveugle dans des champs de saisie</li>
       </ul>
 
-      <h3>Interpolation <code class="mono">\${VAR}</code></h3>
-      <p>Dans n'importe quel champ MCP (<code class="mono">command</code>, <code class="mono">args</code>, <code class="mono">env</code>, <code class="mono">cwd</code>, <code class="mono">url</code>, <code class="mono">headers</code>), tu peux écrire <code class="mono">\${MA_VAR}</code> et Nebula le remplacera par la valeur depuis <code class="mono">.env.local</code> au moment de la sync vers le workspace. Si la variable est manquante, le sanity check te le signale.</p>
+      <h3>Gérer tes variables</h3>
+      <p>Rendez-vous dans <strong>Outils → Variables d'environnement</strong>. Tu y trouves :</p>
+      <ul class="help-list">
+        <li>Un formulaire pour ajouter une nouvelle clé et sa valeur</li>
+        <li>La liste de tes variables, regroupées par préfixe (toutes les <code class="mono">GITHUB_*</code> ensemble, etc.)</li>
+        <li>Un champ de recherche pour filtrer rapidement</li>
+        <li>Pour chaque variable : un bouton œil pour révéler la valeur, un crayon pour la modifier, une corbeille pour la supprimer</li>
+      </ul>
+
+      <h3>Sécuriser le fichier (Windows)</h3>
+      <p>Par défaut, <code class="mono">.env.local</code> est un simple fichier texte sur ton disque. Sur Windows, Nebula peut le chiffrer automatiquement pour qu'il devienne illisible en dehors de ta session.</p>
+      <p>Sur la page <strong>Outils → Variables d'environnement</strong>, clique sur <em>Activer le chiffrement</em>. C'est tout — l'édition continue de marcher exactement comme avant, mais le fichier sur disque devient illisible si quelqu'un essaie de l'ouvrir sans passer par Nebula.</p>
+
+      <div class="callout callout-info">
+        <strong>Ce que le chiffrement protège</strong>
+        <ul class="help-list" style="margin-top:6px">
+          <li>Une copie du fichier sur clé USB, disque externe ou sauvegarde cloud reste illisible</li>
+          <li>Un autre compte utilisateur sur la même machine n'y a pas accès</li>
+          <li>Un coup d'œil par-dessus l'épaule ou un partage d'écran ne révèle rien</li>
+        </ul>
+      </div>
 
       <div class="callout callout-warn">
-        <strong>Important :</strong> ajoute <code class="mono">.env.local</code> dans ton <code class="mono">.gitignore</code> ! Nebula ne le fait pas pour toi. Le fichier reste local à ta machine.
+        <strong>À garder en tête avant de chiffrer</strong>
+        <ul class="help-list" style="margin-top:6px">
+          <li>Le chiffrement est lié à ton compte Windows actuel. Si tu changes de machine, réinstalles Windows, ou utilises un autre compte, tu ne pourras plus déchiffrer le fichier.</li>
+          <li>Avant un changement de poste ou une réinstallation, pense à utiliser le bouton <em>Désactiver / Exporter clair</em> pour récupérer tes valeurs et les sauvegarder ailleurs (gestionnaire de mots de passe par exemple).</li>
+          <li>Le chiffrement ne protège pas contre un logiciel malveillant qui tournerait déjà sur ta session. La meilleure défense reste un antivirus à jour et la prudence avec les exécutables téléchargés.</li>
+        </ul>
       </div>
-    </section>
 
-    <section id="h-scope">
-      <h2>${I.activity}<span>10. Lier MCPs / skills / plugins à un workspace</span></h2>
+      <h3>Désactiver le chiffrement</h3>
+      <p>Le bouton <em>Désactiver / Exporter clair</em> remet le fichier en clair sur ton disque. Pratique pour faire un backup hors-poste, ou pour migrer vers un autre ordinateur. Tu peux réactiver le chiffrement quand tu veux ensuite.</p>
+
+`,
+'scope': `
+      <h2>${I.activity}<span>Lier MCPs / skills / plugins à un workspace</span></h2>
       <p>Trois mécaniques différentes selon le type :</p>
 
       <h3>MCP → workspace</h3>
@@ -3950,10 +3892,10 @@ DB_PASSWORD=mon_mdp
 
       <h3>Plugin → workspace</h3>
       <p>Soit depuis la <strong>page Plugins → Scope par workspace</strong> (vue par plugin), soit depuis la <strong>page workspace → Plugins</strong> (vue par workspace). Les deux contrôlent le même fichier <code class="mono">.claude/settings.json</code> du workspace.</p>
-    </section>
 
-    <section id="h-tools">
-      <h2>${I.tools}<span>11. Outils & maintenance</span></h2>
+`,
+'tools': `
+      <h2>${I.tools}<span>Outils & maintenance</span></h2>
       <ul class="help-list">
         <li><strong>Apparence</strong> — choix du thème (Nebula sombre/clair, Marine, Forêt, Brique). Persisté côté serveur (<code class="mono">data/ui_state.json</code>) avec cache localStorage pour éviter le flash au chargement.</li>
         <li><strong>Onboarding</strong> — checklist de découverte + bouton <em>Conflits Claude global</em> (détecte les MCPs en doublon entre Nebula et <code class="mono">~/.claude.json</code> ou <code class="mono">settings.json</code>, avec backup auto avant nettoyage).</li>
@@ -3966,10 +3908,10 @@ DB_PASSWORD=mon_mdp
       <div class="callout callout-info">
         <strong>Note :</strong> l'import de MCPs depuis du JSON brut se fait directement sur la page MCPs (bouton <em>Importer</em>) — pas de doublon dans Outils.
       </div>
-    </section>
 
-    <section id="h-shortcuts">
-      <h2>${I.zap}<span>13. Raccourcis clavier</span></h2>
+`,
+'shortcuts': `
+      <h2>${I.zap}<span>Raccourcis clavier</span></h2>
       <table class="help-shortcuts">
         <tr><td><kbd>/</kbd> ou <kbd>Ctrl</kbd>+<kbd>K</kbd></td><td>Ouvrir la palette de recherche globale</td></tr>
         <tr><td><kbd>g</kbd> puis <kbd>h</kbd></td><td>Aller à l'<strong>Accueil</strong></td></tr>
@@ -3988,10 +3930,10 @@ DB_PASSWORD=mon_mdp
       <div class="callout callout-info">
         Les raccourcis clavier <strong>ignorent</strong> les zones de saisie : tu peux taper sans déclencher les chords.
       </div>
-    </section>
 
-    <section id="h-update">
-      <h2>${I.refresh}<span>12. Auto-update bulletproof</span></h2>
+`,
+'update': `
+      <h2>${I.refresh}<span>Auto-update bulletproof</span></h2>
       <p>Le dashboard se met à jour <strong>via git</strong>. Tant que ton install est un clone du repo public, tu reçois les nouvelles fonctionnalités automatiquement.</p>
 
       <h3>Vérification automatique</h3>
@@ -4035,10 +3977,10 @@ DB_PASSWORD=mon_mdp
       <div class="callout callout-info">
         <strong>Aucun mode de panne n'est silencieux.</strong> Chaque erreur git remonte avec un hint humain et le stderr brut accessible (collapsable) pour debug.
       </div>
-    </section>
 
-    <section id="h-troubleshoot">
-      <h2>${I.alert}<span>14. Dépannage</span></h2>
+`,
+'troubleshoot': `
+      <h2>${I.alert}<span>Dépannage</span></h2>
 
       <h3>"Serveur hors ligne" en bas de page</h3>
       <p>Le serveur Python n'a pas démarré ou a crashé. Relance <code class="mono">scripts\\start-dashboard.bat</code> et vérifie les logs dans <code class="mono">logs\\dashboard.log</code>.</p>
@@ -4063,11 +4005,129 @@ DB_PASSWORD=mon_mdp
 
       <h3>Backup avant manipulation risquée</h3>
       <p><strong>Outils → Sauvegardes → Sauvegarder maintenant</strong> copie <code class="mono">~/.claude.json</code> et <code class="mono">~/.claude/settings.json</code> dans <code class="mono">backups/</code> avec timestamp. À faire avant tout import massif ou bidouille manuelle.</p>
-    </section>
-  `;
-  page.appendChild(content);
+`,
+  };
+}
+
+// ── Aide : topics (groupements de sections) ────────────────────────────────
+const HELP_TOPICS = [
+  { id: 'premiers-pas',   emoji: '🚀', title: 'Premiers pas',         summary: 'Découvre Nebula et importe ta config Claude existante.',          sections: ['overview', 'onboarding'] },
+  { id: 'workspaces',     emoji: '🗂️', title: 'Workspaces',            summary: 'Créer, importer, lancer et gérer tes projets Claude Code.',       sections: ['workspaces', 'scope'] },
+  { id: 'mcps',           emoji: '🔌', title: 'MCPs',                  summary: 'Configurer les serveurs Model Context Protocol et leurs recettes.', sections: ['mcps', 'recipes'] },
+  { id: 'skills-plugins', emoji: '✨', title: 'Skills & Plugins',      summary: 'Bibliothèque de compétences et extensions Claude Code.',          sections: ['skills', 'plugins'] },
+  { id: 'templates',      emoji: '📋', title: 'Templates',             summary: 'Modèles réutilisables pour démarrer un workspace rapidement.',    sections: ['templates'] },
+  { id: 'secrets',        emoji: '🔐', title: 'Secrets & sécurité',    summary: 'Stockage centralisé de tes tokens et clés d\'API, chiffrement.',  sections: ['env'] },
+  { id: 'outils',         emoji: '🛠️', title: 'Outils & maintenance',  summary: 'Hooks, sauvegardes, mises à jour automatiques.',                  sections: ['tools', 'update'] },
+  { id: 'reference',      emoji: '⌨️', title: 'Référence & dépannage', summary: 'Raccourcis clavier et solutions aux problèmes courants.',         sections: ['shortcuts', 'troubleshoot'] },
+];
+
+async function renderHelp() {
+  setBreadcrumbs([{ label: 'Aide' }]);
+  const tourBtn = btn('🎯 Visite guidée', 'btn-primary', null);
+  tourBtn.title = 'Lance un tour interactif en 8 étapes (~2 min)';
+  tourBtn.addEventListener('click', () => startTour('main'));
+  setTopbarActions([tourBtn]);
+
+  const hash = location.hash;
+  const m = hash.match(/^#\/aide\/([a-z0-9-]+)$/);
+  if (m) {
+    const topic = HELP_TOPICS.find(t => t.id === m[1]);
+    if (topic) return renderHelpTopic(topic);
+  }
+  return renderHelpHub();
+}
+
+function renderHelpHub() {
+  const c = $('#content');
+  c.innerHTML = '';
+  const page = el('div', 'page');
+  page.appendChild(el('div', 'page-header', `
+    <div class="page-header-text">
+      <div class="page-eyebrow"><span class="index">05.</span><span>Documentation</span></div>
+      <h1 class="page-title">Aide & guide d'utilisation</h1>
+      <p class="page-subtitle">Choisis un sujet pour en savoir plus. Chaque page est courte et autonome.</p>
+    </div>
+  `));
+
+  // Promo visite guidée si jamais lancée
+  let tourCompleted = false;
+  try { tourCompleted = localStorage.getItem('nebula-tour-completed') === '1'; } catch {}
+  if (!tourCompleted) {
+    const promo = el('div', 'callout callout-info');
+    promo.style.marginBottom = 'var(--sp-4)';
+    promo.innerHTML = `
+      <div>
+        <strong>🎯 Première fois ici ?</strong>
+        <p style="margin:4px 0 0;font-size:12.5px">Lance la <strong>visite guidée interactive</strong> (~2 min) — elle te montre les fonctions essentielles avec spotlight sur l'UI réelle.</p>
+      </div>
+    `;
+    const launchBtn = btn('Démarrer la visite', 'btn-primary', null);
+    launchBtn.style.marginTop = '8px';
+    launchBtn.addEventListener('click', () => startTour('main'));
+    promo.querySelector('div').appendChild(launchBtn);
+    page.appendChild(promo);
+  }
+
+  // Grille de cartes
+  const grid = el('div', 'help-hub-grid');
+  for (const t of HELP_TOPICS) {
+    const card = el('a', 'help-hub-card');
+    card.href = `#/aide/${t.id}`;
+    card.innerHTML = `
+      <div class="help-hub-emoji">${t.emoji}</div>
+      <div class="help-hub-title">${escapeHtml(t.title)}</div>
+      <div class="help-hub-summary">${escapeHtml(t.summary)}</div>
+    `;
+    grid.appendChild(card);
+  }
+  page.appendChild(grid);
 
   c.appendChild(page);
+}
+
+function renderHelpTopic(topic) {
+  setBreadcrumbs([
+    { label: 'Aide', href: '#/aide' },
+    { label: topic.title },
+  ]);
+  const c = $('#content');
+  c.innerHTML = '';
+  const page = el('div', 'page');
+
+  // Header avec bouton retour
+  const header = el('div', 'page-header');
+  header.innerHTML = `
+    <div class="page-header-text">
+      <div class="page-eyebrow"><a href="#/aide" style="color:inherit;text-decoration:none">← Toutes les aides</a></div>
+      <h1 class="page-title">${topic.emoji} ${escapeHtml(topic.title)}</h1>
+      <p class="page-subtitle">${escapeHtml(topic.summary)}</p>
+    </div>
+  `;
+  page.appendChild(header);
+
+  // Contenu : concatène les sections de ce topic
+  const sections = _helpSections();
+  const content = el('div', 'help-content help-content-single');
+  let html = '';
+  for (const secId of topic.sections) {
+    html += `<section>${sections[secId] || ''}</section>`;
+  }
+  content.innerHTML = html;
+  page.appendChild(content);
+
+  // Navigation entre topics (précédent / suivant)
+  const idx = HELP_TOPICS.findIndex(t => t.id === topic.id);
+  const prev = idx > 0 ? HELP_TOPICS[idx - 1] : null;
+  const next = idx < HELP_TOPICS.length - 1 ? HELP_TOPICS[idx + 1] : null;
+  const nav = el('div', 'help-topic-nav');
+  nav.innerHTML = `
+    ${prev ? `<a href="#/aide/${prev.id}" class="help-nav-link"><span class="dim">← Précédent</span><strong>${prev.emoji} ${escapeHtml(prev.title)}</strong></a>` : '<span></span>'}
+    ${next ? `<a href="#/aide/${next.id}" class="help-nav-link" style="text-align:right"><span class="dim">Suivant →</span><strong>${next.emoji} ${escapeHtml(next.title)}</strong></a>` : '<span></span>'}
+  `;
+  page.appendChild(nav);
+
+  c.appendChild(page);
+  window.scrollTo({ top: 0, behavior: 'instant' });
 }
 
 /* ================================================================
@@ -6272,9 +6332,9 @@ const TOURS = {
     },
     {
       title: '🔐 Secrets — <code class="mono">.env.local</code>',
-      body: `<p>Tokens, API keys, mots de passe : <strong>jamais en dur</strong> dans tes configs MCP ou templates. Tu les mets dans <code class="mono">.env.local</code> à la racine de Nebula, et tu les référence dans n'importe quel champ MCP avec <code class="mono">\${MA_VAR}</code>.</p>
-        <p>Nebula substitue à la sync vers les workspaces. <code class="mono">.env.local</code> reste sur ta machine, jamais commité.</p>`,
-      target: '.page', navigate: '#/outils',
+      body: `<p>Tokens, API keys, mots de passe : <strong>jamais en dur</strong> dans tes configs MCP ou templates. Tu les stockes ici une fois et tu les réutilises avec <code class="mono">\${MA_VAR}</code> dans n'importe quel champ MCP.</p>
+        <p>Sur Windows, tu peux <strong>chiffrer le fichier en un clic</strong> avec le bouton <em>Activer le chiffrement</em> — illisible si copié ailleurs ou ouvert par un autre compte, transparent à l'usage.</p>`,
+      target: '.page', navigate: '#/tools',
     },
     {
       title: '🧠 Skills — bibliothèque centrale',

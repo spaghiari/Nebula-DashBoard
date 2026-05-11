@@ -172,42 +172,42 @@ body {
   --warm-soft: rgba(251, 191, 36, 0.1);
 }
 
-/* Forêt : dark + vert émeraude */
-:root[data-theme="foret"] {
-  --bg: #08120e;
+/* Solarized : dark + cyan & ambre (classique reposant pour les yeux) */
+:root[data-theme="solarized"] {
+  --bg: #002b36;
   --bg-grid: rgba(255, 255, 255, 0.014);
-  --bg-glow-1: rgba(52, 211, 153, 0.10);
-  --bg-glow-2: rgba(132, 204, 22, 0.04);
-  --surface-1: #0e1d16;
-  --surface-2: #14271d;
-  --surface-3: #1c3527;
+  --bg-glow-1: rgba(42, 161, 152, 0.10);
+  --bg-glow-2: rgba(181, 137, 0, 0.04);
+  --surface-1: #073642;
+  --surface-2: #0a4654;
+  --surface-3: #115263;
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.13);
-  --accent: #34d399;
-  --accent-2: #6ee7b7;
-  --accent-soft: rgba(52, 211, 153, 0.13);
-  --accent-glow: rgba(52, 211, 153, 0.35);
-  --warm: #fbbf24;
-  --warm-soft: rgba(251, 191, 36, 0.1);
+  --accent: #2aa198;
+  --accent-2: #5fc7be;
+  --accent-soft: rgba(42, 161, 152, 0.14);
+  --accent-glow: rgba(42, 161, 152, 0.35);
+  --warm: #b58900;
+  --warm-soft: rgba(181, 137, 0, 0.12);
 }
 
-/* Brique : dark + orange chaud */
-:root[data-theme="brique"] {
-  --bg: #120a08;
+/* Cuivre : dark + bronze chaleureux (alternative chaude sobre) */
+:root[data-theme="cuivre"] {
+  --bg: #1a0e05;
   --bg-grid: rgba(255, 255, 255, 0.014);
-  --bg-glow-1: rgba(251, 146, 60, 0.10);
-  --bg-glow-2: rgba(244, 63, 94, 0.04);
-  --surface-1: #1c120e;
-  --surface-2: #261913;
-  --surface-3: #33221a;
+  --bg-glow-1: rgba(217, 119, 6, 0.10);
+  --bg-glow-2: rgba(253, 230, 138, 0.04);
+  --surface-1: #24160a;
+  --surface-2: #2e1d0e;
+  --surface-3: #3a2613;
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.13);
-  --accent: #fb923c;
-  --accent-2: #fdba74;
-  --accent-soft: rgba(251, 146, 60, 0.14);
-  --accent-glow: rgba(251, 146, 60, 0.35);
-  --warm: #facc15;
-  --warm-soft: rgba(250, 204, 21, 0.1);
+  --accent: #d97706;
+  --accent-2: #f59e0b;
+  --accent-soft: rgba(217, 119, 6, 0.14);
+  --accent-glow: rgba(217, 119, 6, 0.35);
+  --warm: #fde68a;
+  --warm-soft: rgba(253, 230, 138, 0.1);
 }
 
 ::selection { background: var(--accent-soft); color: var(--text); }
@@ -2606,6 +2606,71 @@ body {
 }
 
 /* === PAGE AIDE ================================================ */
+.help-hub-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--sp-4);
+  margin-top: var(--sp-4);
+}
+.help-hub-card {
+  display: block;
+  padding: var(--sp-5);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  text-decoration: none;
+  color: inherit;
+  transition: transform var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease), box-shadow var(--d-fast) var(--ease);
+}
+.help-hub-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--accent);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+}
+.help-hub-emoji {
+  font-size: 32px;
+  line-height: 1;
+  margin-bottom: var(--sp-3);
+}
+.help-hub-title {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 6px;
+  color: var(--text);
+}
+.help-hub-summary {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.help-topic-nav {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-4);
+  margin-top: var(--sp-8);
+  padding-top: var(--sp-6);
+  border-top: 1px solid var(--border);
+}
+.help-nav-link {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  text-decoration: none;
+  color: var(--text);
+  font-size: 12.5px;
+  transition: border-color var(--d-fast) var(--ease);
+}
+.help-nav-link:hover { border-color: var(--accent); }
+.help-nav-link .dim { font-size: 10.5px; letter-spacing: 0.05em; text-transform: uppercase; }
+
+.help-content-single section { margin-bottom: var(--sp-8); }
+
 .help-toc {
   background: var(--surface-1);
   border: 1px solid var(--border);
