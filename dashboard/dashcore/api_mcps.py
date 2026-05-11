@@ -1,7 +1,6 @@
 """Module extrait de server.py — ne pas éditer le script _split.py."""
 from __future__ import annotations
 
-import datetime as dt
 import glob
 import io
 import json
@@ -16,7 +15,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
 import webbrowser
 import zipfile
 from pathlib import Path
@@ -319,68 +317,6 @@ def workspace_mcp_status(ws_id: str) -> tuple[int, dict]:
     data = read_json(mcp_file, None)
     active = list((data or {}).get("mcpServers", {}).keys())
     return 200, {"active": active, "has_file": mcp_file.exists()}
-
-
-def test_mcp(mcp_id: str) -> tuple[int, dict]:
-    if not safe_id(mcp_id):
-        return 400, {"error": "id invalide"}
-    registry = read_json(MCP_REGISTRY, {"mcps": []})
-    mcp = next((m for m in registry.get("mcps", []) if m.get("id") == mcp_id), None)
-    if not mcp:
-        return 404, {"error": "MCP inconnu"}
-
-    env_local = load_env_local()
-    transport = mcp.get("transport", "stdio")
-
-    if transport in ("http", "sse"):
-        url, miss = substitute_env(mcp.get("url", ""), env_local)
-        if not url:
-            return 200, {"ok": False, "message": "Pas d'URL"}
-        if miss:
-            return 200, {"ok": False, "message": f"Variables manquantes : {', '.join(miss)}"}
-        try:
-            req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=3) as r:
-                return 200, {"ok": True, "message": f"HTTP {r.status}"}
-        except Exception as e:
-            return 200, {"ok": False, "message": f"Échec : {e}"}
-
-    cmd, miss = substitute_env(mcp.get("command", ""), env_local)
-    args, miss2 = substitute_env(mcp.get("args", []), env_local)
-    if not cmd:
-        return 200, {"ok": False, "message": "Pas de commande"}
-    if miss or miss2:
-        return 200, {"ok": False, "message": f"Variables manquantes : {', '.join(set(miss+miss2))}"}
-    if cmd and not args:
-        parts = shlex.split(cmd, posix=False)
-        if parts:
-            cmd, args = parts[0], parts[1:]
-
-    # Résolution Windows : shutil.which gère .cmd/.bat/.exe
-    resolved = shutil.which(cmd)
-    if not resolved:
-        return 200, {"ok": False, "message": f"Commande introuvable : {cmd} (npx sur Windows est 'npx.cmd' — vérifie que Node.js est dans le PATH)"}
-    full = [resolved] + list(args)
-    try:
-        start = time.time()
-        # shell=False systématique : args en liste, pas d'interprétation shell
-        p = subprocess.Popen(
-            full,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            shell=False,
-        )
-        try:
-            _out, err = p.communicate(timeout=2.5)
-            code = p.returncode
-            msg = f"exit={code} ({time.time()-start:.1f}s)"
-            if err:
-                msg += " | stderr: " + err.decode("utf-8", "replace")[:160].replace("\n", " ")
-            return 200, {"ok": code == 0, "message": msg}
-        except subprocess.TimeoutExpired:
-            p.kill()
-            return 200, {"ok": True, "message": "Processus démarré (timeout 2.5s) — probablement OK pour un serveur MCP stdio"}
-    except Exception as e:
-        return 200, {"ok": False, "message": f"Erreur : {e}"}
 
 
 # ── Setup / Import wizard ─────────────────────────────────────────────────────
@@ -692,186 +628,6 @@ def scan_claude_config() -> tuple[int, dict]:
 
     result["projects"].sort(key=lambda x: x["last_modified"], reverse=True)
     return 200, result
-
-
-# ── Diagnostic MCP ──────────────────────────────────────────────────────────
-def diagnose_mcp(mcp_id: str) -> tuple[int, dict]:
-    """Diagnostic complet d'un MCP : binaire, env, cwd, test live, vue Claude, erreurs récentes.
-
-    Chaque section est try/except indépendante : si une vérification échoue
-    (claude CLI absent, scan de logs en erreur…), elle remonte un message
-    "non disponible" mais ne casse pas les autres.
-    """
-    if not safe_id(mcp_id):
-        return 400, {"error": "id invalide"}
-    registry = read_json(MCP_REGISTRY, {"mcps": []})
-    mcp = next((m for m in registry.get("mcps", []) if m.get("id") == mcp_id), None)
-    if not mcp:
-        return 404, {"error": "MCP inconnu"}
-
-    env_local = load_env_local()
-    transport = mcp.get("transport", "stdio")
-    result: dict = {
-        "mcp_id": mcp_id,
-        "transport": transport,
-        "registry_status": mcp.get("status", "?"),
-    }
-
-    # 1. Binaire (stdio uniquement)
-    if transport == "stdio":
-        cmd = mcp.get("command", "")
-        cmd_resolved, miss_cmd = substitute_env(cmd, env_local)
-        if cmd_resolved and not miss_cmd:
-            which = shutil.which(cmd_resolved)
-            result["binary"] = {
-                "command": cmd_resolved,
-                "found": bool(which),
-                "path": which or None,
-                "hint": None if which else f"Commande introuvable dans le PATH. Sur Windows, 'npx' s'appelle 'npx.cmd' — vérifie que Node.js est installé.",
-            }
-        else:
-            result["binary"] = {
-                "command": cmd,
-                "found": False,
-                "missing_env": miss_cmd,
-                "hint": "Variables d'environnement manquantes — définis-les dans .env.local",
-            }
-    else:
-        url = mcp.get("url", "")
-        url_resolved, miss_url = substitute_env(url, env_local)
-        result["binary"] = {
-            "command": f"({transport}) {url}",
-            "url_resolved": url_resolved,
-            "missing_env": miss_url,
-        }
-
-    # 2. Env vars
-    args_resolved, miss_args = substitute_env(mcp.get("args", []), env_local)
-    env_vars = mcp.get("env", {})
-    miss_env: list[str] = []
-    resolved_env: dict = {}
-    for k, v in env_vars.items():
-        rv, mv = substitute_env(v, env_local)
-        miss_env.extend(mv)
-        resolved_env[k] = "(définie)" if rv and not mv else f"manquante : {', '.join(mv)}" if mv else "(vide)"
-    result["env"] = {
-        "vars": resolved_env,
-        "missing_args_env": list(set(miss_args)),
-        "missing_env_vars": list(set(miss_env)),
-        "all_resolved": not miss_args and not miss_env,
-    }
-
-    # 3. CWD check
-    cwd = mcp.get("cwd", "")
-    if cwd:
-        cwd_resolved, _ = substitute_env(cwd, env_local)
-        cwd_path = Path(cwd_resolved) if cwd_resolved else None
-        result["cwd"] = {
-            "defined": True,
-            "path": cwd_resolved,
-            "exists": cwd_path.exists() if cwd_path else False,
-        }
-    else:
-        result["cwd"] = {"defined": False}
-
-    # 4. Test live (réutilise test_mcp existant)
-    try:
-        s_test, t = test_mcp(mcp_id)
-        result["test"] = t
-    except Exception as e:
-        result["test"] = {"ok": False, "message": f"Erreur test : {e}"}
-
-    # 5. Vue Claude CLI (`claude mcp get <id>` si disponible)
-    try:
-        claude = resolve_cli("claude")
-        r = subprocess.run(
-            [claude, "mcp", "get", mcp_id],
-            capture_output=True, text=True,
-            encoding="utf-8", errors="replace",
-            timeout=5,
-        )
-        if r.returncode == 0:
-            result["claude_view"] = {"ok": True, "output": r.stdout.strip()[:1500]}
-        else:
-            result["claude_view"] = {
-                "ok": False,
-                "output": (r.stdout or "").strip()[:300],
-                "stderr": (r.stderr or "").strip()[:300],
-            }
-    except FileNotFoundError:
-        result["claude_view"] = {"ok": False, "stderr": "CLI 'claude' introuvable dans le PATH"}
-    except subprocess.TimeoutExpired:
-        result["claude_view"] = {"ok": False, "stderr": "claude mcp get : timeout (5s)"}
-    except Exception as e:
-        result["claude_view"] = {"ok": False, "stderr": f"Erreur : {e}"}
-
-    # 6. Erreurs récentes (scan best-effort des sessions Claude Code)
-    result["recent_errors"] = _scan_mcp_errors(mcp_id)
-
-    return 200, result
-
-
-def _scan_mcp_errors(mcp_id: str, max_files: int = 8, max_lines_per_file: int = 200) -> list[dict]:
-    """Scanne les sessions Claude Code récentes pour des erreurs liées à un MCP.
-
-    Best-effort : on ne casse rien si les fichiers sont absents/corrompus.
-    Limité aux N fichiers les plus récents et aux M dernières lignes pour
-    rester rapide (< 1s même avec beaucoup de sessions).
-    """
-    out: list[dict] = []
-    if not CLAUDE_PROJECTS.exists():
-        return out
-
-    needle_id = mcp_id.lower()
-    candidates: list[tuple[float, Path]] = []
-    try:
-        for proj in CLAUDE_PROJECTS.iterdir():
-            if not proj.is_dir():
-                continue
-            for jl in proj.glob("*.jsonl"):
-                try:
-                    candidates.append((jl.stat().st_mtime, jl))
-                except OSError:
-                    continue
-    except OSError:
-        return out
-    candidates.sort(reverse=True)
-
-    for mtime, jl in candidates[:max_files]:
-        try:
-            with jl.open("r", encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()[-max_lines_per_file:]
-            for line in lines:
-                low = line.lower()
-                # Heuristique : ligne qui parle de MCP + erreur + l'id ou mention d'échec connecté
-                if needle_id not in low and "mcp" not in low:
-                    continue
-                if not any(k in low for k in ("error", "failed", "fail", "exception", "stderr", "exit code")):
-                    continue
-                try:
-                    obj = json.loads(line)
-                    msg = (obj.get("content") or obj.get("message") or obj.get("text") or "")
-                    if isinstance(msg, list):
-                        msg = " ".join(str(x.get("text", x) if isinstance(x, dict) else x) for x in msg)
-                    msg = str(msg)[:400]
-                    if needle_id in msg.lower() or "mcp" in msg.lower():
-                        out.append({
-                            "session": jl.name,
-                            "time": dt.datetime.fromtimestamp(mtime).isoformat(),
-                            "snippet": msg.strip(),
-                        })
-                except json.JSONDecodeError:
-                    if needle_id in low:
-                        out.append({
-                            "session": jl.name,
-                            "time": dt.datetime.fromtimestamp(mtime).isoformat(),
-                            "snippet": line.strip()[:400],
-                        })
-                if len(out) >= 10:
-                    return out
-        except OSError:
-            continue
-    return out
 
 
 # ── Recettes MCP ────────────────────────────────────────────────────────────

@@ -46,9 +46,9 @@ from dashcore.api_workspaces import (
 )
 from dashcore.api_mcps import (
     add_or_update_mcp, delete_mcp, sync_workspace_mcps, sync_all_workspaces,
-    workspace_mcp_status, mcp_live_check, test_mcp, scan_claude_config,
+    workspace_mcp_status, mcp_live_check, scan_claude_config,
     find_global_mcp_conflicts, remove_mcp_from_claude_global, migrate_global_mcp_to_registry,
-    list_mcp_recipes, ensure_local_recipes_file, diagnose_mcp,
+    list_mcp_recipes, ensure_local_recipes_file,
     add_or_update_local_recipe, delete_local_recipe, list_mcps_with_computed_status,
 )
 from dashcore.system_update import system_version_info, system_apply_update, system_reset_to_upstream
@@ -125,8 +125,6 @@ def h_post_ensure_local_recipes(q, b):
 def h_post_local_recipe(q, b):       return add_or_update_local_recipe(b or {})
 def h_del_local_recipe(q, b, rid):   return delete_local_recipe(rid)
 def h_post_add_mcp(q, b):       return add_or_update_mcp(b)
-def h_post_test_mcp(q, b, mid): return test_mcp(mid)
-def h_get_mcp_diagnose(q, b, mid): return diagnose_mcp(mid)
 def h_post_sync_all(q, b):      return sync_all_workspaces()
 def h_del_mcp(q, b, mid):       return delete_mcp(mid)
 
@@ -366,7 +364,6 @@ ROUTES_GET = [
     (re.compile(rf"^/api/mcps$"),                                                           h_get_mcps),
     (re.compile(rf"^/api/mcps/recipes$"),                                                   h_get_mcp_recipes),
     (re.compile(rf"^/api/mcps/conflicts$"),                                                 h_get_mcp_conflicts),
-    (re.compile(rf"^/api/mcps/({_ID})/diagnose$"),                                          h_get_mcp_diagnose),
     # Templates
     (re.compile(rf"^/api/templates$"),                                                      h_get_templates),
     (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_get_template_file),
@@ -428,7 +425,6 @@ ROUTES_POST = [
     (re.compile(rf"^/api/mcps/recipes/local$"),                                             h_post_local_recipe),
     (re.compile(rf"^/api/mcps/conflicts/remove$"),                                          h_post_remove_global_mcp),
     (re.compile(rf"^/api/mcps/conflicts/migrate$"),                                         h_post_migrate_global_mcp),
-    (re.compile(rf"^/api/mcps/({_ID})/test$"),                                              h_post_test_mcp),
     (re.compile(rf"^/api/sync-all$"),                                                       h_post_sync_all),
     # Templates
     (re.compile(rf"^/api/templates/duplicate$"),                                            h_post_dup_template),

@@ -1049,12 +1049,6 @@ function renderWsMCPs(wsId, host) {
         ${m ? `<div class="list-row-desc">${escapeHtml(m.description || m.transport || '')}</div>` : ''}
       </div>
     `;
-    const test = btn('Test', 'btn-sm btn-ghost');
-    test.addEventListener('click', async () => {
-      try { const r = await API.post(`/api/mcps/${mcpId}/test`, {}); toast(`[${mcpId}] ${r.ok ? '✓' : '✗'} ${r.message}`, r.ok ? 'success' : 'error'); }
-      catch (e) { toastErr(e.message); }
-    });
-    row.appendChild(test);
     host.appendChild(row);
   }
 }
@@ -1399,16 +1393,6 @@ function mcpCard(m) {
     ${m.cwd ? `<div class="dim mono" style="font-size:10.5px;padding:2px 8px;background:var(--bg);border-radius:4px;border:1px solid var(--border)" title="working directory">cd: ${escapeHtml(m.cwd)}</div>` : ''}
   `;
   const footer = el('div', 'mcp-card-footer');
-  const test = btn('Tester', 'btn-sm', I.zap);
-  test.addEventListener('click', async () => {
-    test.disabled = true;
-    try { const r = await API.post(`/api/mcps/${m.id}/test`, {}); toast(`[${m.id}] ${r.ok ? '✓' : '✗'} ${r.message}`, r.ok ? 'success' : 'error', 5000); }
-    catch (e) { toastErr(e.message); }
-    finally { test.disabled = false; }
-  });
-  const diag = btn('Diag', 'btn-sm btn-ghost', I.alert);
-  diag.title = 'Diagnostic complet : binaire, env, dernier test, vue Claude, erreurs récentes';
-  diag.addEventListener('click', () => modalDiagnoseMcp(m.id));
   const ed = btn('Modifier', 'btn-sm btn-ghost', I.edit);
   ed.addEventListener('click', () => modalNewMCP(m));
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
@@ -1417,113 +1401,9 @@ function mcpCard(m) {
     try { await API.del(`/api/mcps/${m.id}`); toastOk('Supprimé'); STATE.loading = true; route(); }
     catch (e) { toastErr(e.message); }
   }, { danger: true }));
-  footer.append(test, diag, ed, rm);
+  footer.append(ed, rm);
   card.appendChild(footer);
   return card;
-}
-
-// ── Diagnostic MCP : agrégation de checks pour comprendre pourquoi ça plante ─
-async function modalDiagnoseMcp(mcpId) {
-  const body = el('div');
-  body.innerHTML = `<div class="page-loader"><div class="spinner"></div><span>Diagnostic en cours…</span></div>`;
-  const close = btn('Fermer', 'btn-ghost');
-  const retest = btn('Relancer le test', 'btn-sm btn-primary', I.refresh);
-  const { close: doClose } = openModal({
-    title: `Diagnostic — ${mcpId}`, body, footer: [retest, close], wide: true,
-  });
-  close.addEventListener('click', doClose);
-
-  const fetchAndRender = async () => {
-    body.innerHTML = `<div class="page-loader"><div class="spinner"></div><span>Diagnostic en cours…</span></div>`;
-    let d;
-    try { d = await API.get(`/api/mcps/${mcpId}/diagnose`); }
-    catch (e) {
-      body.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`;
-      return;
-    }
-    body.innerHTML = '';
-
-    // Header avec statut global
-    const overallOk = d.test && d.test.ok;
-    const head = el('div', 'diag-header' + (overallOk ? ' is-ok' : ' is-fail'));
-    head.innerHTML = `
-      <div style="display:flex;align-items:center;gap:var(--sp-2)">
-        <span class="diag-status-dot"></span>
-        <strong style="font-size:14px">${overallOk ? '✓ Connexion OK' : '✗ Échec de connexion'}</strong>
-      </div>
-      <div class="dim" style="font-size:11.5px;margin-top:4px">${escapeHtml(d.test?.message || '(pas de message)')}</div>
-    `;
-    body.appendChild(head);
-
-    // Section : Binaire
-    const binSec = el('div', 'diag-section');
-    const bin = d.binary || {};
-    const binOk = bin.found || bin.url_resolved;
-    binSec.innerHTML = `
-      <div class="diag-section-title">${binOk ? '✓' : '✗'} Binaire / Endpoint</div>
-      <div class="diag-row"><span class="diag-key">Commande</span><code class="mono">${escapeHtml(bin.command || '?')}</code></div>
-      ${bin.path ? `<div class="diag-row"><span class="diag-key">Résolu</span><code class="mono">${escapeHtml(bin.path)}</code></div>` : ''}
-      ${bin.hint ? `<div class="diag-hint">${escapeHtml(bin.hint)}</div>` : ''}
-    `;
-    body.appendChild(binSec);
-
-    // Section : Variables d'env
-    const env = d.env || {};
-    const envSec = el('div', 'diag-section');
-    const envOk = env.all_resolved;
-    const envEntries = Object.entries(env.vars || {});
-    envSec.innerHTML = `
-      <div class="diag-section-title">${envOk ? '✓' : '⚠'} Variables d'environnement</div>
-      ${envEntries.length === 0 ? '<div class="dim" style="font-size:12px">Aucune variable d\'env requise.</div>' :
-        envEntries.map(([k, v]) => `<div class="diag-row"><span class="diag-key mono">${escapeHtml(k)}</span><span class="${v.startsWith('manquante') ? 'diag-bad' : 'diag-ok'}">${escapeHtml(v)}</span></div>`).join('')}
-      ${env.missing_env_vars?.length ? `<div class="diag-hint">Variables manquantes dans <code class="mono">.env.local</code> : ${env.missing_env_vars.map(v => `<code class="mono">${escapeHtml(v)}</code>`).join(', ')}</div>` : ''}
-    `;
-    body.appendChild(envSec);
-
-    // Section : CWD
-    if (d.cwd?.defined) {
-      const cwdSec = el('div', 'diag-section');
-      cwdSec.innerHTML = `
-        <div class="diag-section-title">${d.cwd.exists ? '✓' : '✗'} Working directory</div>
-        <div class="diag-row"><span class="diag-key">Path</span><code class="mono">${escapeHtml(d.cwd.path)}</code></div>
-        <div class="diag-row"><span class="diag-key">Existe</span><span class="${d.cwd.exists ? 'diag-ok' : 'diag-bad'}">${d.cwd.exists ? 'oui' : 'NON — chemin introuvable sur disque'}</span></div>
-      `;
-      body.appendChild(cwdSec);
-    }
-
-    // Section : Vue Claude CLI
-    const cv = d.claude_view || {};
-    const cvSec = el('div', 'diag-section');
-    cvSec.innerHTML = `
-      <div class="diag-section-title">${cv.ok ? '✓' : 'ℹ'} Vue de Claude CLI (<code class="mono">claude mcp get ${escapeHtml(mcpId)}</code>)</div>
-      ${cv.output ? `<pre class="diag-output">${escapeHtml(cv.output)}</pre>` : ''}
-      ${cv.stderr ? `<div class="diag-hint">${escapeHtml(cv.stderr)}</div>` : ''}
-    `;
-    body.appendChild(cvSec);
-
-    // Section : Erreurs récentes
-    const errs = d.recent_errors || [];
-    const errSec = el('div', 'diag-section');
-    errSec.innerHTML = `<div class="diag-section-title">${errs.length ? '⚠' : '✓'} Erreurs récentes (${errs.length})</div>`;
-    if (!errs.length) {
-      errSec.appendChild(el('div', 'dim', 'Aucune erreur récente trouvée dans les sessions Claude Code scannées.'));
-    } else {
-      const list = el('div', 'diag-errors');
-      for (const e of errs) {
-        const item = el('div', 'diag-error-item');
-        item.innerHTML = `
-          <div class="diag-error-meta"><code class="mono">${escapeHtml(e.session)}</code> · <span class="dim">${escapeHtml(e.time?.slice(0, 19) || '')}</span></div>
-          <div class="diag-error-snippet">${escapeHtml(e.snippet)}</div>
-        `;
-        list.appendChild(item);
-      }
-      errSec.appendChild(list);
-    }
-    body.appendChild(errSec);
-  };
-
-  retest.addEventListener('click', () => fetchAndRender());
-  fetchAndRender();
 }
 
 // ── Recettes MCP : catalogue 1-clic ──────────────────────────────────────────
