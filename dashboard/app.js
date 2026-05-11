@@ -47,6 +47,7 @@ I.menu      = _icon('<line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1
 I.activity  = _icon('<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>');
 I.cpu       = _icon('<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" x2="9" y1="2" y2="4"/><line x1="15" x2="15" y1="2" y2="4"/><line x1="9" x2="9" y1="20" y2="22"/><line x1="15" x2="15" y1="20" y2="22"/><line x1="20" x2="22" y1="9" y2="9"/><line x1="20" x2="22" y1="14" y2="14"/><line x1="2" x2="4" y1="9" y2="9"/><line x1="2" x2="4" y1="14" y2="14"/>');
 I.message   = _icon('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>');
+I.brain     = _icon('<path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2z"/>');
 
 /* === THEMES ======================================================= */
 const THEMES = [
@@ -293,6 +294,7 @@ const NAV_ITEMS = [
   { id: 'plugins',   label: 'Plugins',     route: '#/plugins',   icon: I.plug,    key: 'p' },
   { id: 'skills',    label: 'Skills',      route: '#/skills',    icon: I.sparkle, key: 'k' },
   { id: 'templates', label: 'Templates',   route: '#/templates', icon: I.layers,  key: 't' },
+  { id: 'reflexive', label: 'Reflexive',   route: '#/reflexive', icon: I.brain,   key: 'r' },
   { section: 'Système' },
   { id: 'tools',     label: 'Outils',      route: '#/tools',     icon: I.tools,   key: 'o' },
   { id: 'aide',      label: 'Aide',        route: '#/aide',      icon: I.book,    key: 'a' },
@@ -401,6 +403,7 @@ async function route() {
     if (hash === '#/templates') return await renderTemplates();
     if (hash === '#/tools') return await renderTools();
     if (hash === '#/aide' || hash.startsWith('#/aide/')) return await renderHelp();
+    if (hash === '#/reflexive' || hash.startsWith('#/reflexive/')) return await renderReflexive();
     const m = hash.match(/^#\/workspace\/([a-zA-Z0-9_-]+)$/);
     if (m) return await renderWorkspace(m[1]);
     location.hash = '#/';
@@ -5310,6 +5313,486 @@ function buildOnboardingChecklist() {
   return card;
 }
 
+/* ================================================================
+   PAGE: REFLEXIVE — boucle observation / scoring / propositions
+   ================================================================ */
+const REFX_TABS = [
+  ['overview',     "Vue d'ensemble"],
+  ['interactions', 'Interactions'],
+  ['proposals',    'Propositions'],
+  ['measurements', 'Mesures en cours'],
+];
+
+function refxScore(v, denom = 12) {
+  if (v == null) return '—';
+  return Number(v).toFixed(1) + ' / ' + denom;
+}
+
+function refxTrend(curr, prev) {
+  if (curr == null || prev == null) return '';
+  const d = curr - prev;
+  const span = document.createElement('span');
+  if (Math.abs(d) < 0.05) {
+    span.className = 'refx-trend refx-trend-flat';
+    span.textContent = '±0';
+  } else if (d > 0) {
+    span.className = 'refx-trend refx-trend-up';
+    span.textContent = '↑ +' + d.toFixed(1);
+  } else {
+    span.className = 'refx-trend refx-trend-down';
+    span.textContent = '↓ ' + d.toFixed(1);
+  }
+  return span.outerHTML;
+}
+
+function refxSparkline(series) {
+  if (!series || series.length === 0) return '';
+  const W = 600, H = 120, PAD = 8;
+  const vals = series.map(p => p.avg_total).filter(v => v != null);
+  if (vals.length === 0) return '';
+  const max = Math.max(...vals, 12);
+  const min = Math.min(...vals, 0);
+  const range = (max - min) || 1;
+  const stepX = (W - 2 * PAD) / Math.max(1, series.length - 1);
+  let d = '';
+  series.forEach((p, i) => {
+    if (p.avg_total == null) return;
+    const x = PAD + i * stepX;
+    const y = H - PAD - ((p.avg_total - min) / range) * (H - 2 * PAD);
+    d += (d ? ' L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1);
+  });
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'refx-spark');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'Courbe de progression du score');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', d);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', 'var(--accent)');
+  path.setAttribute('stroke-width', '2');
+  path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('stroke-linecap', 'round');
+  svg.appendChild(path);
+  return svg.outerHTML;
+}
+
+async function renderReflexive() {
+  const hash = location.hash || '#/reflexive';
+  const sub = hash.replace(/^#\/reflexive\/?/, '') || 'overview';
+  const tab = REFX_TABS.some(t => t[0] === sub) ? sub : 'overview';
+
+  setBreadcrumbs([{ label: 'Reflexive' }]);
+
+  const runBtn = btn('Lancer diagnostic', 'btn-primary', I.sparkle);
+  runBtn.addEventListener('click', async () => {
+    try {
+      await API.post('/api/reflexive/diagnostician/run', {});
+      toastOk('Diagnostic lancé');
+    } catch (e) { toastErr(e.message); }
+  });
+  setTopbarActions([runBtn]);
+
+  const c = $('#content');
+  c.innerHTML = '';
+
+  const page = el('div', 'page');
+  const header = el('div', 'page-header');
+  const headerText = el('div', 'page-header-text');
+  const eyebrow = el('div', 'page-eyebrow');
+  const idx = el('span', 'index'); idx.textContent = '06.';
+  const lbl = el('span'); lbl.textContent = 'Réflexion';
+  eyebrow.appendChild(idx); eyebrow.appendChild(lbl);
+  const h1 = el('h1', 'page-title'); h1.textContent = 'Reflexive';
+  const sub2 = el('p', 'page-subtitle');
+  sub2.textContent = "Observe, score et améliore Claude au fil des sessions. Active la boucle par workspace.";
+  headerText.appendChild(eyebrow); headerText.appendChild(h1); headerText.appendChild(sub2);
+  header.appendChild(headerText);
+  page.appendChild(header);
+
+  const tabs = el('nav', 'tabs');
+  tabs.setAttribute('aria-label', 'Sections Reflexive');
+  for (const [id, label] of REFX_TABS) {
+    const a = document.createElement('a');
+    a.href = id === 'overview' ? '#/reflexive' : '#/reflexive/' + id;
+    a.className = 'tab' + (id === tab ? ' active' : '');
+    a.textContent = label;
+    tabs.appendChild(a);
+  }
+  page.appendChild(tabs);
+
+  const body = el('div', 'refx-body');
+  page.appendChild(body);
+  c.appendChild(page);
+
+  if (tab === 'overview')          await renderReflexiveOverview(body);
+  else if (tab === 'interactions') await renderReflexiveInteractions(body);
+  else if (tab === 'proposals')    await renderReflexiveProposals(body);
+  else if (tab === 'measurements') await renderReflexiveMeasurements(body);
+}
+
+function refxDimBar(label, value, max = 10) {
+  const v = value == null ? 0 : Math.max(0, Math.min(max, value));
+  const pct = (v / max) * 100;
+  const display = value == null ? '—' : value.toFixed(1) + '/' + max;
+  const wrap = el('div', 'refx-dim');
+  const lab = el('span', 'refx-dim-label'); lab.textContent = label;
+  const track = el('span', 'refx-dim-track');
+  const fill = el('span', 'refx-dim-fill');
+  fill.style.width = pct.toFixed(1) + '%';
+  track.appendChild(fill);
+  const val = el('span', 'refx-dim-val mono'); val.textContent = display;
+  wrap.appendChild(lab); wrap.appendChild(track); wrap.appendChild(val);
+  return wrap;
+}
+
+function refxLoader(host) {
+  host.innerHTML = '';
+  const loader = el('div', 'page-loader');
+  loader.appendChild(el('div', 'spinner'));
+  const span = el('span'); span.textContent = 'Chargement…';
+  loader.appendChild(span);
+  host.appendChild(loader);
+}
+
+function refxEmpty(host, title, hint) {
+  host.innerHTML = '';
+  const card = el('div', 'card empty');
+  const p1 = el('p', 'muted'); p1.textContent = title;
+  card.appendChild(p1);
+  if (hint) {
+    const p2 = el('p', 'muted');
+    p2.style.fontSize = '12px';
+    p2.textContent = hint;
+    card.appendChild(p2);
+  }
+  host.appendChild(card);
+}
+
+function refxKpi(label, value, sub) {
+  const card = el('div', 'card refx-kpi');
+  const l = el('div', 'refx-kpi-label'); l.textContent = label;
+  const v = el('div', 'refx-kpi-value mono'); v.textContent = value;
+  card.appendChild(l); card.appendChild(v);
+  if (sub) {
+    const s = el('div', 'refx-kpi-sub');
+    if (sub instanceof Node) s.appendChild(sub);
+    else s.textContent = sub;
+    card.appendChild(s);
+  }
+  return card;
+}
+
+async function renderReflexiveOverview(host) {
+  refxLoader(host);
+  const stats = await safe('/api/reflexive/stats?days=30', null);
+  host.innerHTML = '';
+  if (!stats) {
+    refxEmpty(host, 'Stats indisponibles — vérifie que le backend est joignable.');
+    return;
+  }
+
+  const kpiRow = el('div', 'refx-kpi-row');
+  // Score moyen + trend
+  const trendSub = el('span');
+  if (stats.avg_total != null && stats.avg_total_prev != null) {
+    const d = stats.avg_total - stats.avg_total_prev;
+    let cls = 'refx-trend-flat', txt = '±0';
+    if (Math.abs(d) >= 0.05) {
+      cls = d > 0 ? 'refx-trend-up' : 'refx-trend-down';
+      txt = (d > 0 ? '↑ +' : '↓ ') + d.toFixed(1);
+    }
+    trendSub.className = 'refx-trend ' + cls;
+    trendSub.textContent = txt;
+  } else {
+    trendSub.className = 'muted';
+    trendSub.textContent = 'pas encore de tendance';
+  }
+  kpiRow.appendChild(refxKpi('Score moyen (30j)', refxScore(stats.avg_total), trendSub));
+
+  const interSub = el('span', 'muted'); interSub.textContent = 'sur 30 derniers jours';
+  kpiRow.appendChild(refxKpi('Interactions', fmtNum(stats.interactions), interSub));
+
+  const propSub = document.createElement('a');
+  propSub.className = 'link';
+  propSub.href = '#/reflexive/proposals';
+  propSub.textContent = 'Voir →';
+  kpiRow.appendChild(refxKpi('Propositions en attente', fmtNum(stats.proposals_pending), propSub));
+
+  host.appendChild(kpiRow);
+
+  // Sparkline
+  const sparkCard = el('div', 'card');
+  const eb = el('div', 'card-eyebrow'); eb.textContent = 'Progression du score · 30 derniers jours';
+  sparkCard.appendChild(eb);
+  if (!stats.series || !stats.series.some(p => p.avg_total != null)) {
+    const empty = el('div', 'refx-spark-empty');
+    empty.textContent = 'Aucune donnée encore — active Reflexive sur un workspace pour commencer.';
+    sparkCard.appendChild(empty);
+  } else {
+    const wrap = el('div'); wrap.innerHTML = refxSparkline(stats.series);
+    sparkCard.appendChild(wrap);
+  }
+  host.appendChild(sparkCard);
+
+  // Dimensions
+  const dims = stats.dimensions || {};
+  const dimCard = el('div', 'card');
+  const eb2 = el('div', 'card-eyebrow'); eb2.textContent = 'Score par dimension';
+  dimCard.appendChild(eb2);
+  const dimWrap = el('div', 'refx-dims');
+  dimWrap.appendChild(refxDimBar('Correctness', dims.correctness));
+  dimWrap.appendChild(refxDimBar('Efficiency',  dims.efficiency));
+  dimWrap.appendChild(refxDimBar('Alignment',   dims.alignment));
+  dimWrap.appendChild(refxDimBar('Learning',    dims.learning));
+  dimCard.appendChild(dimWrap);
+  host.appendChild(dimCard);
+
+  // Workspaces
+  const wsCard = el('div', 'card refx-ws-card');
+  const wsLeft = el('div');
+  const eb3 = el('div', 'card-eyebrow'); eb3.textContent = 'Workspaces observés';
+  const count = el('div', 'refx-ws-count mono');
+  count.textContent = stats.workspaces_enabled + ' / ' + stats.workspaces_total;
+  const hint = el('p', 'muted');
+  hint.style.cssText = 'margin:6px 0 0;font-size:12px';
+  hint.textContent = "Active Reflexive sur un workspace depuis sa fiche pour qu'il soit observé.";
+  wsLeft.appendChild(eb3); wsLeft.appendChild(count); wsLeft.appendChild(hint);
+  wsCard.appendChild(wsLeft);
+  const goBtn = btn('Gérer les workspaces', 'btn-sm', I.right);
+  goBtn.addEventListener('click', () => location.hash = '#/');
+  wsCard.appendChild(goBtn);
+  host.appendChild(wsCard);
+}
+
+async function renderReflexiveInteractions(host) {
+  refxLoader(host);
+  const data = await safe('/api/reflexive/interactions?limit=100', { items: [], total: 0 });
+  host.innerHTML = '';
+  if (!data.items.length) {
+    refxEmpty(host,
+      "Aucune interaction enregistrée pour l'instant.",
+      "Active Reflexive sur un workspace et lance une session Claude pour commencer.");
+    return;
+  }
+  const table = el('table', 'data-table');
+  const thead = el('thead');
+  const trh = el('tr');
+  for (const h of ['Démarré', 'Workspace', 'Tâche', 'Outcome', 'Score', 'Flags']) {
+    const th = el('th'); th.textContent = h; trh.appendChild(th);
+  }
+  thead.appendChild(trh); table.appendChild(thead);
+  const tbody = el('tbody');
+  for (const it of data.items) {
+    const tr = el('tr', 'refx-row');
+    tr.tabIndex = 0;
+    const td1 = el('td', 'mono dim'); td1.textContent = fmtDate(it.started_at);
+    const td2 = el('td'); td2.textContent = it.workspace_id || '—';
+    const td3 = el('td', 'refx-summary'); td3.textContent = it.task_summary || '(non résumée)';
+    const td4 = el('td');
+    const oc = it.outcome || 'unknown';
+    const ocSpan = el('span', 'refx-outcome refx-outcome-' + oc); ocSpan.textContent = oc;
+    td4.appendChild(ocSpan);
+    const td5 = el('td', 'mono');
+    td5.textContent = it.eval_total != null ? (it.eval_total + '/40') : '—';
+    const td6 = el('td');
+    const flags = Array.isArray(it.eval_flags) ? it.eval_flags : [];
+    for (const f of flags) {
+      const chip = el('span', 'chip'); chip.textContent = f; td6.appendChild(chip);
+      td6.appendChild(document.createTextNode(' '));
+    }
+    tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+    tr.appendChild(td4); tr.appendChild(td5); tr.appendChild(td6);
+    const openDetail = () => modalReflexiveInteraction(it.id);
+    tr.addEventListener('click', openDetail);
+    tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') openDetail(); });
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  host.appendChild(table);
+  const meta = el('div', 'muted refx-meta');
+  meta.textContent = data.items.length + ' / ' + data.total + ' interactions';
+  host.appendChild(meta);
+}
+
+async function modalReflexiveInteraction(id) {
+  let d;
+  try { d = await API.get('/api/reflexive/interactions/' + id); }
+  catch (e) { toastErr(e.message); return; }
+  const i = d.interaction || {};
+  const ev = d.eval || null;
+  const tools = Array.isArray(i.tools_used) ? i.tools_used : [];
+  const files = Array.isArray(i.files_touched) ? i.files_touched : [];
+  const body = el('div');
+
+  const grid = el('div', 'refx-detail-grid');
+  const addCell = (label, value, mono = false) => {
+    const cell = el('div');
+    const lab = el('span', 'dim'); lab.textContent = label;
+    const val = el('div', mono ? 'mono' : null); val.textContent = value || '—';
+    cell.appendChild(lab); cell.appendChild(val);
+    grid.appendChild(cell);
+  };
+  addCell('Workspace', i.workspace_id, true);
+  addCell('Session', i.session_id, true);
+  addCell('Début', i.started_at, true);
+  addCell('Fin', i.ended_at, true);
+  addCell('Outcome', i.outcome || 'unknown');
+  addCell('Self-confidence', i.self_confidence != null ? i.self_confidence.toFixed(2) : null, true);
+  body.appendChild(grid);
+
+  const h1 = el('h4', 'refx-section-h'); h1.textContent = 'Résumé';
+  body.appendChild(h1);
+  const p1 = el('p'); p1.textContent = i.task_summary || '(non résumée)';
+  body.appendChild(p1);
+
+  const h2 = el('h4', 'refx-section-h'); h2.textContent = 'Outils utilisés (' + tools.length + ')';
+  body.appendChild(h2);
+  const chips = el('div', 'refx-chips');
+  if (tools.length) {
+    for (const t of tools) {
+      const c = el('span', 'chip mono'); c.textContent = t; chips.appendChild(c);
+      chips.appendChild(document.createTextNode(' '));
+    }
+  } else {
+    const m = el('span', 'muted'); m.textContent = '—'; chips.appendChild(m);
+  }
+  body.appendChild(chips);
+
+  const h3 = el('h4', 'refx-section-h'); h3.textContent = 'Fichiers touchés (' + files.length + ')';
+  body.appendChild(h3);
+  const filesEl = el('div', 'refx-files mono');
+  if (files.length) {
+    for (const f of files) { const d = el('div'); d.textContent = f; filesEl.appendChild(d); }
+  } else {
+    const m = el('span', 'muted'); m.textContent = '—'; filesEl.appendChild(m);
+  }
+  body.appendChild(filesEl);
+
+  if (ev) {
+    const hE = el('h4', 'refx-section-h');
+    hE.textContent = 'Évaluation · ' + (ev.evaluated_at || '');
+    body.appendChild(hE);
+    const wrap = el('div', 'refx-dims');
+    wrap.appendChild(refxDimBar('Correctness', ev.correctness));
+    wrap.appendChild(refxDimBar('Efficiency',  ev.efficiency));
+    wrap.appendChild(refxDimBar('Alignment',   ev.alignment));
+    wrap.appendChild(refxDimBar('Learning',    ev.learning));
+    body.appendChild(wrap);
+    const p = el('p', 'muted');
+    p.style.marginTop = 'var(--sp-3)';
+    const strong = el('strong'); strong.textContent = 'Total : ';
+    p.appendChild(strong);
+    p.appendChild(document.createTextNode(ev.total + '/40 — ' + (ev.justification || '')));
+    body.appendChild(p);
+  } else {
+    const m = el('p', 'muted'); m.textContent = "Pas encore d'évaluation pour cette interaction.";
+    body.appendChild(m);
+  }
+
+  const close = btn('Fermer', 'btn-ghost btn-sm');
+  const { close: doClose } = openModal({ title: 'Interaction #' + id, body, footer: close, wide: true });
+  close.addEventListener('click', doClose);
+}
+
+async function renderReflexiveProposals(host) {
+  refxLoader(host);
+  const data = await safe('/api/reflexive/proposals?status=pending', { items: [] });
+  host.innerHTML = '';
+  if (!data.items.length) {
+    refxEmpty(host,
+      'Aucune proposition en attente.',
+      'Le diagnosticien génère des propositions à partir des évaluations accumulées.');
+    return;
+  }
+  for (const p of data.items) {
+    const card = el('div', 'card refx-proposal');
+    const head = el('div', 'refx-proposal-head');
+    const left = el('div');
+    const eb = el('div', 'card-eyebrow');
+    eb.textContent = (p.target || 'global') + ' · ' + (p.evidence_count || 0) + ' preuves';
+    const h = el('h3', 'refx-proposal-title'); h.textContent = p.title || '(sans titre)';
+    const path = el('div', 'mono dim');
+    path.style.fontSize = '12px';
+    path.textContent = p.path || '';
+    left.appendChild(eb); left.appendChild(h); left.appendChild(path);
+    const actions = el('div', 'refx-proposal-actions');
+    head.appendChild(left); head.appendChild(actions);
+    card.appendChild(head);
+
+    const applyBtn = btn('Apply', 'btn-primary btn-sm', I.check);
+    const rejectBtn = btn('Reject', 'btn-ghost btn-sm', I.x);
+    applyBtn.addEventListener('click', async () => {
+      try {
+        await API.post('/api/reflexive/proposals/' + p.id + '/apply');
+        snackbar('Proposition « ' + (p.title || p.id) + ' » appliquée', {
+          actionLabel: 'Voir',
+          onAction: () => location.hash = '#/reflexive/proposals',
+        });
+        route();
+      } catch (e) { toastErr(e.message); }
+    });
+    rejectBtn.addEventListener('click', () => modalRejectProposal(p));
+    actions.appendChild(applyBtn);
+    actions.appendChild(rejectBtn);
+    host.appendChild(card);
+  }
+}
+
+function modalRejectProposal(p) {
+  const body = el('div');
+  const intro = el('p', 'muted');
+  intro.style.marginTop = '0';
+  intro.textContent = 'Pourquoi rejeter cette proposition ? La raison sera utilisée pour ajuster le diagnostician.';
+  body.appendChild(intro);
+  const ta = document.createElement('textarea');
+  ta.className = 'textarea';
+  ta.rows = 4;
+  ta.placeholder = 'Ex. : trop spécifique, pas applicable globalement, contredit une convention…';
+  body.appendChild(ta);
+  const cancel = btn('Annuler', 'btn-ghost btn-sm');
+  const ok = btn('Rejeter', 'btn-danger btn-sm');
+  const { close } = openModal({
+    title: 'Rejeter « ' + (p.title || ('#' + p.id)) + ' »',
+    body, footer: [cancel, ok],
+  });
+  cancel.addEventListener('click', close);
+  ok.addEventListener('click', async () => {
+    const reason = ta.value.trim();
+    if (!reason) { toastErr('Raison requise'); return; }
+    try {
+      await API.post('/api/reflexive/proposals/' + p.id + '/reject', { reason });
+      toastOk('Proposition rejetée');
+      close();
+      route();
+    } catch (e) { toastErr(e.message); }
+  });
+}
+
+async function renderReflexiveMeasurements(host) {
+  refxLoader(host);
+  const data = await safe('/api/reflexive/measurement-plans?status=active', { items: [] });
+  host.innerHTML = '';
+  if (!data.items.length) {
+    refxEmpty(host,
+      'Aucun plan de mesure actif.',
+      "Chaque proposition appliquée déclenche un plan de mesure pour vérifier qu'elle aide réellement.");
+    return;
+  }
+  for (const m of data.items) {
+    const card = el('div', 'card refx-plan');
+    const eb = el('div', 'card-eyebrow');
+    eb.textContent = m.threshold_dimension + ' ≥ ' + m.threshold_value + ' · ' + m.sample_size + ' interactions';
+    const h = el('h3', 'refx-proposal-title'); h.textContent = m.criteria;
+    const meta = el('div', 'muted mono');
+    meta.style.fontSize = '12px';
+    meta.textContent = 'créé le ' + fmtDate(m.created_at) + ' · proposition #' + m.proposal_id;
+    card.appendChild(eb); card.appendChild(h); card.appendChild(meta);
+    host.appendChild(card);
+  }
+}
+
 async function renderTools() {
   setBreadcrumbs([{ label: 'Outils' }]);
   setTopbarActions([]);
@@ -6247,7 +6730,7 @@ document.addEventListener('keydown', (e) => {
   // 'g' chord -> next key navigates
   if (e.key === 'g') { lastKey = 'g'; lastKeyAt = Date.now(); return; }
   if (lastKey === 'g' && Date.now() - lastKeyAt < 1000) {
-    const map = { h: '#/', m: '#/mcps', p: '#/plugins', k: '#/skills', t: '#/templates', o: '#/tools', a: '#/aide' };
+    const map = { h: '#/', m: '#/mcps', p: '#/plugins', k: '#/skills', t: '#/templates', r: '#/reflexive', o: '#/tools', a: '#/aide' };
     if (map[e.key]) { location.hash = map[e.key]; lastKey = null; e.preventDefault(); return; }
     lastKey = null;
   }

@@ -3377,4 +3377,129 @@ body {
   .kpi-row { grid-template-columns: 1fr; }
   .page-header { flex-direction: column; align-items: flex-start; }
   .page-header-actions { width: 100%; justify-content: flex-start; }
+  .refx-kpi-row { grid-template-columns: 1fr; }
+  .refx-proposal-head { flex-direction: column; align-items: stretch; }
 }
+
+/* === REFLEXIVE ================================================== */
+.refx-body { display: flex; flex-direction: column; gap: var(--sp-4); }
+
+.refx-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-3);
+}
+.refx-kpi {
+  display: flex; flex-direction: column; gap: var(--sp-1);
+  padding: var(--sp-4);
+}
+.refx-kpi-label {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.refx-kpi-value {
+  font-size: 28px; font-weight: 600; line-height: 1.1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.refx-kpi-sub { font-size: 12px; color: var(--text-muted); }
+
+.refx-trend { font-weight: 600; font-variant-numeric: tabular-nums; }
+.refx-trend-up   { color: var(--ok); }
+.refx-trend-down { color: var(--err); }
+.refx-trend-flat { color: var(--text-muted); }
+
+.refx-spark {
+  width: 100%; height: 140px;
+  margin-top: var(--sp-2);
+  display: block;
+}
+.refx-spark-empty {
+  padding: var(--sp-6) 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.refx-dims { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
+.refx-dim {
+  display: grid;
+  grid-template-columns: 110px 1fr 60px;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.refx-dim-label { font-size: 12.5px; color: var(--text-muted); }
+.refx-dim-track {
+  position: relative;
+  height: 8px;
+  background: var(--surface-3);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.refx-dim-fill {
+  position: absolute; inset: 0 auto 0 0;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width var(--d-norm) var(--ease);
+}
+.refx-dim-val { font-size: 12px; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+
+.refx-ws-card {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-4);
+}
+.refx-ws-count { font-size: 22px; font-weight: 600; color: var(--text); margin-top: 4px; }
+
+.refx-row { cursor: pointer; }
+.refx-row:hover { background: var(--hover); }
+.refx-summary { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.refx-meta { margin-top: var(--sp-2); font-size: 12px; }
+
+.refx-outcome {
+  display: inline-block; padding: 2px 8px;
+  border-radius: var(--r-sm);
+  font-size: 11.5px; font-weight: 500;
+  background: var(--surface-3); color: var(--text-muted);
+}
+.refx-outcome-success { background: var(--ok-soft); color: var(--ok); }
+.refx-outcome-partial { background: var(--warn-soft); color: var(--warn); }
+.refx-outcome-failure { background: var(--err-soft); color: var(--err); }
+.refx-outcome-unknown { background: var(--surface-3); color: var(--text-muted); }
+
+.refx-proposal { display: flex; flex-direction: column; gap: var(--sp-3); }
+.refx-proposal-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: var(--sp-4);
+}
+.refx-proposal-title {
+  font-size: 16px; font-weight: 600; margin: 4px 0 6px;
+  color: var(--text);
+}
+.refx-proposal-actions {
+  display: flex; gap: var(--sp-2); flex-shrink: 0;
+}
+
+.refx-plan { display: flex; flex-direction: column; gap: 6px; }
+
+.refx-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-4);
+  padding-bottom: var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+.refx-detail-grid .dim { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+.refx-section-h {
+  font-size: 13px; font-weight: 600;
+  margin: var(--sp-4) 0 var(--sp-2);
+  color: var(--text);
+}
+.refx-chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
+.refx-files {
+  max-height: 200px; overflow: auto;
+  background: var(--surface-2); padding: var(--sp-2);
+  border-radius: var(--r-sm);
+  font-size: 12px;
+}
+.refx-files > div { padding: 2px 0; }
