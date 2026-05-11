@@ -32,6 +32,13 @@
 # UI state runtime (thème, onboarding…)
 /dashboard/data/ui_state.json
 
+# Reflexive — DB locale, propositions, log d'erreurs hooks
+/dashboard/data/reflexive.db
+/dashboard/data/reflexive.db-wal
+/dashboard/data/reflexive.db-shm
+/dashboard/data/reflexive_hook_errors.log
+/dashboard/data/proposals/
+
 # Outils de dev local (preflight, checklist) — voir aussi entry plus bas
 /dashboard/tools/
 
