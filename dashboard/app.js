@@ -5580,8 +5580,58 @@ async function loadEnvVars(host) {
     const vals = r.values || {};
     const allKeys = Object.keys(vals).sort((a, b) => a.localeCompare(b));
     const fileExists = !!r.exists;
+    const encrypted = !!r.encrypted;
+    const decErr = r.decryption_error || null;
     const wrap = el('div', 'card');
-    wrap.innerHTML = `<div class="card-header"><h3 class="card-title">${allKeys.length} variable${allKeys.length > 1 ? 's' : ''}${fileExists ? '' : ' <span class="badge badge-warn" style="margin-left:6px">.env.local absent</span>'}</h3></div>`;
+    const encBadge = encrypted
+      ? '<span class="badge badge-ok" style="margin-left:6px" title="Chiffré via DPAPI Windows (compte utilisateur)">🔒 Chiffré (DPAPI)</span>'
+      : (fileExists ? '<span class="badge badge-warn" style="margin-left:6px" title="Fichier en clair sur disque">⚠ Clair</span>' : '');
+    const missBadge = (!fileExists && !encrypted) ? ' <span class="badge badge-warn" style="margin-left:6px">.env.local absent</span>' : '';
+    wrap.innerHTML = `<div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2);flex-wrap:wrap"><h3 class="card-title">${allKeys.length} variable${allKeys.length > 1 ? 's' : ''}${encBadge}${missBadge}</h3><div data-enc-actions style="display:flex;gap:6px"></div></div>`;
+
+    // Actions chiffrement
+    const encActions = wrap.querySelector('[data-enc-actions]');
+    if (!encrypted) {
+      const enableBtn = btn('Activer le chiffrement', 'btn-sm', I.key);
+      enableBtn.title = 'Chiffre .env.local avec DPAPI (clé liée à ton compte Windows)';
+      enableBtn.addEventListener('click', () => {
+        confirmDialog(
+          'Activer le chiffrement DPAPI ?\n\nLe fichier sera lié à ton compte Windows. Si tu réinstalles ou changes de poste, les secrets seront illisibles — pense à exporter en clair pour backup avant.\n\nUn fichier .env.local.bak.<date> sera conservé.',
+          async () => {
+            try { const res = await API.post('/api/env/encrypt', {}); toastOk(`Chiffré (${res.keys} clé${res.keys > 1 ? 's' : ''})`); loadEnvVars(host); }
+            catch (e) { toastErr(e.message); }
+          }
+        );
+      });
+      encActions.appendChild(enableBtn);
+    } else {
+      const disableBtn = btn('Désactiver / Exporter clair', 'btn-sm btn-ghost', I.unlock || I.key);
+      disableBtn.title = 'Déchiffre et écrit .env.local en clair, supprime le fichier chiffré';
+      disableBtn.addEventListener('click', () => {
+        confirmDialog(
+          'Désactiver le chiffrement ?\n\nLe fichier .env.local sera réécrit en clair sur disque. Pratique pour un backup hors-poste ou pour migrer. Pense à le supprimer ou à réactiver le chiffrement après.',
+          async () => {
+            try { const res = await API.post('/api/env/decrypt', {}); toastOk(`Déchiffré (${res.keys} clé${res.keys > 1 ? 's' : ''})`); loadEnvVars(host); }
+            catch (e) { toastErr(e.message); }
+          },
+          { danger: true }
+        );
+      });
+      encActions.appendChild(disableBtn);
+    }
+
+    if (decErr) {
+      const errBox = el('div', 'callout callout-warn');
+      errBox.style.marginBottom = 'var(--sp-3)';
+      errBox.innerHTML = `
+        <div>
+          <strong>⚠ Déchiffrement impossible</strong>
+          <p style="margin:4px 0 0;font-size:12.5px">Le fichier <code class="mono">.env.local.enc</code> est présent mais ne peut pas être déchiffré sur ce poste / compte utilisateur. Détail : <code class="mono">${escapeHtml(decErr)}</code>.</p>
+          <p style="margin:4px 0 0;font-size:12.5px" class="dim">Probable changement de compte Windows, machine, ou profil corrompu. Si tu as un backup clair, restaure-le et réactive le chiffrement.</p>
+        </div>
+      `;
+      wrap.appendChild(errBox);
+    }
 
     // Bloc pédagogique si vraiment vide (pas de fichier OU aucune variable)
     if (!allKeys.length) {

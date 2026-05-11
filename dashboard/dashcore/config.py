@@ -36,6 +36,7 @@ WORKSPACES_JSON = DASHBOARD_DIR / "data" / "workspaces.json"
 MCP_REGISTRY = ROOT / "mcp" / "registry.json"
 SKILLS_LIBRARY_DIR = DASHBOARD_DIR / "data" / "skills-library"
 ENV_FILE = ROOT / ".env.local"
+ENV_ENC_FILE = ROOT / ".env.local.enc"
 LOGS_DIR = ROOT / "logs"
 
 SAFE_ID = re.compile(r"^[a-zA-Z0-9_-]{1,40}$")

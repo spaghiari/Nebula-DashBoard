@@ -24,11 +24,12 @@ from urllib.parse import urlparse, parse_qs
 
 from dashcore.config import (
     HOST, DEFAULT_PORT, DASHBOARD_DIR, WORKSPACES_JSON, MCP_REGISTRY,
-    ENV_FILE, BACKUPS_DIR, SNIPPETS_DIR, LOGS_DIR, STATIC_TYPES, log,
+    ENV_FILE, ENV_ENC_FILE, BACKUPS_DIR, SNIPPETS_DIR, LOGS_DIR, STATIC_TYPES, log,
 )
 from dashcore.helpers import (
     setup_logging, read_json, safe_id, load_env_local, port_free, find_port,
     set_env_var, delete_env_var, launch_script, open_target,
+    is_encrypted_mode, enable_encryption, disable_encryption, env_health,
     backup_claude_config, list_backups, read_journal, append_journal, clear_journal,
     all_stats, sanity_check, global_search, cleanup_orphan_bats,
 )
@@ -268,10 +269,20 @@ def h_del_fileitem(q, b, kind, scope, name): return delete_fileitem(kind, scope,
 # ── Système (env, journal, backups, snippets, hooks, search, stats) ─────────
 def h_get_env(q, b):
     env = load_env_local()
-    return 200, {"keys": sorted(env.keys()), "file": str(ENV_FILE), "exists": ENV_FILE.exists()}
+    health = env_health()
+    enc = health["encrypted"]
+    active_file = str(ENV_ENC_FILE) if enc else str(ENV_FILE)
+    exists = ENV_ENC_FILE.exists() if enc else ENV_FILE.exists()
+    return 200, {"keys": sorted(env.keys()), "file": active_file, "exists": exists,
+                 "encrypted": enc, "decryption_error": health.get("error")}
 def h_get_env_values(q, b):
     env = load_env_local()
-    return 200, {"values": env, "file": str(ENV_FILE), "exists": ENV_FILE.exists()}
+    health = env_health()
+    enc = health["encrypted"]
+    active_file = str(ENV_ENC_FILE) if enc else str(ENV_FILE)
+    exists = ENV_ENC_FILE.exists() if enc else ENV_FILE.exists()
+    return 200, {"values": env, "file": active_file, "exists": exists,
+                 "encrypted": enc, "decryption_error": health.get("error")}
 def h_get_snippets(q, b):
     out = {}
     if SNIPPETS_DIR.exists():
@@ -295,6 +306,8 @@ def h_post_system_update(q, b):  return system_apply_update()
 def h_post_system_reset(q, b):   return system_reset_to_upstream()
 
 def h_post_set_env(q, b):        return set_env_var(b.get("key", ""), b.get("value", ""))
+def h_post_env_encrypt(q, b):    return enable_encryption()
+def h_post_env_decrypt(q, b):    return disable_encryption()
 def h_post_open(q, b):           return open_target(b.get("target", ""))
 def h_post_backup(q, b):         return backup_claude_config()
 def h_post_cleanup_bats(q, b):   return 200, cleanup_orphan_bats()
@@ -446,6 +459,8 @@ ROUTES_POST = [
     (re.compile(rf"^/api/({_KIND_FILEITEM})/({_SCOPE})/({_ID})/content$"),                  h_post_fileitem_content),
     # Système
     (re.compile(rf"^/api/env$"),                                                            h_post_set_env),
+    (re.compile(rf"^/api/env/encrypt$"),                                                    h_post_env_encrypt),
+    (re.compile(rf"^/api/env/decrypt$"),                                                    h_post_env_decrypt),
     (re.compile(rf"^/api/open$"),                                                           h_post_open),
     (re.compile(rf"^/api/backup$"),                                                         h_post_backup),
     (re.compile(rf"^/api/cleanup/orphan-bats$"),                                            h_post_cleanup_bats),
@@ -553,7 +568,7 @@ class Handler(BaseHTTPRequestHandler):
     # Routes qui exposent des données sensibles : exigent un header custom
     # qui ne peut pas être posé par <form>, <img>, <link>… (anti-CSRF basique
     # même si on est sur 127.0.0.1).
-    _SENSITIVE_ROUTES = {"/api/env/values"}
+    _SENSITIVE_ROUTES = {"/api/env/values", "/api/env/encrypt", "/api/env/decrypt"}
 
     def _dispatch(self, method: str, body=None):
         parsed = urlparse(self.path)
