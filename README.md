@@ -37,7 +37,7 @@ Nebula centralise tout ça.
   `{{tools}}`, `{{date}}`, `{{emoji}}`. Édition multi-fichiers depuis l'UI.
 - **MCPs** — registre unique, transport `stdio`/`http`/`sse`, champs `cwd` et
   `headers`, substitution `${VAR}` depuis `.env.local`, **auto-sync** des
-  `.mcp.json` à chaque modif, test live, import bulk depuis JSON Claude.
+  `.mcp.json` à chaque modif, import bulk depuis JSON Claude.
   Statuts calculés automatiquement (désactivé / à configurer / disponible),
   workspaces ciblés via cases à cocher, page MCPs avec **auto-refresh 30s**.
 - **Recettes MCP** — catalogue 1-clic (8 recettes embarquées : Filesystem,
@@ -45,10 +45,6 @@ Nebula centralise tout ça.
   + **recettes locales** gitignored pour les MCPs perso/propriétaires.
   Éditeur GUI complet, conversion MCP → recette en 1 clic (avec détection
   auto des secrets), installation multi-instances avec auto-suffix d'ID.
-- **Diagnostic MCP** — bouton "Diag" sur chaque card → modale avec 6 sections
-  (binaire, env, cwd, test live, vue Claude CLI, erreurs récentes scannées
-  dans les sessions). Pour comprendre pourquoi un MCP plante sans creuser
-  dans les logs.
 - **Skills** — page dédiée avec édition multi-fichiers (SKILL.md + références),
   copier vers workspaces, cross-référence.
 - **Plugins** — browser marketplace (catalogue officiel + externes + README),
@@ -60,15 +56,18 @@ Nebula centralise tout ça.
 - **Hooks & permissions** — éditeur GUI pour `settings.json` global + local.
 
 ### Confort & UX
-- **5 thèmes** — Nebula sombre/clair, Marine (bleu), Forêt (émeraude),
-  Brique (orange). Persisté **côté serveur** (`dashboard/data/ui_state.json`)
-  + cache localStorage pour éviter le flash au chargement.
+- **5 thèmes** — Nebula sombre/clair, Marine (bleu), Solarized (cyan & ambre,
+  classique reposant), Cuivre (bronze chaleureux). Persisté **côté serveur**
+  (`dashboard/data/ui_state.json`) + cache localStorage pour éviter le flash
+  au chargement.
 - **Command palette** — `/` ou `Ctrl+K`, recherche globale.
 - **Raccourcis clavier** — chord `g h/m/p/k/t/o/a` pour naviguer, `n`/`m`/`s`
   pour les actions rapides, `Ctrl+S` dans les éditeurs.
-- **Page Aide** intégrée — 14 sections couvrant tout, avec sommaire sticky.
-- **Wizard premier lancement** — 5 étapes (bienvenue, thème, import config,
-  workspace, raccourcis) qui se déclenche automatiquement au 1er run.
+- **Page Aide** intégrée — hub de 8 cartes thématiques (Premiers pas,
+  Workspaces, MCPs, Skills & Plugins, Templates, Secrets & sécurité, Outils,
+  Référence & dépannage), chaque carte ouvre une sous-page focalisée.
+- **Visite guidée** — tour interactif au 1er lancement (~2 min, 9 étapes)
+  avec spotlight sur l'UI réelle.
 - **Checklist de mise en route** — 6 étapes toujours accessibles (Outils →
   A. Démarrage). **Bandeau Home contextuel** affiché tant que la checklist
   n'est pas à 6/6.
@@ -93,9 +92,16 @@ Nebula centralise tout ça.
 
 ### Sécurité
 - Bind `127.0.0.1` strict, pas d'auth (on suppose une machine perso).
+- **Chiffrement DPAPI** (Windows) optionnel pour `.env.local` : un clic dans
+  Outils → Variables d'environnement → *Activer le chiffrement*. Le fichier
+  devient un blob lié à ton compte Windows + ACL stricte `icacls`. Édition
+  transparente côté dashboard, illisible si copié ailleurs ou ouvert par un
+  autre compte. Bouton *Désactiver / Exporter clair* pour migrer.
 - Validation `safe_id` partout, regex stricte sur les paths.
 - `_MUTATION_LOCK` réentrant pour les écritures concurrentes.
 - Cap Content-Length 10 MB anti-DoS.
+- Header CSRF `X-Nebula-XHR` requis sur les routes sensibles (env values,
+  chiffrement DPAPI) — pose-able uniquement en fetch/XHR same-origin.
 - Subprocess `shell=False`, encoding UTF-8 explicite, timeouts.
 - Backups automatiques avant chaque modification destructive.
 
@@ -119,10 +125,11 @@ claude-workspace/
 │   │   ├── config.py            # Constantes & chemins
 │   │   ├── helpers.py           # I/O, validation, fichiers
 │   │   ├── env_local.py         # Gestion .env.local + ${VAR}
+│   │   ├── env_crypto.py        # Chiffrement DPAPI Windows + ACL stricte
 │   │   ├── journal.py           # Journal markdown
 │   │   ├── workspace_io.py      # Paths workspace, stats, sanity check
 │   │   ├── api_workspaces.py    # CRUD workspaces, templates, settings
-│   │   ├── api_mcps.py          # MCPs, conflicts, scan, sync, recettes, diagnostic
+│   │   ├── api_mcps.py          # MCPs, conflicts, scan, sync, recettes
 │   │   ├── api_plugins.py       # Plugins, skills, agents, commandes
 │   │   ├── api_ui_state.py      # Persistance thème + onboarding côté serveur
 │   │   └── system_update.py     # Auto-update bulletproof (auto-stash + reset)
@@ -187,9 +194,9 @@ notepad .env.local              :: renseigne tes secrets
 scripts\start-dashboard.bat
 ```
 
-Ouvre http://127.0.0.1:4777/ — au premier lancement, le **wizard
-d'introduction** te guide en 5 étapes : choix du thème, import auto de ta
-config Claude existante, création d'un premier workspace, raccourcis clavier.
+Ouvre http://127.0.0.1:4777/ — au premier lancement, la **visite guidée**
+te montre les fonctions essentielles avec spotlight sur l'UI réelle (~2 min,
+9 étapes). Tu peux la relancer à tout moment depuis la page Aide.
 
 ---
 
@@ -205,7 +212,7 @@ Le dashboard a une sidebar fixe avec 6 sections principales :
 | **Skills** | `g k` | Création, édition multi-fichiers, copier vers workspace |
 | **Templates** | `g t` | Modèles avec édition GUI complète |
 | **Outils** | `g o` | Apparence, onboarding, hooks, env, backups, maintenance |
-| **Aide** | `g a` | Documentation utilisateur intégrée (12 sections) |
+| **Aide** | `g a` | Hub de documentation : 8 sujets en cartes thématiques |
 
 Plus la **palette de recherche globale** : `/` ou `Ctrl+K`.
 
@@ -238,7 +245,17 @@ Plus la **palette de recherche globale** : `/` ou `Ctrl+K`.
    le placeholder.
 
 Va dans **Outils → Variables d'environnement** pour gérer le `.env.local`
-en GUI (filtre, groupement par préfixe, masquage des valeurs).
+en GUI :
+
+- Ajouter, **modifier** (crayon, édition inline avec Entrée pour valider),
+  supprimer une variable
+- Filtre rapide par nom, groupement par préfixe
+- Bouton œil pour révéler les valeurs masquées
+- **Bouton "Activer le chiffrement"** (Windows) : un clic et le fichier
+  devient un blob DPAPI illisible sans ton compte Windows. ACL stricte
+  appliquée (lecture limitée à toi + SYSTEM). L'édition reste transparente.
+  Bouton "Désactiver / Exporter clair" pour récupérer une copie en clair
+  (backup, migration, autre poste).
 
 ---
 
@@ -260,16 +277,9 @@ Plus l'onglet **JSON brut** pour copier-coller un bloc complet (depuis un
 README de MCP par exemple), et le bouton **Importer** sur la page MCPs pour
 coller un format `{"mcpServers": {...}}` Claude Code standard.
 
-### 🩺 Diagnostic MCP
-
-Bouton **Diag** sur chaque card MCP → modale d'analyse complète :
-
-- **Binaire/Endpoint** — résolution de la commande via `shutil.which` + hint
-- **Variables d'env** — résolues vs manquantes (vs `.env.local`)
-- **CWD** — vérifie l'existence du working dir
-- **Test live** — relance le test et affiche le résultat
-- **Vue Claude CLI** — sortie de `claude mcp get <id>` pour comparer
-- **Erreurs récentes** — scan des sessions Claude Code, snippets datés
+Les **badges sur la card** (statut, env manquant, nombre de workspaces ciblés)
+suffisent au quotidien — quand un MCP plante réellement, l'erreur remonte
+directement dans Claude Code.
 
 ---
 
@@ -416,10 +426,11 @@ sur **Examiner** → modale avec :
 | Nebula | Sombre · violet & ocre (défaut) |
 | Nebula clair | Clair · violet profond |
 | Marine | Sombre · bleu profond |
-| Forêt | Sombre · vert émeraude |
-| Brique | Sombre · orange chaud |
+| Solarized | Sombre · cyan & ambre (classique reposant pour les yeux) |
+| Cuivre | Sombre · bronze chaleureux |
 
-Application instantanée, persistance localStorage, transitions douces.
+Application instantanée, persistance côté serveur + cache localStorage,
+transitions douces.
 
 ---
 
