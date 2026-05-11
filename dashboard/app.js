@@ -664,6 +664,38 @@ function workspaceCard(w) {
       <span class="workspace-meta-item">${I.history}<span>${last}</span></span>
     </div>
   `;
+
+  // Chip Reflexive — visible en coin haut-droit, click toggle direct.
+  const refxChip = document.createElement('button');
+  refxChip.type = 'button';
+  refxChip.className = 'workspace-refx-chip' + (w.reflexive_enabled ? ' is-on' : '');
+  refxChip.title = w.reflexive_enabled
+    ? 'Reflexive observe ce workspace. Clic pour désactiver.'
+    : "Reflexive inactif. Clic pour activer l'observation (installe les hooks).";
+  const refxLabel = el('span'); refxLabel.textContent = w.reflexive_enabled ? 'on' : 'off';
+  refxChip.innerHTML = I.brain;
+  refxChip.appendChild(refxLabel);
+  refxChip.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const wanted = !w.reflexive_enabled;
+    refxChip.disabled = true;
+    try {
+      const ep = wanted ? 'enable' : 'disable';
+      await API.post('/api/reflexive/workspace/' + w.id + '/' + ep);
+      w.reflexive_enabled = wanted;
+      refxChip.classList.toggle('is-on', wanted);
+      refxLabel.textContent = wanted ? 'on' : 'off';
+      refxChip.title = wanted
+        ? 'Reflexive observe ce workspace. Clic pour désactiver.'
+        : "Reflexive inactif. Clic pour activer l'observation (installe les hooks).";
+      toastOk(wanted
+        ? "Reflexive activé — hooks installés (relance la session Claude pour qu'ils prennent)"
+        : 'Reflexive désactivé — hooks retirés');
+    } catch (err) { toastErr(err.message); }
+    refxChip.disabled = false;
+  });
+  card.appendChild(refxChip);
+
   const actions = el('div', 'workspace-actions');
   const launch = btn('Lancer', 'btn-primary btn-sm', I.play);
   launch.addEventListener('click', async (e) => {

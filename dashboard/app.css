@@ -3381,6 +3381,37 @@ body {
   .refx-proposal-head { flex-direction: column; align-items: stretch; }
 }
 
+/* Chip Reflexive sur la card workspace — état visible + toggle direct */
+.workspace-card { position: relative; }
+.workspace-refx-chip {
+  position: absolute;
+  top: var(--sp-3); right: var(--sp-3);
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px 3px 7px;
+  border-radius: 999px;
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.04em; text-transform: uppercase;
+  background: var(--surface-3); color: var(--text-dim);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: all var(--d-fast) var(--ease);
+}
+.workspace-refx-chip svg { width: 12px; height: 12px; }
+.workspace-refx-chip:hover {
+  background: var(--hover);
+  color: var(--text-muted);
+}
+.workspace-refx-chip.is-on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent-soft);
+}
+.workspace-refx-chip.is-on:hover {
+  background: var(--accent-soft);
+  color: var(--accent-2);
+}
+.workspace-refx-chip:disabled { opacity: 0.5; cursor: wait; }
+
 /* === REFLEXIVE ================================================== */
 .refx-body { display: flex; flex-direction: column; gap: var(--sp-4); }
 
