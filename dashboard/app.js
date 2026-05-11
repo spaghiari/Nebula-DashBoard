@@ -3864,6 +3864,35 @@ function _helpSections() {
       </div>
 
 `,
+'reflexive': `
+      <h2>${I.brain}<span>Reflexive — boucle d'amélioration</span></h2>
+      <p>Reflexive observe les sessions Claude Code et mesure leur qualité sur 4 dimensions, pour faire émerger des propositions d'amélioration concrètes. <strong>Optionnel</strong> et <strong>opt-in par workspace</strong> : aucun workspace n'est observé tant que tu n'as pas activé le toggle.</p>
+      <h3>À quoi ça sert</h3>
+      <p>Au fil des sessions, le score moyen et les <em>flags</em> récurrents (ex. <code class="mono">missing-claude-md-read</code>, <code class="mono">redundant-grep</code>) révèlent des patterns que tu peux corriger via un skill, une convention dans <code class="mono">CLAUDE.md</code> ou un hook. Chaque correctif vient avec un <em>plan de mesure</em> qui vérifie si l'amélioration tient sur N interactions suivantes.</p>
+      <h3>Activer Reflexive sur un workspace</h3>
+      <ol class="help-list">
+        <li>Page <strong>Accueil</strong> → menu d'une card workspace → <em>Modifier</em>.</li>
+        <li>Active le switch <strong>Observer cet espace</strong>.</li>
+        <li>Les hooks (<code class="mono">SessionStart</code>, <code class="mono">PostToolUse</code>, <code class="mono">Stop</code>) sont ajoutés au <code class="mono">.claude/settings.json</code> du workspace (avec backup <code class="mono">.bak</code>, sans toucher aux hooks tiers).</li>
+      </ol>
+      <h3>Lire les stats</h3>
+      <ul class="help-list">
+        <li><strong>Vue d'ensemble</strong> (<kbd>g</kbd> <kbd>r</kbd>) : score moyen + tendance, courbe 30 jours, barres par dimension (la plus basse est le meilleur axe d'attaque).</li>
+        <li><strong>Interactions</strong> : table cliquable → modale avec full transcript / tools / files / éval.</li>
+        <li><strong>Propositions</strong> : cards Apply / Reject. Le rejet capture une raison pour ajuster le diagnostician.</li>
+        <li><strong>Mesures en cours</strong> : les plans déclenchés par les propositions appliquées.</li>
+      </ul>
+      <h3>Dépannage</h3>
+      <ul class="help-list">
+        <li><strong>Un hook plante</strong> : l'erreur est loggée dans <code class="mono">dashboard/data/reflexive_hook_errors.log</code>. Les hooks Reflexive ne font <em>jamais</em> échouer une session Claude Code (toute exception est ravalée).</li>
+        <li><strong>Désactiver proprement</strong> : repasser le toggle en off retire les hooks Reflexive du <code class="mono">settings.json</code> sans toucher aux autres entrées.</li>
+        <li><strong>Réinitialiser la DB</strong> : arrêter le dashboard puis supprimer <code class="mono">dashboard/data/reflexive.db*</code>. La DB sera recréée vide au prochain démarrage.</li>
+      </ul>
+      <div class="callout callout-info">
+        <strong>Sobriété :</strong> Reflexive ne signale rien tant qu'un pattern n'a pas été observé sur ≥5 interactions cohérentes. Mieux vaut zéro proposition qu'une proposition faible.
+      </div>
+
+`,
 'shortcuts': `
       <h2>${I.zap}<span>Raccourcis clavier</span></h2>
       <table class="help-shortcuts">
@@ -3971,7 +4000,7 @@ const HELP_TOPICS = [
   { id: 'skills-plugins', emoji: '✨', title: 'Skills & Plugins',      summary: 'Bibliothèque de compétences et extensions Claude Code.',          sections: ['skills', 'plugins'] },
   { id: 'templates',      emoji: '📋', title: 'Templates',             summary: 'Modèles réutilisables pour démarrer un workspace rapidement.',    sections: ['templates'] },
   { id: 'secrets',        emoji: '🔐', title: 'Secrets & sécurité',    summary: 'Stockage centralisé de tes tokens et clés d\'API, chiffrement.',  sections: ['env'] },
-  { id: 'outils',         emoji: '🛠️', title: 'Outils & maintenance',  summary: 'Hooks, sauvegardes, mises à jour automatiques.',                  sections: ['tools', 'update'] },
+  { id: 'outils',         emoji: '🛠️', title: 'Outils & maintenance',  summary: 'Hooks, sauvegardes, mises à jour automatiques, Reflexive.',       sections: ['tools', 'update', 'reflexive'] },
   { id: 'reference',      emoji: '⌨️', title: 'Référence & dépannage', summary: 'Raccourcis clavier et solutions aux problèmes courants.',         sections: ['shortcuts', 'troubleshoot'] },
 ];
 
@@ -6254,6 +6283,41 @@ function modalEditWorkspace(w) {
     <div class="field"><label class="field-label">Description</label><input class="input" name="description" value="${escapeHtml(w.description || '')}"></div>
     <div class="field"><label class="field-label">Path</label><input class="input mono" name="path" value="${escapeHtml(w.path || '')}"></div>
   `;
+
+  // Toggle Reflexive observation — appel API immédiat, indépendant du Save
+  const refxRow = el('div', 'field');
+  refxRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);margin-top:var(--sp-2);padding-top:var(--sp-3);border-top:1px solid var(--border)';
+  const refxLeft = el('div');
+  const refxLabel = el('div'); refxLabel.style.cssText = 'font-size:13px;font-weight:500';
+  refxLabel.textContent = 'Reflexive — observer cet espace';
+  const refxHint = el('div', 'dim'); refxHint.style.cssText = 'font-size:11.5px;margin-top:2px';
+  refxHint.textContent = "Installe les hooks d'observation dans .claude/settings.json (avec backup .bak). Désactiver les retire proprement.";
+  refxLeft.appendChild(refxLabel); refxLeft.appendChild(refxHint);
+  const sw = el('label', 'switch');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox';
+  cb.checked = !!w.reflexive_enabled;
+  const slider = el('span', 'switch-slider');
+  sw.appendChild(cb); sw.appendChild(slider);
+  refxRow.appendChild(refxLeft); refxRow.appendChild(sw);
+  body.appendChild(refxRow);
+
+  cb.addEventListener('change', async () => {
+    const wanted = cb.checked;
+    cb.disabled = true;
+    try {
+      const endpoint = wanted ? 'enable' : 'disable';
+      await API.post(`/api/reflexive/workspace/${w.id}/${endpoint}`);
+      w.reflexive_enabled = wanted;
+      toastOk(wanted ? 'Reflexive activé — hooks installés' : 'Reflexive désactivé — hooks retirés');
+    } catch (e) {
+      cb.checked = !wanted;
+      toastErr(e.message);
+    } finally {
+      cb.disabled = false;
+    }
+  });
+
   const cancel = btn('Annuler', 'btn-ghost');
   const save = btn('Enregistrer', 'btn-primary');
   const { close } = openModal({ title: `Modifier ${w.id}`, body, footer: [cancel, save] });
@@ -6775,6 +6839,12 @@ const TOURS = {
       body: `<p>Les <strong>skills</strong> sont des compétences réutilisables (prompts longs structurés) que Claude active dynamiquement.</p>
         <p>Le modèle "magasin" : tu maintiens une bibliothèque, et tu <strong>distribues</strong> chaque skill vers Global et/ou des workspaces spécifiques. Une seule édition, plusieurs cibles.</p>`,
       target: '.page', navigate: '#/skills',
+    },
+    {
+      title: '🧪 Reflexive — Claude qui s\'améliore',
+      body: `<p>Optionnel : <strong>Reflexive</strong> observe les sessions Claude d'un workspace, les score sur 4 dimensions et fait émerger des propositions concrètes. Activable par workspace (<kbd>g</kbd> <kbd>r</kbd> pour voir la page).</p>
+        <p class="dim" style="font-size:12px">Tu peux ignorer ça pour l'instant et y revenir quand tu auras accumulé quelques sessions.</p>`,
+      target: '.page', navigate: '#/reflexive',
     },
     {
       title: '📦 Templates — moules de workspaces',

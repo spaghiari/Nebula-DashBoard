@@ -55,6 +55,21 @@ Nebula centralise tout ça.
   pour éviter les re-fetch).
 - **Hooks & permissions** — éditeur GUI pour `settings.json` global + local.
 
+### Réflexion (optionnel)
+- **Reflexive** — boucle réflexive mesurable sur l'utilisation de Claude Code :
+  observation des interactions → scoring sur 4 dimensions (correctness,
+  efficiency, alignment, learning) → propositions d'amélioration → application
+  → mesure de l'effet. **Opt-in par workspace** : un toggle dans la modale
+  d'édition installe ou retire les hooks Reflexive dans le `settings.json`
+  du workspace (avec backup `.bak`, sans toucher aux hooks tiers).
+  - Page dédiée (`#/reflexive`, raccourci <kbd>g r</kbd>) avec 4 sous-tabs :
+    vue d'ensemble (KPIs + courbe SVG + barres par dimension), interactions,
+    propositions (Apply / Reject), mesures en cours.
+  - Stockage : DB SQLite locale `dashboard/data/reflexive.db` (WAL mode),
+    propositions générées dans `dashboard/data/proposals/`. Tout gitignored.
+  - Skill `reflexive-core` (rubrique de scoring + format des propositions)
+    + agents `evaluator` et `diagnostician` livrés dans le repo.
+
 ### Confort & UX
 - **5 thèmes** — Nebula sombre/clair, Marine (bleu), Solarized (cyan & ambre,
   classique reposant), Cuivre (bronze chaleureux). Persisté **côté serveur**
