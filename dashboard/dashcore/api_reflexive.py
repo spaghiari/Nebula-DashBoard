@@ -17,6 +17,7 @@ import sqlite3
 from dashcore.config import WORKSPACES_JSON, log, _MUTATION_LOCK
 from dashcore.helpers import read_json, safe_id, write_json
 from dashcore.reflexive import connect
+from dashcore.reflexive.install import install_hooks, uninstall_hooks
 
 
 # ─── Utilitaires ────────────────────────────────────────────────────────────
@@ -270,32 +271,37 @@ def reject_proposal(proposal_id: str, body: dict) -> tuple[int, dict]:
 
 
 # ─── Workspace opt-in ──────────────────────────────────────────────────────
-# NB : commit 2 ne fait que basculer le flag dans workspaces.json. L'install
-# effective des hooks dans .claude/settings.json arrive au commit 3.
 
-def _set_workspace_flag(ws_id: str, enabled: bool) -> tuple[int, dict]:
+def _toggle_workspace(ws_id: str, enabled: bool) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "workspace_id invalide"}
     with _MUTATION_LOCK:
         data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
-        found = False
-        for w in data.get("workspaces", []):
-            if w.get("id") == ws_id:
-                w["reflexive_enabled"] = bool(enabled)
-                found = True
-                break
-        if not found:
+        ws = next((w for w in data.get("workspaces", []) if w.get("id") == ws_id), None)
+        if not ws:
             return 404, {"error": "workspace inconnu"}
+        ws_path = ws.get("path") or ""
+        if not ws_path:
+            return 400, {"error": "workspace sans chemin"}
+        ws["reflexive_enabled"] = bool(enabled)
         write_json(WORKSPACES_JSON, data)
-    return 200, {"ok": True, "id": ws_id, "reflexive_enabled": enabled}
+
+    # Mutation settings.json en dehors du lock workspaces.json (le module
+    # install a son propre verrouillage).
+    try:
+        info = install_hooks(ws_path) if enabled else uninstall_hooks(ws_path)
+    except Exception as exc:
+        log.exception("Reflexive: hooks I/O failed for %s", ws_id)
+        return 500, {"error": f"hooks I/O: {exc}"}
+    return 200, {"ok": True, "id": ws_id, "reflexive_enabled": enabled, **info}
 
 
 def enable_workspace(ws_id: str, body: dict) -> tuple[int, dict]:
-    return _set_workspace_flag(ws_id, True)
+    return _toggle_workspace(ws_id, True)
 
 
 def disable_workspace(ws_id: str, body: dict) -> tuple[int, dict]:
-    return _set_workspace_flag(ws_id, False)
+    return _toggle_workspace(ws_id, False)
 
 
 # ─── Diagnostician (stub commit 2, implémentation commit 5) ────────────────
