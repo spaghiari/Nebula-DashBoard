@@ -38,6 +38,7 @@ def spawn_evaluator(interaction_id: int, transcript_path: str, workspace_path: s
             "stderr": subprocess.DEVNULL,
             "close_fds": True,
             "cwd": workspace_path or None,
+            "env": os.environ.copy(),
         }
         if sys.platform == "win32":
             # DETACHED_PROCESS | CREATE_NO_WINDOW : pas de console, pas de wait
@@ -51,6 +52,39 @@ def spawn_evaluator(interaction_id: int, transcript_path: str, workspace_path: s
         )
     except Exception as exc:
         log_error("spawn_evaluator", exc)
+
+
+def extract_first_user_prompt(transcript_path: str) -> str:
+    """Récupère le premier message user du transcript pour un résumé court."""
+    if not transcript_path:
+        return ""
+    p = Path(transcript_path)
+    if not p.exists():
+        return ""
+    try:
+        with p.open(encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+                msg = entry.get("message") or {}
+                if msg.get("role") != "user":
+                    continue
+                content = msg.get("content")
+                if isinstance(content, list):
+                    for c in content:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            t = (c.get("text") or "").strip()
+                            if t:
+                                return t[:200]
+                elif isinstance(content, str):
+                    t = content.strip()
+                    if t:
+                        return t[:200]
+    except Exception as exc:
+        log_error("extract_first_user_prompt", exc)
+    return ""
 
 
 def main() -> int:
@@ -75,9 +109,10 @@ def main() -> int:
                 pass
             non_trivial = len(tools) >= MIN_TOOLS_FOR_EVAL
             outcome = "unknown"  # affiné par l'évaluation
+            summary = extract_first_user_prompt(transcript_path)
             conn.execute(
-                "UPDATE interactions SET ended_at = ?, outcome = ? WHERE id = ?",
-                (now_iso(), outcome, row["id"]),
+                "UPDATE interactions SET ended_at = ?, outcome = ?, task_summary = ? WHERE id = ?",
+                (now_iso(), outcome, summary or None, row["id"]),
             )
             conn.commit()
             interaction_id = row["id"]

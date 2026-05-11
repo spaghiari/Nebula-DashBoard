@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -158,6 +159,26 @@ def insert_score(interaction_id: int, data: dict) -> bool:
         return False
 
 
+def resolve_claude_bin() -> str | None:
+    """Cherche le binaire `claude` même si le PATH du hook est restreint."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    candidates = [
+        Path.home() / ".local" / "bin" / "claude.exe",
+        Path.home() / ".local" / "bin" / "claude.cmd",
+        Path.home() / "AppData" / "Local" / "Programs" / "claude" / "claude.exe",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "claude" / "claude.exe",
+    ]
+    for c in candidates:
+        try:
+            if c.exists():
+                return str(c)
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def run(interaction_id: int, transcript_path: str, workspace_path: str) -> None:
     transcript = read_transcript(transcript_path)
     if not transcript:
@@ -166,7 +187,10 @@ def run(interaction_id: int, transcript_path: str, workspace_path: str) -> None:
 
     prompt = build_prompt(transcript, workspace_path)
 
-    claude_bin = shutil.which("claude") or "claude"
+    claude_bin = resolve_claude_bin()
+    if not claude_bin:
+        log_err("run", f"claude CLI introuvable. PATH={os.environ.get('PATH', '')[:500]!r}")
+        return
     try:
         r = subprocess.run(
             [claude_bin, "-p", prompt, "--output-format", "text"],
