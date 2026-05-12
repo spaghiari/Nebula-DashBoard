@@ -106,11 +106,13 @@ def system_version_info(check_remote: bool = False) -> dict:
 
     Si `check_remote` est True, lance `git fetch` (lent, à éviter au load).
     """
+    from dashcore import __version__ as _pkg_version
     if not _is_git_repo():
         return {
             "available": False,
             "reason": "Pas un dépôt git — auto-update indisponible.",
             "is_git": False,
+            "version": _pkg_version,
         }
 
     branch = _current_branch()
@@ -130,6 +132,7 @@ def system_version_info(check_remote: bool = False) -> dict:
     info = {
         "available": True,
         "is_git": True,
+        "version": _pkg_version,
         "branch": branch,
         "upstream": upstream,
         "head": head_sha if rc == 0 else "?",

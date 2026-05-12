@@ -63,7 +63,7 @@ function applyTheme(id, { save = true } = {}) {
   if (valid === 'nebula') document.documentElement.removeAttribute('data-theme');
   else document.documentElement.setAttribute('data-theme', valid);
   try { localStorage.setItem('nebula-theme', valid); } catch {}
-  if (save) API.post('/api/ui-state', { theme: valid }).catch(() => {});
+  if (save) API.post('/api/ui-state', { theme: valid }).catch(e => console.warn('[ui-state] sync thème échoué :', e.message));
 }
 
 function getCurrentTheme() {
@@ -294,8 +294,8 @@ const NAV_ITEMS = [
   { id: 'plugins',   label: 'Plugins',     route: '#/plugins',   icon: I.plug,    key: 'p' },
   { id: 'skills',    label: 'Skills',      route: '#/skills',    icon: I.sparkle, key: 'k' },
   { id: 'templates', label: 'Templates',   route: '#/templates', icon: I.layers,  key: 't' },
-  { id: 'reflexive', label: 'Reflexive',   route: '#/reflexive', icon: I.brain,   key: 'r' },
   { section: 'Système' },
+  { id: 'reflexive', label: 'Reflexive',   route: '#/reflexive', icon: I.brain,   key: 'r' },
   { id: 'tools',     label: 'Outils',      route: '#/tools',     icon: I.tools,   key: 'o' },
   { id: 'aide',      label: 'Aide',        route: '#/aide',      icon: I.book,    key: 'a' },
 ];
@@ -469,6 +469,9 @@ function buildHomeQuickstart() {
   return card;
 }
 
+/* ================================================================
+   PAGE HOME
+   ================================================================ */
 async function renderHome() {
   setBreadcrumbs([{ label: 'Accueil' }]);
   const newWsBtn = btn('Nouveau workspace', 'btn-primary', I.plus);
@@ -500,36 +503,6 @@ async function renderHome() {
       <p class="page-subtitle">Pilotage des workspaces, MCPs, plugins et skills Claude Code.</p>
     </div>
   `));
-
-  // Banner "Première fois ?" — uniquement si tour jamais lancé ET install vide
-  let tourDone = false;
-  try { tourDone = localStorage.getItem('nebula-tour-completed') === '1'; } catch {}
-  const isFreshInstall = (STATE.workspaces.length === 0 && STATE.mcps.length === 0);
-  if (!tourDone && isFreshInstall) {
-    const banner = el('div', 'callout callout-info');
-    banner.style.cssText = 'margin-bottom:var(--sp-4);background:linear-gradient(90deg,rgba(167,139,250,0.08),rgba(124,58,237,0.04));border-color:var(--accent)';
-    banner.innerHTML = `
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <div style="font-size:32px">🎯</div>
-        <div style="flex:1;min-width:240px">
-          <strong style="font-size:14px">Première fois sur Nebula ?</strong>
-          <p style="margin:4px 0 0;font-size:12.5px">Une visite guidée interactive de ~2 min te montre l'essentiel : workspaces, MCPs, skills, templates. Avec spotlight sur les vrais éléments de l'UI.</p>
-        </div>
-      </div>
-    `;
-    const launchBtn = btn('🎯 Démarrer la visite', 'btn-primary', null);
-    const dismissBtn = btn('Plus tard', 'btn-ghost btn-sm', null);
-    dismissBtn.addEventListener('click', () => {
-      try { localStorage.setItem('nebula-tour-completed', '1'); } catch {}
-      banner.remove();
-    });
-    launchBtn.addEventListener('click', () => startTour('main'));
-    const actions = el('div');
-    actions.style.cssText = 'display:flex;gap:8px;margin-top:8px';
-    actions.append(launchBtn, dismissBtn);
-    banner.querySelector('div > div:last-child').appendChild(actions);
-    page.appendChild(banner);
-  }
 
   // Bandeau "Mise en route" si la checklist d'onboarding n'est pas à 100 %
   const quickstart = buildHomeQuickstart();
@@ -774,6 +747,9 @@ async function loadJournal(host) {
 
 /* ================================================================
    PAGE: WORKSPACE DETAIL
+   ================================================================ */
+/* ================================================================
+   PAGE WORKSPACE (détail d'un workspace : explorer + extensions)
    ================================================================ */
 async function renderWorkspace(wsId) {
   const w = STATE.workspaces.find(x => x.id === wsId);
@@ -1222,6 +1198,9 @@ async function openWsFile(wsId, filename) {
 /* ================================================================
    PAGE: MCPs
    ================================================================ */
+/* ================================================================
+   PAGE MCPS (liste + cards + modals new/edit/recipes)
+   ================================================================ */
 async function renderMCPs() {
   setBreadcrumbs([{ label: 'MCPs' }]);
   const newBtn = btn('Nouveau MCP', 'btn-primary', I.plus);
@@ -1289,7 +1268,7 @@ async function renderMCPs() {
       fixBtn.addEventListener('click', () => modalGlobalConflicts());
       banner.appendChild(fixBtn);
       conflictsBanner.appendChild(banner);
-    } catch {}
+    } catch (e) { console.warn('[conflicts] banner fetch échoué :', e.message); }
   })();
 
   const toolbar = el('div', 'mcp-toolbar');
@@ -2069,11 +2048,11 @@ function modalNewMCP(existing = null) {
    ================================================================ */
 function markOnboarded() {
   if (STATE.uiState) STATE.uiState.onboarded = true;
-  API.post('/api/ui-state', { onboarded: true }).catch(() => {});
+  API.post('/api/ui-state', { onboarded: true }).catch(e => console.warn('[ui-state] markOnboarded échoué :', e.message));
 }
 function resetOnboarded() {
   if (STATE.uiState) STATE.uiState.onboarded = false;
-  API.post('/api/ui-state', { onboarded: false }).catch(() => {});
+  API.post('/api/ui-state', { onboarded: false }).catch(e => console.warn('[ui-state] resetOnboarded échoué :', e.message));
 }
 
 async function startFirstRunWizard() {
@@ -2336,7 +2315,7 @@ async function startFirstRunWizard() {
       try {
         const ws = await API.get('/api/workspaces');
         STATE.workspaces = ws.workspaces || [];
-      } catch {}
+      } catch (e) { console.warn('[setup-wizard] fetch workspaces échoué :', e.message); }
     }
     const wsCount = STATE.workspaces.length;
 
@@ -2461,6 +2440,12 @@ async function checkForUpdates({ force = false } = {}) {
     try { localStorage.setItem(UPDATE_CHECK_KEY, String(Date.now())); } catch {}
   }
   STATE.systemVersion = info;
+  // Source unique de la version : injectée dans la sidebar (cf. brand-version
+  // de index.html, initialement "v…" placeholder).
+  if (info.version) {
+    const tag = document.getElementById('brand-version');
+    if (tag) tag.textContent = 'v' + info.version;
+  }
   return info;
 }
 
@@ -3062,6 +3047,9 @@ function modalImportMCPs() {
 
 /* ================================================================
    PAGE: PLUGINS
+   ================================================================ */
+/* ================================================================
+   PAGE PLUGINS (marketplace + installed + scope par workspace)
    ================================================================ */
 async function renderPlugins() {
   setBreadcrumbs([{ label: 'Plugins' }]);
@@ -4037,6 +4025,9 @@ const HELP_TOPICS = [
   { id: 'reference',      emoji: '⌨️', title: 'Référence & dépannage', summary: 'Raccourcis clavier et solutions aux problèmes courants.',         sections: ['shortcuts', 'troubleshoot'] },
 ];
 
+/* ================================================================
+   PAGE AIDE (hub + topics)
+   ================================================================ */
 async function renderHelp() {
   setBreadcrumbs([{ label: 'Aide' }]);
   const tourBtn = btn('🎯 Visite guidée', 'btn-primary', null);
@@ -4148,6 +4139,9 @@ function renderHelpTopic(topic) {
 
 /* ================================================================
    PAGE: SKILLS
+   ================================================================ */
+/* ================================================================
+   PAGE SKILLS (library + global + scope par workspace + import GitHub)
    ================================================================ */
 async function renderSkills() {
   setBreadcrumbs([{ label: 'Skills' }]);
@@ -4750,6 +4744,9 @@ async function modalEditSkillFiles(scope, name) {
 
 /* ================================================================
    PAGE: TEMPLATES
+   ================================================================ */
+/* ================================================================
+   PAGE TEMPLATES (catalogue + édition + duplication)
    ================================================================ */
 async function renderTemplates() {
   setBreadcrumbs([{ label: 'Templates' }]);
@@ -5440,6 +5437,9 @@ function refxSparkline(series) {
   return svg.outerHTML;
 }
 
+/* ================================================================
+   PAGE REFLEXIVE (overview + interactions + propositions + mesures)
+   ================================================================ */
 async function renderReflexive() {
   const hash = location.hash || '#/reflexive';
   const sub = hash.replace(/^#\/reflexive\/?/, '') || 'overview';
@@ -5869,6 +5869,9 @@ async function renderReflexiveMeasurements(host) {
   }
 }
 
+/* ================================================================
+   PAGE OUTILS (système : apparence, env, backups, hooks)
+   ================================================================ */
 async function renderTools() {
   setBreadcrumbs([{ label: 'Outils' }]);
   setTopbarActions([]);
@@ -5886,9 +5889,21 @@ async function renderTools() {
 
   const stack = el('div', 'tools-stack');
 
-  // Démarrage — checklist progressive (toujours visible, accessible à tout moment)
+  // Démarrage — note de redirection vers Home (la checklist complète y vit)
   stack.appendChild(el('div', 'section-label', '<span class="num">A.</span> Démarrage'));
-  stack.appendChild(buildOnboardingChecklist());
+  const startupNote = el('div', 'card');
+  const startupP = document.createElement('p');
+  startupP.className = 'muted';
+  startupP.style.cssText = 'margin:0;font-size:13px';
+  startupP.appendChild(document.createTextNode("L'état d'avancement de la mise en route est affiché sur la page "));
+  const startupLink = document.createElement('a');
+  startupLink.href = '#/';
+  startupLink.style.color = 'var(--accent)';
+  startupLink.textContent = 'Accueil';
+  startupP.appendChild(startupLink);
+  startupP.appendChild(document.createTextNode(" tant que la checklist n'est pas complète."));
+  startupNote.appendChild(startupP);
+  stack.appendChild(startupNote);
 
   // Apparence — sélecteur de thème
   stack.appendChild(el('div', 'section-label', '<span class="num">B.</span> Apparence & assistance'));
@@ -6001,23 +6016,6 @@ async function renderTools() {
   const backupHost = el('div');
   stack.appendChild(backupHost);
   loadBackups(backupHost);
-
-  // Skills
-  stack.appendChild(el('div', 'section-label', '<span class="num">G.</span> Skills globaux'));
-  const skillsHost = el('div');
-  stack.appendChild(skillsHost);
-  renderGlobalSkills(skillsHost);
-
-  // Cleanup
-  stack.appendChild(el('div', 'section-label', '<span class="num">H.</span> Maintenance'));
-  const maint = el('div', 'card');
-  const maintBtn = btn('Nettoyer .bat orphelins', 'btn', I.trash);
-  maintBtn.addEventListener('click', async () => {
-    try { const r = await API.post('/api/cleanup/orphan-bats', {}); toastOk(`${(r.removed || []).length} fichier(s) supprimé(s)`); }
-    catch (e) { toastErr(e.message); }
-  });
-  maint.appendChild(maintBtn);
-  stack.appendChild(maint);
 
   page.appendChild(stack);
   c.appendChild(page);
@@ -6479,7 +6477,7 @@ function modalEditSettings(wsId) {
 function modalPermissions(wsId) {
   (async () => {
     let settings = {};
-    try { settings = JSON.parse((await API.get(`/api/workspaces/${wsId}/settings`)).content) || {}; } catch {}
+    try { settings = JSON.parse((await API.get(`/api/workspaces/${wsId}/settings`)).content) || {}; } catch (e) { console.warn(`[permissions] parse settings.json ws=${wsId} échoué :`, e.message); }
     const perms = settings.permissions || {};
     const allow = (perms.allow || []).join('\n');
     const deny = (perms.deny || []).join('\n');
@@ -6507,9 +6505,9 @@ function modalHooks(wsId) {
   (async () => {
     let current = {};
     if (wsId) {
-      try { const s = JSON.parse((await API.get(`/api/workspaces/${wsId}/settings`)).content); current = s.hooks || {}; } catch {}
+      try { const s = JSON.parse((await API.get(`/api/workspaces/${wsId}/settings`)).content); current = s.hooks || {}; } catch (e) { console.warn(`[hooks] parse settings.json ws=${wsId} échoué :`, e.message); }
     } else {
-      try { current = (await API.get('/api/hooks/global')).hooks || {}; } catch {}
+      try { current = (await API.get('/api/hooks/global')).hooks || {}; } catch (e) { console.warn('[hooks] fetch hooks globaux échoué :', e.message); }
     }
     const body = el('div');
     body.innerHTML = `
@@ -6832,12 +6830,10 @@ document.addEventListener('keydown', (e) => {
   if (e.key === '/' || (e.key === 'k' && (e.metaKey || e.ctrlKey))) {
     e.preventDefault(); openPalette(); return;
   }
-  if (e.key === 'n') return modalNewWorkspace();
-  if (e.key === 'm') return modalNewMCP();
-  if (e.key === 's') {
-    API.post('/api/sync-all', {}).then(() => toastOk('Sync terminé')).catch(e => toastErr(e.message));
-    return;
-  }
+  // Raccourcis simple-touche n/m/s retirés : ils se déclenchaient sur
+  // n'importe quelle frappe hors input, ouvrant des modals par accident.
+  // Les chords 'g <lettre>' ci-dessous couvrent la navigation. Pour
+  // créer rapidement, passer par la palette ('/' ou Ctrl+K).
   // 'g' chord -> next key navigates
   if (e.key === 'g') { lastKey = 'g'; lastKeyAt = Date.now(); return; }
   if (lastKey === 'g' && Date.now() - lastKeyAt < 1000) {
@@ -7075,14 +7071,14 @@ function init() {
 
     // Vérification de mise à jour en arrière-plan (non-bloquante)
     setTimeout(() => {
-      checkForUpdates().then(renderUpdateBadge).catch(() => {});
+      checkForUpdates().then(renderUpdateBadge).catch(e => console.warn('[updates] check au boot échoué :', e.message));
     }, 1500);
 
     // Re-check périodique (toutes les 30 min) sans force, donc respecte
     // l'anti-spam UPDATE_CHECK_INTERVAL_MS pour le fetch distant.
     // Ce poller global n'est PAS géré par clearPagePollers (volontaire).
     setInterval(() => {
-      checkForUpdates().then(renderUpdateBadge).catch(() => {});
+      checkForUpdates().then(renderUpdateBadge).catch(e => console.warn('[updates] check périodique échoué :', e.message));
     }, 30 * 60 * 1000);
   });
 }
