@@ -75,6 +75,11 @@
   <script src="/js/toast.js"></script>
   <script src="/js/modal.js"></script>
   <script src="/js/nav.js"></script>
+  <!-- Pages : forward-refs vers modal*/render* encore dans app.js
+       sont resolus au runtime (post-load, hashchange uniquement). -->
+  <script src="/js/pages/home.js"></script>
+  <script src="/js/pages/tools.js"></script>
+  <script src="/js/pages/templates.js"></script>
   <script src="/app.js"></script>
   <!-- router.js charge APRES app.js : la fonction route() reference les
        renderXxx() encore definis dans app.js. Les hashchange listener

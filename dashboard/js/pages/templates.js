@@ -1,0 +1,559 @@
+/* ================================================================
+   Nebula - Page Templates (catalogue + edition + duplication)
+   ----------------------------------------------------------------
+   renderTemplates : page Templates avec card-grid + help-card.
+   templateCard : card par template avec qualite async.
+   modalNewTemplate : 2 etapes (starter + meta).
+   modalPreviewTemplateFile : apercu avec valeurs de test.
+   modalEditTemplate : editeur tree + textarea + qualite refresh.
+   modalDuplicateTemplate : duplication par source -> nouveau id.
+
+   Dependances foundations : STATE, API, escapeHtml, el, btn, fmtBytes,
+   I.*, setBreadcrumbs, setTopbarActions, openModal, toastOk, toastErr,
+   confirmDialog, route.
+
+   Ref : CM-2 batch 7, refactor 2026-05-13.
+   ================================================================ */
+'use strict';
+
+async function renderTemplates() {
+  setBreadcrumbs([{ label: 'Templates' }]);
+  const newBtn = btn('Nouveau template', 'btn-primary', I.plus);
+  newBtn.addEventListener('click', () => modalNewTemplate());
+  setTopbarActions([newBtn]);
+
+  const c = $('#content');
+  c['innerHTML'] = '';
+  const page = el('div', 'page');
+  page.appendChild(el('div', 'page-header', `
+    <div class="page-header-text">
+      <div class="page-eyebrow"><span class="index">03.</span><span>Bibliothèque</span></div>
+      <h1 class="page-title">Templates</h1>
+      <p class="page-subtitle">Modèles réutilisables pour créer de nouveaux workspaces — clique <strong>+ Nouveau template</strong> pour démarrer.</p>
+    </div>
+  `));
+
+  // Note "Comment utiliser" (collapsible) — refondu
+  const help = el('details', 'help-card');
+  help.open = !STATE.templates.length;  // ouvert par défaut si aucun template
+  help['innerHTML'] = `
+    <summary>
+      <span class="help-icon">${I.info}</span>
+      <span class="help-title">Comment ça marche ?</span>
+      <span class="help-toggle">${I.down}</span>
+    </summary>
+    <div class="help-body">
+      <div class="help-grid">
+        <div>
+          <h4>📦 Qu'est-ce qu'un template ?</h4>
+          <p>Un <strong>dossier modèle</strong> dans <code class="mono">templates/&lt;id&gt;/</code>. À chaque "Nouveau workspace" qui le sélectionne, Nebula copie tout le contenu et remplace les <code class="mono">{{placeholders}}</code> par les valeurs saisies dans le formulaire.</p>
+        </div>
+        <div>
+          <h4>✨ Exemple concret avant/après</h4>
+          <p style="margin-bottom:6px">Dans <code class="mono">CLAUDE.md</code> du template :</p>
+          <pre class="help-code"># {{label}}
+
+Projet : {{name}}
+Créé : {{date}}</pre>
+          <p style="margin:6px 0">Devient à la création (ID=<code class="mono">audit</code>, Label=<code class="mono">Audit Prod</code>) :</p>
+          <pre class="help-code"># Audit Prod
+
+Projet : audit
+Créé : 2026-04-27</pre>
+        </div>
+        <div>
+          <h4>🔤 Les 6 placeholders</h4>
+          <table style="font-size:12px;width:100%;border-collapse:collapse">
+            <tr><td><code class="mono">{{name}}</code></td><td>ID technique du workspace</td></tr>
+            <tr><td><code class="mono">{{label}}</code></td><td>Libellé lisible</td></tr>
+            <tr><td><code class="mono">{{emoji}}</code></td><td>Emoji choisi</td></tr>
+            <tr><td><code class="mono">{{description}}</code></td><td>Description courte</td></tr>
+            <tr><td><code class="mono">{{tools}}</code></td><td>Outils / contexte</td></tr>
+            <tr><td><code class="mono">{{date}}</code></td><td>Date du jour ISO</td></tr>
+          </table>
+        </div>
+        <div>
+          <h4>✅ Anatomie d'un bon template</h4>
+          <ul class="help-list">
+            <li><strong>CLAUDE.md</strong> — contexte projet (Claude le lit à chaque session)</li>
+            <li><strong>.gitignore</strong> — adapté au stack (Python, Node, etc.)</li>
+            <li><strong>README.md</strong> — pour humains</li>
+            <li>Structure plate, &lt; 50 fichiers</li>
+          </ul>
+        </div>
+        <div>
+          <h4>⚠️ Pièges classiques</h4>
+          <ul class="help-list">
+            <li>Ne jamais inclure <code class="mono">.git/</code>, <code class="mono">node_modules/</code>, <code class="mono">__pycache__/</code></li>
+            <li>Pas de fichiers binaires &gt; 512 Kio (non éditables ensuite)</li>
+            <li>Pas de secrets en dur — utilise <code class="mono">\${VAR}</code> et <code class="mono">.env.local</code></li>
+            <li>Toujours utiliser <code class="mono">{{name}}</code> et <code class="mono">{{label}}</code> au moins 1 fois</li>
+          </ul>
+        </div>
+        <div>
+          <h4>🚀 Démarrage rapide</h4>
+          <p>Clique <strong>+ Nouveau template</strong> → choisis un starter (Standard recommandé pour les novices) → édite le contenu → c'est prêt à être utilisé pour créer des workspaces.</p>
+        </div>
+      </div>
+    </div>
+  `;
+  page.appendChild(help);
+
+  const tpls = STATE.templates;
+  if (!tpls.length) {
+    const empty = el('div', 'empty');
+    empty['innerHTML'] = `
+      <div class="empty-title">Aucun template</div>
+      <p class="muted">Clique <strong>+ Nouveau template</strong> en haut à droite pour démarrer avec un starter pré-rempli.</p>
+    `;
+    const newCta = btn('+ Nouveau template', 'btn-primary', I.plus);
+    newCta.style.marginTop = '12px';
+    newCta.addEventListener('click', () => modalNewTemplate());
+    empty.appendChild(newCta);
+    page.appendChild(empty);
+  } else {
+    const grid = el('div', 'template-grid');
+    for (const t of tpls) {
+      grid.appendChild(templateCard(t));
+    }
+    page.appendChild(grid);
+  }
+  c.appendChild(page);
+}
+
+function templateCard(t) {
+  const card = el('div', 'template-card');
+  // Le starter "Standard" est mis en avant si présent
+  const isRecommended = t.id === 'standard';
+  card['innerHTML'] = `
+    ${isRecommended ? '<div class="template-recommended">⭐ Recommandé</div>' : ''}
+    <div class="template-emoji">${escapeHtml(t.emoji || '📦')}</div>
+    <h3 class="template-name">${escapeHtml(t.label || t.id)}</h3>
+    <p class="template-desc">${escapeHtml(t.description || '—')}</p>
+    <div class="template-meta">${t.file_count} fichier${t.file_count > 1 ? 's' : ''} · <span class="mono">${escapeHtml(t.id)}</span></div>
+    <div class="template-quality" data-quality>
+      <span class="dim" style="font-size:11px">⏳ qualité…</span>
+    </div>
+  `;
+  const actions = el('div', 'template-actions');
+  const ed = btn('Éditer', 'btn-sm btn-primary', I.edit);
+  ed.addEventListener('click', () => modalEditTemplate(t.id));
+  const open = btn('Dossier', 'btn-sm btn-ghost', I.folder);
+  open.title = 'Ouvrir dans l\'explorateur';
+  open.addEventListener('click', async () => {
+    try { const r = await API.post('/api/open', { target: `template:${t.id}` }); toastOk(r.message || 'Ouvert'); }
+    catch (e) { toastErr(e.message); }
+  });
+  const dup = btn('', 'btn-sm btn-ghost btn-icon-only', I.copy);
+  dup.title = 'Dupliquer';
+  dup.addEventListener('click', () => modalDuplicateTemplate(t));
+  const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
+  rm.title = 'Supprimer';
+  rm.addEventListener('click', () => confirmDialog(`Supprimer le template ${t.id} ?`, async () => {
+    try {
+      await API.del(`/api/templates/${t.id}`);
+      toastOk('Supprimé');
+      STATE.templates = STATE.templates.filter(x => x.id !== t.id);
+      route({ silent: true });
+    }
+    catch (e) { toastErr(e.message); }
+  }, { danger: true }));
+  actions.append(ed, open, dup, rm);
+  card.appendChild(actions);
+
+  // Fetch qualité en async (non-bloquant)
+  const qualHost = card.querySelector('[data-quality]');
+  API.get(`/api/templates/${t.id}/quality`).then(q => {
+    const sugs = q.suggestions || [];
+    const hasErr = sugs.some(s => s.level === 'error');
+    const hasWarn = sugs.some(s => s.level === 'warn');
+    const hasInfo = sugs.some(s => s.level === 'info');
+    let cls, icon, summary;
+    if (hasErr) { cls = 'badge-err'; icon = '❌'; summary = `${sugs.length} problème${sugs.length > 1 ? 's' : ''}`; }
+    else if (hasWarn) { cls = 'badge-warn'; icon = '⚠️'; summary = `${sugs.length} suggestion${sugs.length > 1 ? 's' : ''}`; }
+    else if (hasInfo) { cls = 'badge'; icon = 'ℹ️'; summary = `${sugs.length} info${sugs.length > 1 ? 's' : ''}`; }
+    else { cls = 'badge-ok'; icon = '✅'; summary = 'Qualité OK'; }
+    qualHost['innerHTML'] = `<span class="badge ${cls}" title="${escapeHtml(sugs.map(s => '• ' + s.msg).join('\n') || 'Aucune suggestion')}">${icon} ${summary}</span>`;
+  }).catch(() => {
+    qualHost['innerHTML'] = '';
+  });
+
+  return card;
+}
+
+function modalNewTemplate() {
+  const body = el('div');
+  const STARTERS = [
+    { id: 'standard', emoji: '⭐', name: 'Standard', recommended: true,
+      desc: 'CLAUDE.md + .gitignore + README.md pré-remplis avec tous les placeholders. Idéal pour démarrer.' },
+    { id: 'empty',    emoji: '📭', name: 'Vide',
+      desc: 'Juste le .template.json. Tu construis tout à la main.' },
+    { id: 'python',   emoji: '🐍', name: 'Python',
+      desc: 'CLAUDE.md + requirements.txt + .gitignore Python + README.md.' },
+    { id: 'node',     emoji: '🟢', name: 'Node.js',
+      desc: 'CLAUDE.md + package.json + .gitignore Node + README.md.' },
+    { id: 'docker',   emoji: '🐳', name: 'Docker',
+      desc: 'CLAUDE.md + Dockerfile + docker-compose.yml + .dockerignore.' },
+  ];
+
+  body['innerHTML'] = `
+    <div class="callout callout-info" style="margin-bottom:var(--sp-3)">
+      <div>
+        <strong>2 étapes :</strong> 1) choisis un starter ; 2) renseigne les méta. Tu pourras tout éditer ensuite.
+      </div>
+    </div>
+    <div class="section-label" style="margin-bottom:var(--sp-2)"><span class="num">1</span> Choisis un starter</div>
+    <div class="recipes-grid" data-starters></div>
+    <div class="section-label" style="margin-top:var(--sp-3);margin-bottom:var(--sp-2)"><span class="num">2</span> Méta du template</div>
+    <div class="field-row">
+      <div class="field" style="flex:0 0 80px"><label class="field-label">Emoji</label><input class="input" name="emoji" value="📦" maxlength="4"></div>
+      <div class="field" style="flex:1"><label class="field-label">ID *</label><input class="input mono" name="id" placeholder="mon-template" autocomplete="off"></div>
+      <div class="field" style="flex:2"><label class="field-label">Label *</label><input class="input" name="label" placeholder="Mon Template"></div>
+    </div>
+    <div class="field"><label class="field-label">Description</label><input class="input" name="description" placeholder="À quoi sert ce template (1 phrase)"></div>
+  `;
+
+  const startersHost = body.querySelector('[data-starters]');
+  let selectedStarter = 'standard';
+  for (const s of STARTERS) {
+    const card = el('label', 'recipe-card');
+    card.style.cursor = 'pointer';
+    card['innerHTML'] = `
+      <input type="radio" name="starter" value="${s.id}" ${s.id === 'standard' ? 'checked' : ''} style="margin-right:8px">
+      <div class="recipe-emoji">${escapeHtml(s.emoji || '🧠')}</div>
+      <div class="recipe-body">
+        <div class="recipe-name">${escapeHtml(s.name)}${s.recommended ? ' <span class="badge badge-ok" style="margin-left:6px">recommandé novices</span>' : ''}</div>
+        <div class="recipe-desc">${escapeHtml(s.desc)}</div>
+      </div>
+    `;
+    card.querySelector('input').addEventListener('change', (e) => {
+      if (e.target.checked) selectedStarter = s.id;
+    });
+    startersHost.appendChild(card);
+  }
+
+  const cancel = btn('Annuler', 'btn-ghost');
+  const ok = btn('Créer le template', 'btn-primary', I.plus);
+  const { close } = openModal({ title: 'Nouveau template', body, footer: [cancel, ok], wide: true });
+  cancel.addEventListener('click', close);
+  ok.addEventListener('click', async () => {
+    const get = (n) => body.querySelector(`[name=${n}]`).value.trim();
+    const payload = {
+      id: get('id'),
+      label: get('label') || get('id'),
+      emoji: get('emoji') || '📦',
+      description: get('description'),
+      starter: selectedStarter,
+    };
+    if (!/^[a-zA-Z0-9_-]{1,40}$/.test(payload.id)) { toastErr('ID invalide (a-z, 0-9, _, -, max 40)'); return; }
+    ok.disabled = true;
+    try {
+      await API.post('/api/templates', payload);
+      toastOk(`Template '${payload.id}' créé (starter: ${selectedStarter})`);
+      close();
+      STATE.loading = true;
+      // Ouvre directement l'éditeur sur le nouveau
+      await route();
+      modalEditTemplate(payload.id);
+    } catch (e) {
+      toastErr(e.message);
+      ok.disabled = false;
+    }
+  });
+}
+
+function modalPreviewTemplateFile(path, data) {
+  const body = el('div');
+  if (data.binary || data.error) {
+    body['innerHTML'] = `<div class="error-box">${escapeHtml(data.error || 'Fichier binaire')}</div>`;
+  } else {
+    const vars = data.test_vars || {};
+    const varList = Object.entries(vars).map(([k, v]) => `<code class="mono">{{${k}}}</code> → <code class="mono">${escapeHtml(v)}</code>`).join(' · ');
+    body['innerHTML'] = `
+      <div class="callout callout-info" style="margin-bottom:var(--sp-3)">
+        <div>
+          <strong>Aperçu avec valeurs de test</strong>
+          <div class="dim" style="font-size:11.5px;margin-top:4px">${varList}</div>
+        </div>
+      </div>
+      <pre class="help-code" style="max-height:60vh;overflow:auto">${escapeHtml(data.preview || '')}</pre>
+    `;
+  }
+  const close = btn('Fermer', 'btn-ghost');
+  const { close: doClose } = openModal({ title: `Aperçu · ${path}`, body, footer: close, wide: true });
+  close.addEventListener('click', doClose);
+}
+
+async function modalEditTemplate(tplId) {
+  const body = el('div');
+  body['innerHTML'] = `<div class="page-loader"><div class="spinner"></div><span>Chargement du template…</span></div>`;
+  const closeBtn = btn('Fermer', 'btn-ghost');
+  const { close } = openModal({ title: `Template · ${tplId}`, body, footer: closeBtn, wide: true });
+  closeBtn.addEventListener('click', close);
+
+  let detail;
+  try { detail = await API.get(`/api/templates/${tplId}`); }
+  catch (e) { body['innerHTML'] = `<div class="error-box">${escapeHtml(e.message)}</div>`; return; }
+
+  body['innerHTML'] = `
+    <div class="tpl-meta-bar">
+      <input class="input" name="emoji" value="${escapeHtml(detail.emoji || '📦')}" maxlength="4" style="max-width:60px;text-align:center;font-size:18px">
+      <input class="input" name="label" value="${escapeHtml(detail.label || '')}" placeholder="Label" style="flex:1;min-width:160px">
+      <input class="input" name="description" value="${escapeHtml(detail.description || '')}" placeholder="Description" style="flex:2;min-width:200px">
+      <button class="btn btn-sm btn-primary" data-save-meta>Enregistrer</button>
+    </div>
+    <div class="dim mono" style="font-size:11px;margin-bottom:var(--sp-3)">${escapeHtml(detail.path)}</div>
+    <div data-quality-panel></div>
+    <div class="tpl-editor">
+      <aside class="tpl-tree">
+        <div class="tpl-tree-header">
+          <span class="section-label" style="margin:0;flex:1">Fichiers</span>
+          <button class="icon-btn" data-add-file title="Nouveau fichier">${I.plus}</button>
+        </div>
+        <div class="tpl-tree-list"></div>
+      </aside>
+      <main class="tpl-pane">
+        <div class="tpl-pane-empty">Sélectionne un fichier ou clique sur <strong>+</strong> pour en créer un.</div>
+      </main>
+    </div>
+  `;
+
+  // Save meta
+  body.querySelector('[data-save-meta]').addEventListener('click', async () => {
+    const get = n => body.querySelector(`[name=${n}]`).value.trim();
+    try {
+      await API.post(`/api/templates/${tplId}/meta`, { label: get('label'), description: get('description'), emoji: get('emoji') });
+      toastOk('Méta enregistrée');
+      STATE.loading = true;  // Refresh list later
+    } catch (e) { toastErr(e.message); }
+  });
+
+  // Panneau "Conseils & qualité" (async, refresh-able)
+  const qualHost = body.querySelector('[data-quality-panel]');
+  const refreshQuality = async () => {
+    try {
+      const q = await API.get(`/api/templates/${tplId}/quality`);
+      const sugs = q.suggestions || [];
+      const hasErr = sugs.some(s => s.level === 'error');
+      const hasWarn = sugs.some(s => s.level === 'warn');
+      const hasInfo = sugs.some(s => s.level === 'info');
+      let cls, icon, summary;
+      if (hasErr) { cls = 'callout-error'; icon = '❌'; summary = `${sugs.length} problème${sugs.length > 1 ? 's' : ''}`; }
+      else if (hasWarn) { cls = 'callout-warn'; icon = '⚠️'; summary = `${sugs.length} suggestion${sugs.length > 1 ? 's' : ''}`; }
+      else if (hasInfo) { cls = 'callout-info'; icon = 'ℹ️'; summary = `${sugs.length} info${sugs.length > 1 ? 's' : ''}`; }
+      else { cls = 'callout-success'; icon = '✅'; summary = 'rien à signaler'; }
+
+      const lines = sugs.map(s => {
+        const li = s.level === 'error' ? '❌' : s.level === 'warn' ? '⚠️' : 'ℹ️';
+        return `<li>${li} ${escapeHtml(s.msg)}</li>`;
+      }).join('');
+      const placeholders = (q.placeholders_used || []).length
+        ? `<div class="dim" style="font-size:11px;margin-top:6px">Placeholders détectés : ${q.placeholders_used.map(p => `<code class="mono">{{${p}}}</code>`).join(' ')}</div>`
+        : `<div class="dim" style="font-size:11px;margin-top:6px">Aucun placeholder utilisé — le template ne s'adapte pas au workspace créé.</div>`;
+      // Ouvert par défaut si erreur ou warn ; fermé pour info-only et OK
+      const openByDefault = hasErr || hasWarn;
+      qualHost['innerHTML'] = `
+        <details class="callout ${cls}" style="margin-bottom:var(--sp-3)" ${openByDefault ? 'open' : ''}>
+          <summary style="cursor:pointer;font-weight:600">${icon} Conseils & qualité — ${summary}</summary>
+          ${lines ? `<ul class="help-list" style="margin:8px 0 0">${lines}</ul>` : ''}
+          ${placeholders}
+        </details>
+      `;
+    } catch { qualHost['innerHTML'] = ''; }
+  };
+  refreshQuality();
+
+  const treeList = body.querySelector('.tpl-tree-list');
+  const pane = body.querySelector('.tpl-pane');
+  let files = detail.files.slice();
+  let currentPath = null;
+
+  const renderTree = () => {
+    treeList['innerHTML'] = '';
+    if (!files.length) {
+      treeList['innerHTML'] = '<div class="dim" style="padding:var(--sp-3);font-size:12px">Aucun fichier</div>';
+      return;
+    }
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    for (const f of files) {
+      const item = el('div', 'tpl-tree-item' + (f.path === currentPath ? ' is-active' : ''));
+      item['innerHTML'] = `
+        <span class="tpl-tree-name mono">${escapeHtml(f.path)}</span>
+        <span class="dim mono" style="font-size:10px">${fmtBytes(f.size)}</span>
+      `;
+      item.addEventListener('click', () => openFile(f.path));
+      const rm = el('button', 'icon-btn tpl-tree-del', I.x);
+      rm.title = 'Supprimer';
+      rm.addEventListener('click', (e) => {
+        e.stopPropagation();
+        confirmDialog(`Supprimer ${f.path} ?`, async () => {
+          try {
+            await API.del(`/api/templates/${tplId}/file?path=${encodeURIComponent(f.path)}`);
+            files = files.filter(x => x.path !== f.path);
+            if (currentPath === f.path) { currentPath = null; pane['innerHTML'] = '<div class="tpl-pane-empty">Sélectionne un fichier.</div>'; }
+            renderTree(); toastOk('Supprimé');
+          } catch (err) { toastErr(err.message); }
+        }, { danger: true });
+      });
+      item.appendChild(rm);
+      treeList.appendChild(item);
+    }
+  };
+
+  const openFile = async (path) => {
+    currentPath = path;
+    renderTree();
+    pane['innerHTML'] = `<div class="page-loader"><div class="spinner"></div></div>`;
+    let data;
+    try { data = await API.get(`/api/templates/${tplId}/file?path=${encodeURIComponent(path)}`); }
+    catch (e) { pane['innerHTML'] = `<div class="error-box">${escapeHtml(e.message)}</div>`; return; }
+    if (data.binary || data.error) {
+      pane['innerHTML'] = `<div class="error-box">${escapeHtml(data.error || 'Fichier binaire non éditable')}</div>`;
+      return;
+    }
+    pane['innerHTML'] = `
+      <div class="tpl-pane-header">
+        <span class="mono" style="font-size:13px;flex:1">${escapeHtml(path)}</span>
+        <span class="dim mono" style="font-size:11px">${fmtBytes(data.size)}</span>
+        <button class="btn btn-sm btn-ghost" data-preview-file title="Aperçu avec valeurs de test">👁 Aperçu</button>
+        <button class="btn btn-sm btn-primary" data-save-file>Enregistrer</button>
+      </div>
+      <textarea class="textarea textarea-code tpl-editor-textarea" spellcheck="false"></textarea>
+      <div class="dim" style="font-size:11px;margin-top:6px">💡 Astuce : Ctrl+S enregistre. Bouton 👁 pour voir le rendu après substitution des <code class="mono">{{placeholders}}</code>.</div>
+    `;
+    const ta = pane.querySelector('textarea');
+    ta.value = data.content;
+    ta.focus();
+    pane.querySelector('[data-save-file]').addEventListener('click', async () => {
+      try {
+        const r = await API.post(`/api/templates/${tplId}/file`, { path, content: ta.value });
+        const f = files.find(x => x.path === path);
+        if (f) f.size = r.size;
+        renderTree();
+        refreshQuality();
+        toastOk('Enregistré');
+      } catch (e) { toastErr(e.message); }
+    });
+    pane.querySelector('[data-preview-file]').addEventListener('click', async () => {
+      try {
+        const r = await API.get(`/api/templates/${tplId}/preview?path=${encodeURIComponent(path)}`);
+        modalPreviewTemplateFile(path, r);
+      } catch (e) { toastErr(e.message); }
+    });
+    // Ctrl+S to save
+    ta.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        pane.querySelector('[data-save-file]').click();
+      }
+    });
+  };
+
+  // Add file — sélecteur dossier + nom de fichier
+  body.querySelector('[data-add-file]').addEventListener('click', () => {
+    // Liste des dossiers existants dans le template (extrait des paths fichiers)
+    const folders = new Set(['']);  // racine
+    for (const f of files) {
+      const parts = f.path.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        folders.add(parts.slice(0, i).join('/'));
+      }
+    }
+    const folderList = Array.from(folders).sort();
+
+    const fbody = el('div');
+    fbody['innerHTML'] = `
+      <p class="muted" style="margin-top:0">Choisis le dossier où placer le fichier (ou crée un nouveau sous-dossier).</p>
+      <div class="field-row">
+        <div class="field" style="flex:2">
+          <label class="field-label">Dossier</label>
+          <select class="select" name="folder">
+            ${folderList.map(f => `<option value="${escapeHtml(f)}">${f === '' ? '/ (racine)' : escapeHtml('/' + f)}</option>`).join('')}
+            <option value="__new__">＋ Nouveau sous-dossier…</option>
+          </select>
+        </div>
+        <div class="field" style="flex:3">
+          <label class="field-label">Nom du fichier *</label>
+          <input class="input mono" name="filename" placeholder="CLAUDE.md, settings.json…">
+        </div>
+      </div>
+      <div class="field" data-new-folder hidden>
+        <label class="field-label">Nom du sous-dossier (peut contenir <code class="mono">/</code>)</label>
+        <input class="input mono" name="new_folder" placeholder="config/sub">
+      </div>
+      <div class="field"><label class="field-label">Contenu initial</label><textarea class="textarea textarea-code" name="content" rows="8" placeholder="# {{label}}&#10;&#10;{{description}}"></textarea></div>
+      <div class="dim" style="font-size:11.5px"><strong>Aperçu :</strong> <span class="mono" data-preview>—</span></div>
+    `;
+
+    const folderSel = fbody.querySelector('[name=folder]');
+    const filenameInput = fbody.querySelector('[name=filename]');
+    const newFolderField = fbody.querySelector('[data-new-folder]');
+    const newFolderInput = fbody.querySelector('[name=new_folder]');
+    const preview = fbody.querySelector('[data-preview]');
+
+    const updatePreview = () => {
+      const folder = folderSel.value === '__new__'
+        ? newFolderInput.value.trim().replace(/^\/+|\/+$/g, '')
+        : folderSel.value;
+      const filename = filenameInput.value.trim();
+      const full = [folder, filename].filter(Boolean).join('/');
+      preview.textContent = full || '—';
+    };
+
+    folderSel.addEventListener('change', () => {
+      newFolderField.hidden = folderSel.value !== '__new__';
+      if (folderSel.value === '__new__') newFolderInput.focus();
+      updatePreview();
+    });
+    [filenameInput, newFolderInput].forEach(i => i.addEventListener('input', updatePreview));
+
+    const cancel = btn('Annuler', 'btn-ghost');
+    const create = btn('Créer', 'btn-primary', I.plus);
+    const { close: closeAdd } = openModal({ title: 'Nouveau fichier dans le template', body: fbody, footer: [cancel, create] });
+    cancel.addEventListener('click', closeAdd);
+    setTimeout(() => filenameInput.focus(), 50);
+
+    create.addEventListener('click', async () => {
+      const folder = folderSel.value === '__new__'
+        ? newFolderInput.value.trim().replace(/^\/+|\/+$/g, '')
+        : folderSel.value;
+      const filename = filenameInput.value.trim();
+      if (!filename) { toastErr('Nom de fichier requis'); return; }
+      if (folderSel.value === '__new__' && !folder) { toastErr('Nom du sous-dossier requis'); return; }
+      const path = [folder, filename].filter(Boolean).join('/');
+      const content = fbody.querySelector('[name=content]').value;
+      try {
+        const r = await API.post(`/api/templates/${tplId}/file`, { path, content });
+        files.push({ path: r.path, size: r.size });
+        renderTree();
+        closeAdd();
+        toastOk('Fichier créé');
+        openFile(r.path);
+      } catch (e) { toastErr(e.message); }
+    });
+  });
+
+  renderTree();
+}
+
+function modalDuplicateTemplate(src) {
+  const body = el('div');
+  body['innerHTML'] = `
+    <div class="field-row">
+      <div class="field"><label class="field-label">Nouvel ID *</label><input class="input mono" name="id" placeholder="mon-template"></div>
+      <div class="field"><label class="field-label">Emoji</label><input class="input" name="emoji" value="📦"></div>
+    </div>
+    <div class="field"><label class="field-label">Label</label><input class="input" name="label" placeholder="Mon template"></div>
+    <div class="field"><label class="field-label">Description</label><input class="input" name="description"></div>
+  `;
+  const cancel = btn('Annuler', 'btn-ghost');
+  const ok = btn('Dupliquer', 'btn-primary', I.copy);
+  const { close } = openModal({ title: `Dupliquer ${src.label || src.id}`, body, footer: [cancel, ok] });
+  cancel.addEventListener('click', close);
+  ok.addEventListener('click', async () => {
+    const get = n => body.querySelector(`[name=${n}]`).value.trim();
+    const payload = { source: src.id, id: get('id'), emoji: get('emoji'), label: get('label'), description: get('description') };
+    try { await API.post('/api/templates/duplicate', payload); toastOk('Dupliqué'); close(); STATE.loading = true; route(); }
+    catch (e) { toastErr(e.message); }
+  });
+}
