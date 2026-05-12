@@ -541,6 +541,48 @@ def get_global_hooks() -> dict:
     return settings.get("hooks") or {}
 
 
+def get_hooks_errors(tail_lines: int = 200) -> tuple[int, dict]:
+    """Lit les dernières lignes du log d'erreurs des hooks réflexifs.
+
+    Couvre seulement les hooks réflexifs aujourd'hui (les autres hooks
+    .sh ne loggent pas à disque par défaut — leur sortie va dans le
+    transcript Claude Code et n'est pas accessible depuis Nebula).
+    Pour étendre la couverture : ajouter `>> dashboard/data/hook-events.log`
+    dans le hook concerné.
+    """
+    log_path = ROOT / "dashboard" / "data" / "reflexive_hook_errors.log"
+    if not log_path.exists():
+        return 200, {
+            "exists": False,
+            "lines": [],
+            "path": str(log_path),
+            "note": "Aucun log d'erreur hook réflexif (le fichier n'a jamais été créé). "
+                    "Les hooks .sh des autres types n'écrivent pas dans un log dédié "
+                    "(leur stderr va dans le transcript Claude Code).",
+        }
+    try:
+        # Lit la fin du fichier (cap raisonnable contre fichier énorme)
+        size = log_path.stat().st_size
+        max_read = 256 * 1024  # 256 KB max
+        with log_path.open("rb") as f:
+            if size > max_read:
+                f.seek(size - max_read)
+                f.readline()  # skip ligne tronquée
+            data = f.read()
+        text = data.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        lines = lines[-tail_lines:]
+        return 200, {
+            "exists": True,
+            "lines": lines,
+            "path": str(log_path),
+            "size": size,
+            "tail_lines": len(lines),
+        }
+    except OSError as e:
+        return 500, {"error": f"lecture échouée : {e}"}
+
+
 def set_global_hooks(hooks: dict) -> tuple[int, dict]:
     with _MUTATION_LOCK:
         settings = read_json(CLAUDE_SETTINGS, {}) or {}
@@ -606,6 +648,103 @@ def list_sessions_for_workspace(ws_id: str) -> list[dict]:
             log.warning("session illisible %s : %s", jsonl, e)
             continue
     return out
+
+
+def read_session_tail(ws_id: str, filename: str, offset: int = 0) -> tuple[int, dict]:
+    """Lit les nouvelles entrées du fichier session depuis l'octet `offset`.
+
+    Permet le polling live d'une session active. Retourne :
+        {messages: [...nouveaux msg], new_offset: <int>, mtime: <int>, size: <int>}
+
+    Ne renvoie que les messages user/assistant (cohérent avec
+    read_session_messages). Les lignes incomplètes (pas de \\n final)
+    sont ignorées et l'offset s'arrête au dernier \\n vu → la prochaine
+    lecture les capturera quand elles seront flushed.
+    """
+    if not safe_id(ws_id):
+        return 400, {"error": "id invalide"}
+    if "/" in filename or "\\" in filename or not filename.endswith(".jsonl"):
+        return 400, {"error": "filename invalide"}
+    w = next((x for x in list_workspaces() if x["id"] == ws_id), None)
+    if not w:
+        return 404, {"error": "workspace absent"}
+    pdir = project_dir_for_path(Path(w["path"]))
+    if not pdir:
+        return 404, {"error": "pas de projets Claude pour ce workspace"}
+    path = pdir / filename
+    if not path.exists():
+        return 404, {"error": "fichier absent"}
+
+    try:
+        st = path.stat()
+    except OSError as e:
+        return 500, {"error": f"stat échoué : {e}"}
+
+    # Si l'offset > size, le fichier a été tronqué/recréé : on relit depuis 0
+    if offset < 0 or offset > st.st_size:
+        offset = 0
+
+    messages: list[dict] = []
+    new_offset = offset
+    try:
+        with path.open("rb") as f:
+            f.seek(offset)
+            data = f.read()
+    except OSError as e:
+        return 500, {"error": f"lecture échouée : {e}"}
+
+    # Décodage et split par lignes complètes (terminées par \n)
+    text = data.decode("utf-8", errors="replace")
+    if not text.endswith("\n"):
+        # Dernière ligne potentiellement incomplète : on ne l'inclut pas
+        last_nl = text.rfind("\n")
+        if last_nl < 0:
+            return 200, {"messages": [], "new_offset": offset, "mtime": int(st.st_mtime), "size": st.st_size}
+        text = text[:last_nl + 1]
+        new_offset = offset + len(text.encode("utf-8"))
+    else:
+        new_offset = st.st_size
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try: entry = json.loads(line)
+        except json.JSONDecodeError: continue
+        t = entry.get("type")
+        if t not in ("user", "assistant"):
+            continue
+        msg = entry.get("message") or {}
+        content = msg.get("content")
+        formatted = ""
+        if isinstance(content, str):
+            formatted = content
+        elif isinstance(content, list):
+            parts = []
+            for c in content:
+                if isinstance(c, dict):
+                    if c.get("type") == "text":
+                        parts.append(c.get("text", ""))
+                    elif c.get("type") == "tool_use":
+                        parts.append(f"[tool_use: {c.get('name')}]")
+                    elif c.get("type") == "tool_result":
+                        tr = c.get("content", "")
+                        if isinstance(tr, list):
+                            tr = " ".join(x.get("text","") if isinstance(x, dict) else str(x) for x in tr)
+                        parts.append(f"[tool_result: {str(tr)[:500]}]")
+            formatted = "\n".join(parts)
+        messages.append({
+            "role": t,
+            "text": formatted[:5000],
+            "timestamp": entry.get("timestamp"),
+        })
+
+    return 200, {
+        "messages": messages,
+        "new_offset": new_offset,
+        "mtime": int(st.st_mtime),
+        "size": st.st_size,
+    }
 
 
 def read_session_messages(ws_id: str, filename: str, limit: int = 200) -> tuple[int, dict]:
@@ -708,14 +847,21 @@ def launch_resume(ws_id: str) -> tuple[int, dict]:
     if not safe_path(path):
         return 400, {"ok": False, "error": "chemin de workspace invalide"}
     try:
-        # /D définit le répertoire de démarrage du nouveau cmd (évite le double-quotage
-        # mal géré par list2cmdline quand on enchaîne `cd /d "path" && ...`).
-        # /k garde la fenêtre ouverte après exécution (utile si claude -c termine ou échoue).
-        subprocess.Popen(
-            ["cmd", "/c", "start", "", "/D", path, "cmd", "/k", "claude -c"],
+        # cmd /k directement (pas cmd /c start) pour que Popen.pid reste valide
+        # tant que la fenêtre cmd est ouverte. Permet d'enregistrer le PID
+        # dans active_sessions pour offrir un bouton Stop côté Nebula.
+        proc = subprocess.Popen(
+            ["cmd", "/k", "claude -c"],
+            cwd=path,
             creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
+            shell=False,
         )
-        return 200, {"ok": True, "message": f"Reprise session : {ws_id}"}
+        try:
+            from dashcore.active_sessions import register as _register
+            _register(ws_id, proc.pid, label=w.get("label") or ws_id)
+        except (ImportError, OSError) as e:
+            log.warning("active_sessions register failed for %s : %s", ws_id, e)
+        return 200, {"ok": True, "pid": proc.pid, "message": f"Reprise session : {ws_id}"}
     except OSError as e:
         return 500, {"ok": False, "error": f"Erreur : {e}"}
 

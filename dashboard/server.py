@@ -40,9 +40,10 @@ from dashcore.api_workspaces import (
     create_template, analyze_template_quality, preview_template_file,
     create_workspace, update_workspace, delete_workspace, duplicate_workspace,
     read_workspace_config, write_workspace_file, export_workspace, launch_resume,
-    list_sessions_for_workspace, read_session_messages,
+    list_sessions_for_workspace, read_session_messages, read_session_tail,
     get_workspace_settings, save_workspace_settings, patch_workspace_settings,
     get_global_hooks, set_global_hooks, register_existing_workspace,
+    get_hooks_errors,
 )
 from dashcore.api_files import (
     list_tree as fs_list_tree,
@@ -51,6 +52,11 @@ from dashcore.api_files import (
     delete_file as fs_delete_file,
     search_workspace as fs_search_workspace,
 )
+from dashcore.active_sessions import (
+    list_active as list_active_sessions,
+    kill as kill_active_session,
+)
+from dashcore.workspace_io import list_workspaces
 from dashcore.api_mcps import (
     add_or_update_mcp, delete_mcp, sync_workspace_mcps, sync_all_workspaces,
     workspace_mcp_status, mcp_live_check, scan_claude_config,
@@ -102,6 +108,10 @@ def h_get_ws_config(q, b, ws):    return read_workspace_config(ws)
 def h_get_ws_settings(q, b, ws):  return get_workspace_settings(ws)
 def h_get_ws_sessions(q, b, ws):  return 200, {"sessions": list_sessions_for_workspace(ws)}
 def h_get_ws_session(q, b, ws, f): return read_session_messages(ws, f)
+def h_get_ws_session_tail(q, b, ws, f):
+    try: offset = int(q.get("offset", ["0"])[0])
+    except (ValueError, TypeError): offset = 0
+    return read_session_tail(ws, f, offset=offset)
 def h_get_ws_skills(q, b, ws):    return 200, list_skills_for_workspace(ws)
 def h_get_ws_plugins(q, b, ws):   return 200, {"plugins": get_workspace_plugins(ws)}
 def h_get_ws_mcp_check(q, b, ws): return mcp_live_check(ws)
@@ -146,8 +156,21 @@ def h_del_ws_fs_file(q, b, ws):
 def h_post_set_ws_plugin(q, b, ws):      return set_workspace_plugin(ws, b.get("plugin_id", ""), b.get("enabled"))
 def h_post_launch(q, b, ws):
     if not safe_id(ws): return 400, {"error": "id invalide"}
-    return launch_script(f"launch-{ws}.bat")
+    # On passe ws_id + label pour permettre le tracking dans active_sessions
+    # (l'utilisateur pourra Stop la session depuis Nebula).
+    ws_obj = next((x for x in list_workspaces() if x["id"] == ws), None)
+    label = ws_obj.get("label") if ws_obj else None
+    return launch_script(f"launch-{ws}.bat", ws_id=ws, ws_label=label)
 def h_post_launch_resume(q, b, ws):      return launch_resume(ws)
+def h_get_sessions_active(q, b):         return 200, {"sessions": list_active_sessions()}
+def h_get_hooks_errors(q, b):
+    try: tail = int(q.get("tail", ["200"])[0])
+    except (ValueError, TypeError): tail = 200
+    return get_hooks_errors(tail_lines=tail)
+def h_post_stop_ws_session(q, b, ws):
+    if not safe_id(ws): return 400, {"error": "id invalide"}
+    ok, msg = kill_active_session(ws)
+    return (200 if ok else 400), {"ok": ok, "message": msg}
 
 def h_del_ws(q, b, ws):
     purge = (q.get("purge", [""])[0] or "").lower() in ("1", "true", "yes")
@@ -405,11 +428,14 @@ ROUTES_GET = [
     (re.compile(rf"^/api/workspaces/({_ID})/config$"),                                      h_get_ws_config),
     (re.compile(rf"^/api/workspaces/({_ID})/settings$"),                                    h_get_ws_settings),
     (re.compile(rf"^/api/workspaces/({_ID})/sessions$"),                                    h_get_ws_sessions),
+    (re.compile(rf"^/api/workspaces/({_ID})/sessions/([^/]+)/tail$"),                       h_get_ws_session_tail),
     (re.compile(rf"^/api/workspaces/({_ID})/sessions/([^/]+)$"),                            h_get_ws_session),
     (re.compile(rf"^/api/workspaces/({_ID})/skills$"),                                      h_get_ws_skills),
     (re.compile(rf"^/api/workspaces/({_ID})/plugins$"),                                     h_get_ws_plugins),
     (re.compile(rf"^/api/workspaces/({_ID})/mcp-check$"),                                   h_get_ws_mcp_check),
     (re.compile(rf"^/api/workspaces/({_ID})/export$"),                                      h_get_ws_export),
+    # Sessions actives (registre PID des cmd lancees depuis Nebula)
+    (re.compile(rf"^/api/sessions/active$"),                                                h_get_sessions_active),
     # Workspace file explorer (lecture)
     (re.compile(rf"^/api/workspaces/({_ID})/fs/tree$"),                                     h_get_ws_fs_tree),
     (re.compile(rf"^/api/workspaces/({_ID})/fs/file$"),                                     h_get_ws_fs_file),
@@ -454,6 +480,7 @@ ROUTES_GET = [
     (re.compile(rf"^/api/backups$"),                                                        h_get_backups),
     (re.compile(rf"^/api/journal$"),                                                        h_get_journal),
     (re.compile(rf"^/api/hooks/global$"),                                                   h_get_hooks_global),
+    (re.compile(rf"^/api/hooks/errors$"),                                                   h_get_hooks_errors),
     (re.compile(rf"^/api/search$"),                                                         h_get_search),
     (re.compile(rf"^/api/setup/scan$"),                                                     h_get_setup_scan),
     (re.compile(rf"^/api/ui-state$"),                                                       h_get_ui_state),
@@ -480,6 +507,7 @@ ROUTES_POST = [
     (re.compile(rf"^/api/workspaces/({_ID})/plugins$"),                                     h_post_set_ws_plugin),
     (re.compile(rf"^/api/launch/({_ID})$"),                                                 h_post_launch),
     (re.compile(rf"^/api/launch-resume/({_ID})$"),                                          h_post_launch_resume),
+    (re.compile(rf"^/api/workspaces/({_ID})/stop$"),                                        h_post_stop_ws_session),
     # MCPs
     (re.compile(rf"^/api/mcps$"),                                                           h_post_add_mcp),
     (re.compile(rf"^/api/mcps/import$"),                                                    h_post_import_mcps),

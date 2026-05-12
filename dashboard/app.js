@@ -153,6 +153,7 @@ const STATE = {
   skillsLibrary: [],
   stats: {},
   wsMcps: {},      // ws_id -> {active, has_file}
+  activeSessions: {},  // ws_id -> {pid, launched_at, label} — sessions Claude Code lancées depuis Nebula
   sanity: null,
   journalCount: 0,
   filter: { mcp: '' },
@@ -351,7 +352,7 @@ function setTopbarActions(actions = []) {
 
 /* === DATA LOADING ================================================ */
 async function loadAll() {
-  const [ws, mcps, env, tpls, plugins, skills, uiState, library] = await Promise.all([
+  const [ws, mcps, env, tpls, plugins, skills, uiState, library, sessions] = await Promise.all([
     safe('/api/workspaces', { workspaces: [] }),
     safe('/api/mcps',       { mcps: [] }),
     safe('/api/env',        { keys: [], file: null, exists: false }),
@@ -360,6 +361,7 @@ async function loadAll() {
     safe('/api/skills',     { global: [] }),
     safe('/api/ui-state',   { theme: 'nebula', onboarded: false }),
     safe('/api/skills-library', { skills: [] }),
+    safe('/api/sessions/active', { sessions: {} }),
   ]);
   STATE.workspaces = ws.workspaces || [];
   STATE.mcps = mcps.mcps || [];
@@ -371,6 +373,7 @@ async function loadAll() {
   STATE.skills = skills.global || [];
   STATE.skillsLibrary = library.skills || [];
   STATE.uiState = uiState;
+  STATE.activeSessions = sessions.sessions || {};
 
   // Per-ws MCP status (parallel)
   const wsMcps = await Promise.all(
@@ -669,16 +672,40 @@ function workspaceCard(w) {
   });
   card.appendChild(refxChip);
 
+  // Indicateur session active (vert si Claude Code tourne pour ce workspace)
+  const isActive = !!(STATE.activeSessions || {})[w.id];
+  if (isActive) {
+    const liveDot = el('span', 'workspace-live-dot');
+    liveDot.title = 'Session Claude Code active';
+    card.appendChild(liveDot);
+  }
+
   const actions = el('div', 'workspace-actions');
-  const launch = btn('Lancer', 'btn-primary btn-sm', I.play);
-  launch.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    try { const r = await API.post(`/api/launch/${w.id}`, {}); toastOk(r.message || 'Lancé'); }
-    catch (err) { toastErr(err.message); }
-  });
+  if (isActive) {
+    const stopBtn = btn('Stop', 'btn-sm btn-danger-outline', I.x);
+    stopBtn.title = 'Arrêter la session Claude Code en cours';
+    stopBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      confirmDialog(`Arrêter la session Claude Code de « ${w.label || w.id} » ?`, async () => {
+        try {
+          const r = await API.post(`/api/workspaces/${w.id}/stop`, {});
+          if (r.ok) { toastOk(r.message || 'Session arrêtée'); STATE.loading = true; route(); }
+          else { toastErr(r.message || 'Échec'); }
+        } catch (err) { toastErr(err.message); }
+      }, { danger: true });
+    });
+    actions.appendChild(stopBtn);
+  } else {
+    const launch = btn('Lancer', 'btn-primary btn-sm', I.play);
+    launch.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      try { const r = await API.post(`/api/launch/${w.id}`, {}); toastOk(r.message || 'Lancé'); STATE.loading = true; setTimeout(route, 400); }
+      catch (err) { toastErr(err.message); }
+    });
+    actions.appendChild(launch);
+  }
   const detail = btn('Détail', 'btn-sm', I.right);
   detail.addEventListener('click', (e) => { e.stopPropagation(); location.hash = `#/workspace/${w.id}`; });
-  actions.appendChild(launch);
   actions.appendChild(detail);
   card.appendChild(actions);
   card.addEventListener('click', () => { location.hash = `#/workspace/${w.id}`; });
@@ -762,16 +789,34 @@ async function renderWorkspace(wsId) {
     { label: w.label || w.id },
   ]);
 
-  const launch = btn('Lancer', 'btn-primary', I.play);
-  launch.addEventListener('click', async () => {
-    try { const r = await API.post(`/api/launch/${w.id}`, {}); toastOk(r.message || 'Lancé'); }
-    catch (e) { toastErr(e.message); }
-  });
-  const resume = btn('Reprendre', 'btn', I.history);
-  resume.addEventListener('click', async () => {
-    try { const r = await API.post(`/api/launch-resume/${w.id}`, {}); toastOk(r.message || 'Reprise'); }
-    catch (e) { toastErr(e.message); }
-  });
+  const isActiveDetail = !!(STATE.activeSessions || {})[w.id];
+  const topbarActions = [];
+  if (isActiveDetail) {
+    const stopBtn = btn('Stop', 'btn-danger-outline', I.x);
+    stopBtn.title = 'Arrêter la session Claude Code en cours pour ce workspace';
+    stopBtn.addEventListener('click', () => {
+      confirmDialog(`Arrêter la session Claude Code de « ${w.label || w.id} » ?`, async () => {
+        try {
+          const r = await API.post(`/api/workspaces/${w.id}/stop`, {});
+          if (r.ok) { toastOk(r.message || 'Session arrêtée'); STATE.loading = true; route(); }
+          else { toastErr(r.message || 'Échec'); }
+        } catch (e) { toastErr(e.message); }
+      }, { danger: true });
+    });
+    topbarActions.push(stopBtn);
+  } else {
+    const launch = btn('Lancer', 'btn-primary', I.play);
+    launch.addEventListener('click', async () => {
+      try { const r = await API.post(`/api/launch/${w.id}`, {}); toastOk(r.message || 'Lancé'); STATE.loading = true; setTimeout(route, 400); }
+      catch (e) { toastErr(e.message); }
+    });
+    const resume = btn('Reprendre', 'btn', I.history);
+    resume.addEventListener('click', async () => {
+      try { const r = await API.post(`/api/launch-resume/${w.id}`, {}); toastOk(r.message || 'Reprise'); STATE.loading = true; setTimeout(route, 400); }
+      catch (e) { toastErr(e.message); }
+    });
+    topbarActions.push(resume, launch);
+  }
   const sync = btn('Sync MCPs', 'btn', I.refresh);
   sync.addEventListener('click', async () => {
     try {
@@ -779,7 +824,8 @@ async function renderWorkspace(wsId) {
       toastOk('Sync : ' + (r.applied || []).length + ' MCP(s) appliqués');
     } catch (e) { toastErr(e.message); }
   });
-  setTopbarActions([resume, sync, launch]);
+  // Ordre : actions secondaires à gauche, action primaire (Lancer / Stop) à droite
+  setTopbarActions([sync, ...topbarActions]);
 
   const c = $('#content');
   c.innerHTML = '';
@@ -1328,24 +1374,124 @@ function attachSessionPreview(row, wsId, file) {
 }
 
 async function modalSession(wsId, filename) {
-  let r;
-  try { r = await API.get(`/api/workspaces/${wsId}/sessions/${filename}`); }
-  catch (e) { toastErr(e.message); return; }
-  const body = el('div', 'stack');
-  body.style.maxHeight = '70vh'; body.style.overflowY = 'auto';
-  for (const m of r.messages || []) {
-    const item = el('div', 'list-row');
-    item.style.flexDirection = 'column'; item.style.alignItems = 'stretch'; item.style.gap = '6px';
-    item.innerHTML = `
-      <div class="row"><span class="badge ${m.role === 'user' ? 'badge-info' : 'badge-accent'}">${m.role}</span><span class="dim mono" style="font-size:10.5px">${escapeHtml(m.timestamp || '')}</span></div>
-      <div style="font-size:13px;white-space:pre-wrap;line-height:1.5;color:var(--text)">${escapeHtml(m.text)}</div>
-    `;
-    body.appendChild(item);
-  }
-  if (!(r.messages || []).length) body.innerHTML = '<div class="dim">Session vide.</div>';
+  // Mode live : on charge d'abord le snapshot initial, puis on poll
+  // /tail toutes les 2s pour append les nouveaux messages. Auto-scroll
+  // vers le bas tant que l'utilisateur n'a pas scrollé manuellement
+  // (sticky scroll détecté via scrollTop vs scrollHeight).
+  const body = el('div');
+  body.style.cssText = 'display:flex;flex-direction:column;gap:0;max-height:72vh';
+
+  // Barre de contrôle : statut live + toggle
+  const ctrl = el('div', 'session-ctrl');
+  ctrl.style.cssText = 'display:flex;align-items:center;gap:var(--sp-3);padding:var(--sp-2) var(--sp-3);border-bottom:1px solid var(--border);background:var(--surface-1);flex-shrink:0';
+  const liveDot = el('span', 'session-live-dot');
+  const liveLabel = el('span', 'mono');
+  liveLabel.style.cssText = 'font-size:11.5px;flex:1';
+  const liveToggle = btn('Pause', 'btn-sm btn-ghost', I.pause || I.x);
+  liveToggle.title = 'Mettre en pause le suivi live';
+  ctrl.append(liveDot, liveLabel, liveToggle);
+
+  // Zone de messages, scrollable
+  const list = el('div', 'session-msgs');
+  list.style.cssText = 'flex:1;overflow-y:auto;padding:var(--sp-3);min-height:0';
+
+  body.append(ctrl, list);
+
   const close = btn('Fermer', 'btn-ghost');
-  const { close: doClose } = openModal({ title: filename, body, footer: close, wide: true });
-  close.addEventListener('click', doClose);
+  const { close: doClose, modal } = openModal({ title: filename, body, footer: close, wide: true });
+
+  // État local de la session modal
+  const session = {
+    wsId,
+    filename,
+    offset: 0,
+    polling: true,
+    pollTimer: null,
+    msgCount: 0,
+    stickyScroll: true,  // auto-scroll bas tant que user n'a pas scrollé up
+  };
+
+  const appendMsg = (m) => {
+    const item = el('div', 'session-msg-item');
+    item.innerHTML = `
+      <div class="session-msg-meta">
+        <span class="badge ${m.role === 'user' ? 'badge-info' : 'badge-accent'}">${m.role}</span>
+        <span class="dim mono" style="font-size:10.5px">${escapeHtml(m.timestamp || '')}</span>
+      </div>
+      <div class="session-msg-text">${escapeHtml(m.text)}</div>
+    `;
+    list.appendChild(item);
+    session.msgCount += 1;
+  };
+
+  const refreshLabel = () => {
+    if (session.polling) {
+      liveDot.className = 'session-live-dot is-live';
+      liveLabel.textContent = `● Live · ${session.msgCount} message${session.msgCount > 1 ? 's' : ''}`;
+      liveToggle.querySelector('span').textContent = 'Pause';
+    } else {
+      liveDot.className = 'session-live-dot';
+      liveLabel.textContent = `❚❚ Pause · ${session.msgCount} message${session.msgCount > 1 ? 's' : ''}`;
+      liveToggle.querySelector('span').textContent = 'Reprendre';
+    }
+  };
+
+  // Detection sticky scroll : si l'utilisateur scroll vers le haut,
+  // on suspend l'auto-scroll. S'il revient en bas, on reprend.
+  list.addEventListener('scroll', () => {
+    const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+    session.stickyScroll = atBottom;
+  });
+
+  // Charge initial : tail avec offset=0 → tout le fichier en une fois
+  try {
+    const r = await API.get(`/api/workspaces/${wsId}/sessions/${filename}/tail?offset=0`);
+    for (const m of r.messages || []) appendMsg(m);
+    session.offset = r.new_offset || 0;
+    if (session.stickyScroll) list.scrollTop = list.scrollHeight;
+    if (!session.msgCount) {
+      list.innerHTML = '<div class="dim" style="padding:var(--sp-3)">Session vide ou pas encore commencée.</div>';
+    }
+  } catch (e) {
+    list.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`;
+    session.polling = false;
+  }
+  refreshLabel();
+
+  // Poll loop
+  const tick = async () => {
+    if (!session.polling) return;
+    try {
+      const r = await API.get(`/api/workspaces/${wsId}/sessions/${filename}/tail?offset=${session.offset}`);
+      const newMsgs = r.messages || [];
+      if (newMsgs.length) {
+        // Si on avait un placeholder "session vide", on le retire
+        const ph = list.querySelector('.dim');
+        if (ph && session.msgCount === 0) list.innerHTML = '';
+        for (const m of newMsgs) appendMsg(m);
+        if (session.stickyScroll) list.scrollTop = list.scrollHeight;
+        refreshLabel();
+      }
+      session.offset = r.new_offset || session.offset;
+    } catch (e) {
+      console.warn('[session-tail]', e.message);
+    }
+  };
+  // 2s d'intervalle, registerPagePoller pour nettoyage propre à la navigation
+  session.pollTimer = setInterval(() => { if (session.polling) tick(); }, 2000);
+  registerPagePoller(session.pollTimer);
+
+  liveToggle.addEventListener('click', () => {
+    session.polling = !session.polling;
+    refreshLabel();
+    if (session.polling) tick();
+  });
+
+  close.addEventListener('click', () => {
+    session.polling = false;
+    clearInterval(session.pollTimer);
+    doClose();
+  });
 }
 
 function renderWsMCPs(wsId, host) {
@@ -6538,13 +6684,19 @@ async function renderTools() {
   }
   stack.appendChild(quick);
 
-  // Hooks globaux
+  // Hooks globaux + log d'erreurs
   stack.appendChild(el('div', 'section-label', '<span class="num">D.</span> Hooks globaux'));
   const hooksCard = el('div', 'card');
-  hooksCard.innerHTML = `<div class="dim" style="font-size:12px">Édition complète via la modale</div>`;
+  hooksCard.innerHTML = `<div class="dim" style="font-size:12px;margin-bottom:var(--sp-2)">Édition complète via la modale. Le viewer d'erreurs ne couvre actuellement que les hooks réflexifs ; les autres hooks .sh écrivent leur stderr dans le transcript Claude Code, pas dans un log.</div>`;
+  const hooksRow = el('div');
+  hooksRow.style.cssText = 'display:flex;gap:var(--sp-2);flex-wrap:wrap';
   const hooksBtn = btn('Éditer hooks globaux', 'btn', I.zap);
   hooksBtn.addEventListener('click', () => modalHooks(null));
-  hooksCard.appendChild(hooksBtn);
+  const hooksLogBtn = btn('Erreurs hooks récentes', 'btn-ghost', I.alert);
+  hooksLogBtn.title = "Voir les dernières erreurs des hooks réflexifs";
+  hooksLogBtn.addEventListener('click', () => modalHooksErrorsViewer());
+  hooksRow.append(hooksBtn, hooksLogBtn);
+  hooksCard.appendChild(hooksRow);
   stack.appendChild(hooksCard);
 
   // Env vars
@@ -7041,6 +7193,49 @@ function modalPermissions(wsId) {
       catch (e) { toastErr(e.message); }
     });
   })();
+}
+
+// Viewer minimaliste pour le log d'erreurs des hooks reflexifs. Limite v1 :
+// ne couvre que les hooks reflexifs (ceux qui ecrivent dans
+// dashboard/data/reflexive_hook_errors.log). Les autres hooks .sh ne
+// loggent pas a disque par defaut.
+function modalHooksErrorsViewer() {
+  const body = el('div');
+  body.innerHTML = '<div class="page-loader"><div class="spinner"></div><span>Chargement…</span></div>';
+  const refreshBtn = btn('Rafraîchir', 'btn-sm btn-ghost', I.refresh);
+  const close = btn('Fermer', 'btn-ghost');
+  const { close: doClose } = openModal({ title: "Erreurs hooks récentes", body, footer: [refreshBtn, close], wide: true });
+  close.addEventListener('click', doClose);
+
+  const reload = async () => {
+    body.innerHTML = '<div class="page-loader"><div class="spinner"></div><span>Chargement…</span></div>';
+    try {
+      const r = await API.get('/api/hooks/errors?tail=200');
+      body.innerHTML = '';
+      const meta = el('div', 'dim');
+      meta.style.cssText = 'font-size:11.5px;margin-bottom:var(--sp-2)';
+      if (!r.exists) {
+        meta.textContent = r.note || 'Aucun log.';
+        body.appendChild(meta);
+        return;
+      }
+      meta.textContent = `${r.path} · ${fmtBytes(r.size || 0)} · ${r.tail_lines || 0} lignes affichées`;
+      body.appendChild(meta);
+      if (!r.lines || r.lines.length === 0) {
+        body.appendChild(el('div', 'dim', '<span style="font-size:12.5px">Log vide. Tant mieux : aucune erreur réflexive enregistrée.</span>'));
+        return;
+      }
+      const pre = document.createElement('pre');
+      pre.className = 'mono';
+      pre.style.cssText = 'background:var(--bg);padding:var(--sp-3);border-radius:var(--r-sm);border:1px solid var(--border);font-size:11.5px;line-height:1.55;max-height:60vh;overflow:auto;white-space:pre-wrap;margin:0';
+      pre.textContent = r.lines.join('\n');
+      body.appendChild(pre);
+    } catch (e) {
+      body.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`;
+    }
+  };
+  refreshBtn.addEventListener('click', reload);
+  reload();
 }
 
 function modalHooks(wsId) {

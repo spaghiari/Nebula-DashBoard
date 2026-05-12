@@ -109,18 +109,31 @@ def write_launch_bat(ws_id: str, label: str, path: str) -> Path:
     return bat_path
 
 
-def launch_script(bat_name: str) -> tuple[int, dict]:
+def launch_script(bat_name: str, *, ws_id: str | None = None, ws_label: str | None = None) -> tuple[int, dict]:
+    """Lance un .bat dans une nouvelle console.
+
+    Si ws_id est fourni, enregistre le PID du cmd dans active_sessions
+    pour permettre un Stop ultérieur depuis Nebula. cmd /k garde la
+    fenêtre ouverte, ce qui maintient Popen.pid valide tant que la
+    session tourne.
+    """
     bat = SCRIPTS_DIR / bat_name
     if not bat.exists():
         return 404, {"ok": False, "error": f"Script introuvable : {bat}"}
     try:
-        subprocess.Popen(
-            ["cmd", "/c", "start", "", str(bat)],
+        proc = subprocess.Popen(
+            ["cmd", "/k", "call", str(bat)],
             cwd=str(SCRIPTS_DIR),
             creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
             shell=False,
         )
-        return 200, {"ok": True, "message": f"Lancé : {bat.name}"}
+        if ws_id:
+            try:
+                from dashcore.active_sessions import register as _register
+                _register(ws_id, proc.pid, label=ws_label or ws_id)
+            except (ImportError, OSError):
+                pass  # best-effort, le launch reste OK même si le register rate
+        return 200, {"ok": True, "pid": proc.pid, "message": f"Lancé : {bat.name}"}
     except OSError as e:
         return 500, {"ok": False, "error": f"Erreur : {e}"}
 

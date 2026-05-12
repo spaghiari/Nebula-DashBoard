@@ -3457,6 +3457,65 @@ body {
 }
 .workspace-refx-chip:disabled { opacity: 0.5; cursor: wait; }
 
+/* Indicateur "session active" sur workspace-card : petite pastille
+   verte pulsante en haut à gauche pour distinguer immédiatement
+   les workspaces dont Claude Code tourne. */
+.workspace-card { position: relative; }
+.workspace-live-dot {
+  position: absolute;
+  top: var(--sp-3); left: var(--sp-3);
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--ok, #10b981);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 8px var(--ok, #10b981);
+  animation: workspace-live-pulse 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes workspace-live-pulse {
+  0%, 100% { opacity: 0.85; transform: scale(1); }
+  50%      { opacity: 1; transform: scale(1.15); }
+}
+
+/* === SESSION VIEWER LIVE ============================================== */
+.session-live-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  flex-shrink: 0;
+}
+.session-live-dot.is-live {
+  background: var(--ok, #10b981);
+  box-shadow: 0 0 8px var(--ok, #10b981);
+  animation: session-live-pulse 1.4s ease-in-out infinite;
+}
+@keyframes session-live-pulse {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1; }
+}
+.session-msgs { background: var(--bg); }
+.session-msg-item {
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
+  margin-bottom: var(--sp-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.session-msg-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.session-msg-text {
+  font-size: 13px;
+  white-space: pre-wrap;
+  line-height: 1.55;
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+}
+
 /* === REFLEXIVE ================================================== */
 .refx-body { display: flex; flex-direction: column; gap: var(--sp-4); }
 
