@@ -2162,6 +2162,31 @@ body {
 .update-badge-icon { display: flex; opacity: 0.7; }
 .update-badge-icon svg { width: 14px; height: 14px; }
 
+/* Variante "branches divergées" : ton warn (orange/jaune) au lieu
+   d'accent (violet). Signale clairement que ce n'est pas une mise à
+   jour à appliquer, mais un état à résoudre. */
+.topbar-update-badge.is-diverged {
+  background: linear-gradient(90deg, var(--warn, #f59e0b), var(--warn-2, #f97316));
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.35);
+  animation: none;
+}
+.topbar-update-badge.is-diverged:hover {
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.5);
+}
+.update-badge.is-diverged {
+  background: linear-gradient(135deg, rgba(245,158,11,0.18), transparent 90%);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: var(--warn, #f59e0b);
+  animation: none;
+}
+.update-badge.is-diverged:hover {
+  background: rgba(245, 158, 11, 0.12);
+}
+.update-badge.is-diverged .update-badge-dot {
+  background: var(--warn, #f59e0b);
+  box-shadow: 0 0 6px var(--warn, #f59e0b);
+}
+
 /* Modale d'update */
 .update-uptodate {
   display: flex;

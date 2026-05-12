@@ -2894,9 +2894,43 @@ function renderUpdateBadge(info) {
   const slot = $('#topbar-update-slot');
   if (slot) slot.innerHTML = '';
 
-  if (!info || !info.is_git || !info.behind || info.behind <= 0) return;
+  if (!info || !info.is_git) return;
 
-  // Badge prominent dans le topbar (visible quelle que soit la page)
+  // Cas "divergent" : le dev local a ses propres commits ET le remote
+  // a les siens (workflow dev→export typique). Pas une vraie "mise à
+  // jour à appliquer" — pull --ff-only échouera. Afficher un badge
+  // distinct (style warn) pour ne pas faire croire à un retard.
+  if (info.diverged) {
+    if (slot) {
+      const badge = el('button', 'topbar-update-badge is-diverged');
+      badge.type = 'button';
+      badge.title = `Branches divergées : ${info.ahead} commit(s) local seulement, ${info.behind} remote seulement. Cliquer pour résoudre.`;
+      badge.innerHTML = `
+        <span class="topbar-update-dot"></span>
+        <span class="topbar-update-text">Divergent</span>
+      `;
+      badge.addEventListener('click', () => modalSystemUpdate());
+      slot.appendChild(badge);
+    }
+    const footer = $('.sidebar-footer');
+    if (footer) {
+      const navBadge = el('button', 'update-badge is-diverged');
+      navBadge.id = 'nav-update-badge';
+      navBadge.type = 'button';
+      navBadge.innerHTML = `
+        <span class="update-badge-dot"></span>
+        <span class="update-badge-text">Branches divergées (${info.ahead} local / ${info.behind} remote)</span>
+        <span class="update-badge-icon">${I.right}</span>
+      `;
+      navBadge.addEventListener('click', () => modalSystemUpdate());
+      footer.insertBefore(navBadge, footer.firstChild);
+    }
+    return;
+  }
+
+  // Cas standard : remote en avance, fast-forward possible
+  if (!info.behind || info.behind <= 0) return;
+
   if (slot) {
     const badge = el('button', 'topbar-update-badge');
     badge.type = 'button';
@@ -2909,7 +2943,6 @@ function renderUpdateBadge(info) {
     slot.appendChild(badge);
   }
 
-  // Badge secondaire dans la sidebar footer (descriptif)
   const footer = $('.sidebar-footer');
   if (footer) {
     const navBadge = el('button', 'update-badge');
@@ -2962,6 +2995,77 @@ async function modalSystemUpdate() {
 
   // Clean le loader avant d'appendChild les vraies sections
   body.innerHTML = '';
+
+  // ───── Cas DIVERGENT : pas de pull possible (workflow dev→export typique).
+  //       Proposer directement le reset proactif, sans laisser l'utilisateur
+  //       cliquer "Appliquer" pour découvrir le 500.
+  if (info.diverged) {
+    const head = el('div');
+    head.innerHTML = `
+      <div class="update-version-header">
+        <div>
+          <div class="dim mono" style="font-size:10.5px;letter-spacing:0.16em;text-transform:uppercase">Version locale</div>
+          <div class="row" style="gap:var(--sp-2);margin-top:4px">
+            <span class="mono" style="font-size:14px;font-weight:600">${escapeHtml(info.head)}</span>
+            ${info.branch ? `<span class="badge mono">${escapeHtml(info.branch)}</span>` : ''}
+          </div>
+          ${info.head_message ? `<div class="dim" style="font-size:12px;margin-top:4px">${escapeHtml(info.head_message)}</div>` : ''}
+        </div>
+        ${info.upstream ? `<div class="dim mono" style="font-size:11px;text-align:right">Tracking<br>${escapeHtml(info.upstream)}</div>` : ''}
+      </div>
+    `;
+    body.appendChild(head);
+
+    body.appendChild(el('div', 'callout callout-warn', `
+      <div>
+        <strong>⚠ Branches divergées</strong>
+        <p style="margin:var(--sp-2) 0 0;font-size:13px">
+          Ton dépôt local a <strong>${info.ahead} commit${info.ahead > 1 ? 's' : ''}</strong>
+          que le remote n'a pas, ET le remote a <strong>${info.behind} commit${info.behind > 1 ? 's' : ''}</strong>
+          que ton local n'a pas. <code class="mono">git pull --ff-only</code> est mathématiquement
+          impossible dans ce cas.
+        </p>
+        <p style="margin:var(--sp-2) 0 0;font-size:13px">
+          <strong>Cas le plus courant</strong> : workflow dev→export où tes commits locaux
+          granulaires ont leurs équivalents bundlés sur le remote (même contenu, hash
+          différents). La solution propre est de <strong>réinitialiser ton local sur le remote</strong>
+          — tes modifs locales seront stashées par sécurité.
+        </p>
+      </div>
+    `));
+
+    const resetBox = el('div');
+    resetBox.style.cssText = 'margin-top:var(--sp-3);padding:var(--sp-4);background:var(--surface-2);border:1px solid var(--border);border-radius:8px';
+    resetBox.innerHTML = `
+      <div style="font-size:13px;font-weight:500;margin-bottom:6px">🔄 Réinitialiser sur ${escapeHtml(info.upstream || 'origin/main')}</div>
+      <div class="dim" style="font-size:12px;margin-bottom:var(--sp-3);line-height:1.6">
+        Exécute <code class="mono">git reset --hard ${escapeHtml(info.upstream || 'origin/main')}</code> précédé
+        d'un <code class="mono">git stash --include-untracked</code> automatique pour préserver tes
+        éventuelles modifs locales. Les fichiers utilisateurs (registre, workspaces.json,
+        .env.local) sont préservés via <code class="mono">.gitignore</code> et skip-worktree.
+      </div>
+    `;
+    const resetBtn = btn('Réinitialiser sur origin', 'btn-primary', I.refresh);
+    resetBtn.addEventListener('click', () => {
+      confirmDialog(
+        `Réinitialiser ton local sur ${info.upstream || 'origin/main'} ? Tes ${info.ahead} commit(s) locaux seront perdus de l'historique (mais leur contenu est probablement déjà sur le remote sous forme bundlée). Modifs non-committées stashées par sécurité.`,
+        async () => {
+          resetBtn.disabled = true;
+          resetBtn.innerHTML = `<div class="spinner" style="width:12px;height:12px"></div><span>Reset en cours…</span>`;
+          try {
+            const rr = await API.post('/api/system/reset', {});
+            if (!rr.ok) { toastErr(rr.error || 'Échec du reset'); resetBtn.disabled = false; resetBtn.innerHTML = `${I.refresh}<span>Réessayer</span>`; return; }
+            toastOk(rr.message || 'Local aligné sur le remote');
+            setTimeout(() => location.reload(), 1200);
+          } catch (e) { toastErr(e.message); resetBtn.disabled = false; resetBtn.innerHTML = `${I.refresh}<span>Réessayer</span>`; }
+        },
+        { danger: true }
+      );
+    });
+    resetBox.appendChild(resetBtn);
+    body.appendChild(resetBox);
+    return;
+  }
 
   // ───── Header avec version locale (uniquement si updates dispos ou modifs locales) ─────
   if (info.behind > 0 || (info.dirty && info.behind > 0)) {

@@ -155,10 +155,17 @@ def system_version_info(check_remote: bool = False) -> dict:
             return info
         info["fetched"] = True
 
-    # Compte les commits en retard
+    # Compte les commits en retard ET en avance pour détecter une divergence.
+    # Cas courant qui matérialise une divergence ici : workflow dev→export
+    # où le dev a ses propres commits granulaires et le remote contient
+    # leurs équivalents bundlés. Même contenu, graphes différents → ni
+    # fast-forward dans un sens, ni dans l'autre.
     rc4, behind_str, _ = _git("rev-list", "--count", f"HEAD..{upstream}")
     if rc4 == 0 and behind_str.isdigit():
         info["behind"] = int(behind_str)
+    rc4b, ahead_str, _ = _git("rev-list", "--count", f"{upstream}..HEAD")
+    info["ahead"] = int(ahead_str) if (rc4b == 0 and ahead_str.isdigit()) else 0
+    info["diverged"] = info["behind"] > 0 and info["ahead"] > 0
 
     # Liste des commits à venir (max 30, format compact)
     if info["behind"] > 0:
