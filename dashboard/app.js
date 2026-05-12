@@ -225,6 +225,20 @@ function snackbar(msg, { actionLabel, onAction, type = 'success', duration = 800
 }
 
 /* === MODAL ======================================================= */
+// CM-3 a11y starter :
+// - role=dialog + aria-modal=true + aria-labelledby sur le <h2>
+// - autofocus sur le premier élément focusable du body à l'ouverture
+// - focus trap : Tab/Shift-Tab cycle entre les éléments focusables du
+//   modal, ne sort jamais (Escape pour fermer)
+// - restauration du focus sur l'élément qui avait le focus avant l'ouverture
+const _FOCUSABLE_SELECTOR = [
+  'a[href]', 'button:not([disabled])', 'input:not([disabled]):not([type=hidden])',
+  'select:not([disabled])', 'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+let _modalIdCounter = 0;
+
 function openModal({ title, body, footer = null, wide = false, onClose = null, closeOnBackdrop = false }) {
   const root = $('#modal-root');
   root.innerHTML = '';
@@ -232,9 +246,14 @@ function openModal({ title, body, footer = null, wide = false, onClose = null, c
   overlay.className = 'modal-overlay';
   const modal = document.createElement('div');
   modal.className = 'modal' + (wide ? ' modal-wide' : '');
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  const titleId = `modal-title-${++_modalIdCounter}`;
+  modal.setAttribute('aria-labelledby', titleId);
+  modal.tabIndex = -1;
   modal.innerHTML = `
     <div class="modal-header">
-      <h2 class="modal-title">${escapeHtml(title)}</h2>
+      <h2 class="modal-title" id="${titleId}">${escapeHtml(title)}</h2>
       <button class="icon-btn" data-close aria-label="Fermer">${I.x}</button>
     </div>
     <div class="modal-body"></div>
@@ -245,15 +264,63 @@ function openModal({ title, body, footer = null, wide = false, onClose = null, c
   overlay.appendChild(modal);
   root.appendChild(overlay);
 
-  const close = () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey); if (onClose) onClose(); };
-  const onKey = (e) => { if (e.key === 'Escape') close(); };
-  document.addEventListener('keydown', onKey);
+  // Sauvegarde du focus précédent pour restauration à la fermeture
+  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+  const close = () => {
+    root.innerHTML = '';
+    document.removeEventListener('keydown', onKey, true);
+    if (onClose) onClose();
+    if (previouslyFocused && document.body.contains(previouslyFocused)) {
+      try { previouslyFocused.focus(); } catch { /* noop */ }
+    }
+  };
+
+  const getFocusables = () => Array.from(modal.querySelectorAll(_FOCUSABLE_SELECTOR))
+    .filter(el => el.offsetParent !== null || el === modal);
+
+  const onKey = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      close();
+      return;
+    }
+    if (e.key === 'Tab') {
+      // Focus trap : Tab cycle entre les éléments du modal
+      const focusables = getFocusables();
+      if (!focusables.length) { e.preventDefault(); return; }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey) {
+        if (active === first || !modal.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (active === last || !modal.contains(active)) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+  };
+  document.addEventListener('keydown', onKey, true);
   modal.querySelector('[data-close]').addEventListener('click', close);
   // Fermeture sur clic du voile : OFF par défaut pour éviter la perte de saisie.
-  // Les éventuels appels qui veulent ce comportement passent closeOnBackdrop:true.
   if (closeOnBackdrop) {
     overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   }
+
+  // Autofocus : premier élément focusable du body (input/textarea/select
+  // de préférence), sinon le modal lui-même
+  setTimeout(() => {
+    const focusables = Array.from(modal.querySelector('.modal-body').querySelectorAll(_FOCUSABLE_SELECTOR));
+    const preferred = focusables.find(el => /^(INPUT|TEXTAREA|SELECT)$/i.test(el.tagName));
+    const target = preferred || focusables[0] || modal;
+    try { target.focus(); } catch { /* noop */ }
+  }, 30);
+
   return { modal, close };
 }
 
@@ -388,7 +455,12 @@ async function loadAll() {
 }
 
 /* === ROUTER ====================================================== */
-async function route() {
+// Track la route précédente pour distinguer "navigation entre pages"
+// (montrer un loader) de "refresh same-page post-action" (silencieux).
+let _lastRoutedHash = null;
+
+async function route(opts) {
+  const silent = !!(opts && opts.silent);
   clearPagePollers();
   updateActiveNav();
   const hash = location.hash || '#/';
@@ -397,7 +469,15 @@ async function route() {
   if (hash && !hash.startsWith('#/')) return;
   if (STATE.loading) await loadAll();
   const content = $('#content');
-  content.innerHTML = '<div class="page-loader"><div class="spinner"></div><span>Chargement…</span></div>';
+  // RM-1 v1 : "silent route" pour les refresh same-page post-action.
+  // Si on reste sur la même page (refresh post-CRUD), pas de page-loader
+  // qui flash. La nouvelle DOM remplace l'ancienne d'un coup, sans état
+  // intermédiaire vide. Sur vraie navigation (hash change), loader normal.
+  const samePage = (hash === _lastRoutedHash);
+  if (!silent && !samePage) {
+    content.innerHTML = '<div class="page-loader"><div class="spinner"></div><span>Chargement…</span></div>';
+  }
+  _lastRoutedHash = hash;
   try {
     if (hash === '#/') return await renderHome();
     if (hash === '#/mcps') return await renderMCPs();
@@ -689,7 +769,12 @@ function workspaceCard(w) {
       confirmDialog(`Arrêter la session Claude Code de « ${w.label || w.id} » ?`, async () => {
         try {
           const r = await API.post(`/api/workspaces/${w.id}/stop`, {});
-          if (r.ok) { toastOk(r.message || 'Session arrêtée'); STATE.loading = true; route(); }
+          if (r.ok) {
+            toastOk(r.message || 'Session arrêtée');
+            // RM-1 v2 : mutation locale + silent route
+            if (STATE.activeSessions) delete STATE.activeSessions[w.id];
+            route({ silent: true });
+          }
           else { toastErr(r.message || 'Échec'); }
         } catch (err) { toastErr(err.message); }
       }, { danger: true });
@@ -798,7 +883,12 @@ async function renderWorkspace(wsId) {
       confirmDialog(`Arrêter la session Claude Code de « ${w.label || w.id} » ?`, async () => {
         try {
           const r = await API.post(`/api/workspaces/${w.id}/stop`, {});
-          if (r.ok) { toastOk(r.message || 'Session arrêtée'); STATE.loading = true; route(); }
+          if (r.ok) {
+            toastOk(r.message || 'Session arrêtée');
+            // RM-1 v2 : mutation locale + silent route
+            if (STATE.activeSessions) delete STATE.activeSessions[w.id];
+            route({ silent: true });
+          }
           else { toastErr(r.message || 'Échec'); }
         } catch (e) { toastErr(e.message); }
       }, { danger: true });
@@ -887,11 +977,20 @@ async function renderWorkspace(wsId) {
   `;
   page.appendChild(tiles);
 
+  // ── Section A : Mémoire projet (CLAUDE.md inline) ──
+  // CLAUDE.md = fichier le plus modifié sur un workspace actif. Le mettre
+  // en édition fixe (pas dans un modal) = 1 clic en moins par cycle
+  // d'édition et visibilité permanente du contenu.
+  page.appendChild(el('div', 'section-label', '<span class="num">A.</span> Mémoire projet (CLAUDE.md)'));
+  const claudeMdHost = el('div');
+  page.appendChild(claudeMdHost);
+  renderWsClaudeMdInline(w.id, claudeMdHost);
+
   // ── Config toolbar (horizontal full width) ──
-  page.appendChild(el('div', 'section-label', '<span class="num">A.</span> Configuration'));
+  // CLAUDE.md retiré ici car maintenant édité en place dans Section A.
+  page.appendChild(el('div', 'section-label', '<span class="num">B.</span> Configuration'));
   const cfgBar = el('div', 'config-bar');
   const cfgItems = [
-    { label: 'CLAUDE.md',     icon: I.book,    action: () => openWsFile(w.id, 'CLAUDE.md') },
     { label: 'notes.md',      icon: I.book,    action: () => openWsFile(w.id, 'notes.md') },
     { label: 'settings.json', icon: I.code,    action: () => modalEditSettings(w.id) },
     { label: 'Permissions',   icon: I.shield,  action: () => modalPermissions(w.id) },
@@ -905,7 +1004,7 @@ async function renderWorkspace(wsId) {
   page.appendChild(cfgBar);
 
   // ── Trio MCPs / Skills / Plugins (full width, 3 columns) ──
-  page.appendChild(el('div', 'section-label', '<span class="num">B.</span> Extensions actives'));
+  page.appendChild(el('div', 'section-label', '<span class="num">C.</span> Extensions actives'));
   const trio = el('div', 'ws-trio');
 
   const mcpsCard = el('div', 'card ws-card');
@@ -935,14 +1034,14 @@ async function renderWorkspace(wsId) {
   const bottom = el('div', 'ws-bottom');
 
   const sessBlock = el('div');
-  sessBlock.appendChild(el('div', 'section-label', '<span class="num">C.</span> Sessions récentes'));
+  sessBlock.appendChild(el('div', 'section-label', '<span class="num">D.</span> Sessions récentes'));
   const sessHost = el('div', 'session-list');
   sessBlock.appendChild(sessHost);
   loadSessions(w.id, sessHost);
   bottom.appendChild(sessBlock);
 
   const filesBlock = el('div');
-  filesBlock.appendChild(el('div', 'section-label', '<span class="num">D.</span> Agents & commandes'));
+  filesBlock.appendChild(el('div', 'section-label', '<span class="num">E.</span> Agents & commandes'));
   const fileItems = el('div', 'stack');
   filesBlock.appendChild(fileItems);
   loadFileItems(w.id, fileItems);
@@ -969,7 +1068,7 @@ async function renderWsFileExplorer(wsId, host) {
   const section = el('div', 'ws-fs-section');
 
   // Header : titre + bouton Nouveau fichier
-  const sectionLabel = el('div', 'section-label', '<span class="num">E.</span> Fichiers du workspace');
+  const sectionLabel = el('div', 'section-label', '<span class="num">F.</span> Fichiers du workspace');
   const headerRow = el('div', 'ws-fs-header');
   const newBtn = btn('Nouveau fichier', 'btn-sm btn-ghost', I.plus);
   newBtn.title = 'Créer un fichier (les dossiers parents sont créés automatiquement)';
@@ -1759,6 +1858,80 @@ async function loadFileItems(wsId, host) {
   }
 }
 
+// Éditeur inline de CLAUDE.md sur la page workspace detail (Section A).
+// CLAUDE.md = pièce centrale de la mémoire projet, modifié quotidiennement
+// → place fixe sur la page au lieu d'un modal pour réduire la friction
+// (1 clic en moins par cycle d'édition).
+async function renderWsClaudeMdInline(wsId, host) {
+  host.innerHTML = '<div class="dim ws-claudemd-loading" style="padding:var(--sp-3)">Chargement de CLAUDE.md…</div>';
+  let initial = '';
+  try {
+    const data = await API.get(`/api/workspaces/${wsId}/config`);
+    initial = (data.files || {})['CLAUDE.md'] || '';
+  } catch (e) {
+    host.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`;
+    return;
+  }
+
+  const card = el('div', 'ws-claudemd-card');
+
+  // Header : nom du fichier + indicateur modifié
+  const header = el('div', 'ws-claudemd-header');
+  const title = el('div', 'ws-claudemd-title mono');
+  title.textContent = '📄 CLAUDE.md';
+  const dirtyDot = el('span', 'ws-claudemd-dirty');
+  dirtyDot.textContent = '';
+  header.append(title, dirtyDot);
+
+  // Textarea
+  const ta = document.createElement('textarea');
+  ta.className = 'ws-claudemd-textarea mono';
+  ta.value = initial;
+  ta.spellcheck = false;
+  ta.rows = 14;
+
+  let dirty = false;
+  ta.addEventListener('input', () => {
+    dirty = (ta.value !== initial);
+    dirtyDot.textContent = dirty ? '• modifié' : '';
+  });
+
+  const saveCurrent = async () => {
+    if (!dirty) { toast('Rien à sauvegarder', 'info'); return; }
+    try {
+      await API.post(`/api/workspaces/${wsId}/file`, { filename: 'CLAUDE.md', content: ta.value });
+      initial = ta.value;
+      dirty = false;
+      dirtyDot.textContent = '';
+      toastOk('CLAUDE.md sauvegardé');
+    } catch (e) { toastErr(e.message); }
+  };
+
+  ta.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveCurrent(); }
+  });
+
+  // Footer
+  const footer = el('div', 'ws-claudemd-footer');
+  const hint = el('span', 'dim ws-claudemd-hint');
+  hint.textContent = 'Ctrl+S pour sauvegarder';
+  const cancelBtn = btn('Annuler', 'btn-sm btn-ghost');
+  cancelBtn.addEventListener('click', () => {
+    if (!dirty) return;
+    ta.value = initial;
+    dirty = false;
+    dirtyDot.textContent = '';
+  });
+  const saveBtn = btn('Sauvegarder', 'btn-sm btn-primary', I.check);
+  saveBtn.title = 'Ctrl+S';
+  saveBtn.addEventListener('click', saveCurrent);
+  footer.append(hint, cancelBtn, saveBtn);
+
+  card.append(header, ta, footer);
+  host.innerHTML = '';
+  host.appendChild(card);
+}
+
 async function openWsFile(wsId, filename) {
   let data;
   try { data = await API.get(`/api/workspaces/${wsId}/config`); }
@@ -1957,7 +2130,18 @@ function mcpCard(m) {
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
   rm.title = 'Supprimer';
   rm.addEventListener('click', () => confirmDialog(`Supprimer ${m.id} ?`, async () => {
-    try { await API.del(`/api/mcps/${m.id}`); toastOk('Supprimé'); STATE.loading = true; route(); }
+    try {
+      await API.del(`/api/mcps/${m.id}`);
+      toastOk('Supprimé');
+      // RM-1 v2 : mutation locale + silent route = pas de flash + pas
+      // de fetch storm (les 15 requetes de loadAll evitees).
+      STATE.mcps = STATE.mcps.filter(x => x.id !== m.id);
+      Object.keys(STATE.wsMcps || {}).forEach(wsId => {
+        const w = STATE.wsMcps[wsId];
+        if (w && Array.isArray(w.active)) w.active = w.active.filter(x => x !== m.id);
+      });
+      route({ silent: true });
+    }
     catch (e) { toastErr(e.message); }
   }, { danger: true }));
   footer.append(ed, rm);
@@ -5570,7 +5754,12 @@ function templateCard(t) {
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
   rm.title = 'Supprimer';
   rm.addEventListener('click', () => confirmDialog(`Supprimer le template ${t.id} ?`, async () => {
-    try { await API.del(`/api/templates/${t.id}`); toastOk('Supprimé'); STATE.loading = true; route(); }
+    try {
+      await API.del(`/api/templates/${t.id}`);
+      toastOk('Supprimé');
+      STATE.templates = STATE.templates.filter(x => x.id !== t.id);
+      route({ silent: true });
+    }
     catch (e) { toastErr(e.message); }
   }, { danger: true }));
   actions.append(ed, open, dup, rm);
@@ -6973,7 +7162,12 @@ function renderGlobalSkills(host) {
       const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
       rm.title = 'Supprimer';
       rm.addEventListener('click', () => confirmDialog(`Supprimer ${s.id} ?`, async () => {
-        try { await API.del(`/api/skills/global/${s.id}`); toastOk('Supprimé'); STATE.loading = true; route(); }
+        try {
+          await API.del(`/api/skills/global/${s.id}`);
+          toastOk('Supprimé');
+          STATE.skills = (STATE.skills || []).filter(x => x.id !== s.id);
+          route({ silent: true });
+        }
         catch (e) { toastErr(e.message); }
       }, { danger: true }));
       row.append(ed, rm);

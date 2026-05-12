@@ -3476,6 +3476,54 @@ body {
   50%      { opacity: 1; transform: scale(1.15); }
 }
 
+/* === WS CLAUDE.MD INLINE EDITOR ======================================= */
+.ws-claudemd-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  margin-bottom: var(--sp-4);
+  overflow: hidden;
+}
+.ws-claudemd-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+.ws-claudemd-title { font-weight: 500; font-size: 13px; flex: 1; }
+.ws-claudemd-dirty { color: var(--accent); font-size: 11.5px; }
+.ws-claudemd-textarea {
+  flex: 1;
+  width: 100%;
+  padding: var(--sp-3);
+  border: none;
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 12.5px;
+  line-height: 1.55;
+  resize: vertical;
+  min-height: 280px;
+  tab-size: 2;
+}
+.ws-claudemd-textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ws-claudemd-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  justify-content: flex-end;
+  padding: var(--sp-2) var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+.ws-claudemd-hint { margin-right: auto; font-size: 11px; }
+
 /* === SESSION VIEWER LIVE ============================================== */
 .session-live-dot {
   display: inline-block;
