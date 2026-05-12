@@ -4,6 +4,8 @@
 
 # Secrets
 .env.local
+.env.local.bak.*
+.env.local.enc
 *.env
 
 # Données utilisateur (registre, workspaces enregistrés, sessions)
