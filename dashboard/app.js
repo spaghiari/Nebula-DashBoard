@@ -1102,6 +1102,12 @@ function renderWsFsEditor(state) {
   state.dirtyDot = dirtyDot;
 
   const footer = el('div', 'ws-fs-editor-footer');
+  // Supprimer à l'extrême gauche, isolé du couple Annuler/Sauvegarder
+  // par le hint poussé à droite (Fitts' law : distance + style outline
+  // rouge = clic accidentel improbable, cf. règle Session 3 RM-3).
+  const deleteBtn = btn('Supprimer', 'btn-sm btn-danger-outline', I.trash);
+  deleteBtn.title = 'Supprimer ce fichier (confirmation demandée)';
+  deleteBtn.addEventListener('click', () => confirmDeleteWsFsFile(state));
   const hint = el('span', 'dim ws-fs-editor-hint');
   hint.textContent = 'Ctrl+S pour sauvegarder';
   const cancelBtn = btn('Annuler', 'btn-sm btn-ghost');
@@ -1114,9 +1120,31 @@ function renderWsFsEditor(state) {
   const saveBtn = btn('Sauvegarder', 'btn-sm btn-primary', I.check);
   saveBtn.title = 'Ctrl+S';
   saveBtn.addEventListener('click', () => saveWsFsCurrentFile(state));
-  footer.append(hint, cancelBtn, saveBtn);
+  footer.append(deleteBtn, hint, cancelBtn, saveBtn);
 
   pane.append(header, ta, footer);
+}
+
+function confirmDeleteWsFsFile(state) {
+  if (!state.openFile) return;
+  const path = state.openFile.path;
+  const msg = state.dirty
+    ? `Supprimer "${path}" ? Tes modifications non sauvegardées seront perdues.`
+    : `Supprimer "${path}" ?`;
+  confirmDialog(msg, async () => {
+    try {
+      await API.del(`/api/workspaces/${state.wsId}/fs/file?path=${encodeURIComponent(path)}`);
+      toastOk(`Supprimé : ${path}`);
+      state.openFile = null;
+      state.dirty = false;
+      // Rafraîchit l'arbre + repasse en empty state côté éditeur
+      state.treePane.innerHTML = '';
+      await loadWsFsSubtree(state, state.treePane, '');
+      renderWsFsEmpty(state);
+    } catch (e) {
+      toastErr(e.message);
+    }
+  }, { danger: true });
 }
 
 function renderWsFsEmpty(state) {
