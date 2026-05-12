@@ -1349,12 +1349,24 @@ async function modalSession(wsId, filename) {
 }
 
 function renderWsMCPs(wsId, host) {
+  host.innerHTML = '';
+
+  // Action bar : attacher un MCP. Direction Nebula admin totale -
+  // l'utilisateur ne doit pas avoir a naviguer vers la page /mcps
+  // pour modifier l'attachement d'un MCP a son workspace.
+  const actionBar = el('div');
+  actionBar.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:8px';
+  const addBtn = btn('Attacher un MCP', 'btn-sm btn-primary', I.plus);
+  addBtn.title = 'Attacher ou détacher des MCPs globaux à ce workspace';
+  addBtn.addEventListener('click', () => modalAttachMcpToWorkspace(wsId));
+  actionBar.appendChild(addBtn);
+  host.appendChild(actionBar);
+
   const info = STATE.wsMcps[wsId] || { active: [] };
   if (!info.active.length) {
-    host.innerHTML = '<div class="dim" style="font-size:12.5px">Aucun MCP actif. Configure-les depuis la page MCPs ou via "Sync MCPs".</div>';
+    host.appendChild(el('div', 'dim', '<span style="font-size:12.5px">Aucun MCP attaché. Clique « Attacher un MCP » pour en piocher dans le registre global.</span>'));
     return;
   }
-  host.innerHTML = '';
   for (const mcpId of info.active) {
     const m = STATE.mcps.find(x => x.id === mcpId);
     const row = el('div', 'list-row');
@@ -1365,8 +1377,90 @@ function renderWsMCPs(wsId, host) {
         ${m ? `<div class="list-row-desc">${escapeHtml(m.description || m.transport || '')}</div>` : ''}
       </div>
     `;
+    // Détach 1-clic depuis la ligne (équivalent rapide du modal)
+    const detachBtn = btn('', 'btn-sm btn-ghost btn-icon-only', I.x);
+    detachBtn.title = 'Détacher de ce workspace';
+    detachBtn.addEventListener('click', () => {
+      confirmDialog(`Détacher « ${mcpId} » de ce workspace ?`, async () => {
+        const mcp = STATE.mcps.find(x => x.id === mcpId);
+        if (!mcp) { toastErr('MCP introuvable dans le registre'); return; }
+        const updated = { ...mcp, workspaces: (mcp.workspaces || []).filter(w => w !== wsId) };
+        try {
+          await API.post('/api/mcps', updated);
+          toastOk(`Détaché : ${mcpId}`);
+          STATE.loading = true; route();
+        } catch (e) { toastErr(e.message); }
+      });
+    });
+    row.appendChild(detachBtn);
     host.appendChild(row);
   }
+}
+
+// Modal de gestion des attachements MCP à un workspace donné. Réutilise
+// la route POST /api/mcps (upsert via add_or_update_mcp) pour modifier
+// la liste workspaces de chaque MCP impacté. Cf. principe Nebula admin
+// totale : pas besoin de quitter la page workspace pour gérer les MCPs.
+function modalAttachMcpToWorkspace(wsId) {
+  const allMcps = STATE.mcps || [];
+  if (!allMcps.length) {
+    const body = el('div');
+    body.innerHTML = `<p class="muted" style="margin-top:0">Aucun MCP dans le registre global. Crée-en un depuis l'onglet <strong>MCPs</strong> avant de pouvoir en attacher ici.</p>`;
+    const c = btn('Fermer', 'btn-ghost');
+    const { close } = openModal({ title: 'Attacher un MCP', body, footer: c });
+    c.addEventListener('click', close);
+    return;
+  }
+  const body = el('div');
+  body.innerHTML = `<p class="muted" style="margin-top:0;font-size:13px">Coche les MCPs à attacher à ce workspace, décoche pour retirer l'attache. Les modifications sont appliquées à la validation.</p>`;
+  const list = el('div', 'stack');
+  list.style.cssText = 'max-height:50vh;overflow-y:auto';
+  for (const m of allMcps) {
+    const initial = (m.workspaces || []).includes(wsId);
+    const card = el('label', 'list-row');
+    card.style.cursor = 'pointer';
+    card.dataset.initial = initial ? '1' : '0';
+    card.innerHTML = `
+      <input type="checkbox" data-mcp-id="${escapeHtml(m.id)}" ${initial ? 'checked' : ''} style="margin-right:10px">
+      <span class="dot ${m.status === 'connecté' ? 'dot-ok' : m.status === 'désactivé' ? 'dot-err' : 'dot-info'}"></span>
+      <div class="list-row-main">
+        <div class="list-row-name mono">${escapeHtml(m.name || m.id)}</div>
+        <div class="list-row-desc">${escapeHtml(m.description || m.transport || '')}</div>
+      </div>
+    `;
+    list.appendChild(card);
+  }
+  body.appendChild(list);
+  const cancel = btn('Annuler', 'btn-ghost');
+  const ok = btn('Appliquer', 'btn-primary', I.check);
+  const { close } = openModal({ title: 'Attacher des MCPs au workspace', body, footer: [cancel, ok], wide: true });
+  cancel.addEventListener('click', close);
+  ok.addEventListener('click', async () => {
+    const rows = body.querySelectorAll('label.list-row');
+    const changes = [];
+    for (const row of rows) {
+      const cb = row.querySelector('input[type=checkbox]');
+      const initial = row.dataset.initial === '1';
+      if (initial !== cb.checked) {
+        changes.push({ mcpId: cb.dataset.mcpId, attach: cb.checked });
+      }
+    }
+    if (!changes.length) { toast('Rien à modifier', 'info'); close(); return; }
+    let errs = 0;
+    for (const ch of changes) {
+      const mcp = allMcps.find(m => m.id === ch.mcpId);
+      if (!mcp) { errs++; continue; }
+      const wsSet = new Set(mcp.workspaces || []);
+      if (ch.attach) wsSet.add(wsId); else wsSet.delete(wsId);
+      const updated = { ...mcp, workspaces: Array.from(wsSet) };
+      try { await API.post('/api/mcps', updated); }
+      catch (e) { errs++; console.warn('[attach-mcp] update échoué pour', ch.mcpId, ':', e.message); }
+    }
+    if (errs) toastErr(`${errs} erreur(s) — voir console`);
+    else toastOk(`${changes.length} MCP${changes.length > 1 ? 's' : ''} mis à jour`);
+    close();
+    STATE.loading = true; route();
+  });
 }
 
 async function loadWsSkills(wsId, host) {
