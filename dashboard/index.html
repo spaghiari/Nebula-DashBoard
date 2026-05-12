@@ -63,6 +63,22 @@
     <span>Serveur hors ligne — relancez <code>start-dashboard.bat</code></span>
   </div>
 
+  <!-- Foundations : ordre de chargement = ordre des dependances.
+       state.js et api.js sont independants. theme.js depend de api.js
+       (applyTheme appelle API.post sur save=true). icons.js et utils.js
+       n'ont aucune dependance. -->
+  <script src="/js/icons.js"></script>
+  <script src="/js/utils.js"></script>
+  <script src="/js/state.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/theme.js"></script>
+  <script src="/js/toast.js"></script>
+  <script src="/js/modal.js"></script>
+  <script src="/js/nav.js"></script>
   <script src="/app.js"></script>
+  <!-- router.js charge APRES app.js : la fonction route() reference les
+       renderXxx() encore definis dans app.js. Les hashchange listener
+       et les premiers appels route() depuis init() sont post-load. -->
+  <script src="/js/router.js"></script>
 </body>
 </html>

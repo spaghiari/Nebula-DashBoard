@@ -1,0 +1,41 @@
+/* ================================================================
+   Nebula - API client
+   ----------------------------------------------------------------
+   Wrapper fetch centralise pour toutes les routes /api/* du serveur.
+   Charge AVANT app.js dans index.html (apres state.js si presence
+   de dependance future).
+
+   Securite : header X-Nebula-XHR custom sur chaque requete, posable
+   uniquement par fetch/XHR same-origin. Bloque les CSRF basiques
+   (un <form> ou <img> ne peut pas le poser).
+
+   Ref : CM-2 split app.js, refactor 2026-05-13.
+   ================================================================ */
+'use strict';
+
+const API = {
+  async _req(method, url, body) {
+    const opts = { method, headers: { 'X-Nebula-XHR': '1' } };
+    if (body !== undefined) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    let r;
+    try { r = await fetch(url, opts); }
+    catch (e) { throw new Error('Serveur injoignable'); }
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`;
+      try { const j = await r.json(); if (j.error) msg = j.error; } catch {}
+      throw new Error(msg);
+    }
+    const ct = r.headers.get('content-type') || '';
+    return ct.includes('json') ? r.json() : r.text();
+  },
+  get(url) { return this._req('GET', url); },
+  post(url, body = {}) { return this._req('POST', url, body); },
+  del(url) { return this._req('DELETE', url); },
+};
+
+// Helper : GET avec fallback silencieux en cas d'erreur (utile pour
+// les pollers de stats / sanity ou un 5xx ne doit pas casser la page).
+const safe = (url, fallback) => API.get(url).catch(() => fallback);
