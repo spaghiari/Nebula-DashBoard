@@ -44,6 +44,13 @@ from dashcore.api_workspaces import (
     get_workspace_settings, save_workspace_settings, patch_workspace_settings,
     get_global_hooks, set_global_hooks, register_existing_workspace,
 )
+from dashcore.api_files import (
+    list_tree as fs_list_tree,
+    read_file as fs_read_file,
+    write_file as fs_write_file,
+    delete_file as fs_delete_file,
+    search_workspace as fs_search_workspace,
+)
 from dashcore.api_mcps import (
     add_or_update_mcp, delete_mcp, sync_workspace_mcps, sync_all_workspaces,
     workspace_mcp_status, mcp_live_check, scan_claude_config,
@@ -114,6 +121,28 @@ def h_post_sync_mcps(q, b, ws):          return sync_workspace_mcps(ws)
 def h_post_save_settings(q, b, ws):      return save_workspace_settings(ws, b.get("content", "{}"))
 def h_post_patch_settings(q, b, ws, sec): return patch_workspace_settings(ws, sec, b.get("value"))
 def h_post_write_ws_file(q, b, ws):      return write_workspace_file(ws, b.get("filename", ""), b.get("content", ""))
+
+# Workspace file explorer (sous-namespace /fs/ pour isoler de l'API
+# scope-restreinte ci-dessus, qui ne gère que certains fichiers nommés).
+# Backend api_files.py : sécurité path (_safe_resolve), backup .bak
+# automatique avant write, validation JSON sur .json, mutation lock,
+# tmp+replace atomique.
+def h_get_ws_fs_tree(q, b, ws):
+    path = (q.get("path", [""])[0] or "")
+    try: depth = int(q.get("depth", ["1"])[0])
+    except (ValueError, TypeError): depth = 1
+    return fs_list_tree(ws, path, depth)
+def h_get_ws_fs_file(q, b, ws):
+    return fs_read_file(ws, q.get("path", [""])[0] or "")
+def h_get_ws_fs_search(q, b, ws):
+    query = q.get("q", [""])[0] or ""
+    try: max_hits = int(q.get("max", ["200"])[0])
+    except (ValueError, TypeError): max_hits = 200
+    return fs_search_workspace(ws, query, max_hits)
+def h_post_ws_fs_file(q, b, ws):
+    return fs_write_file(ws, b.get("path", ""), b.get("content", ""))
+def h_del_ws_fs_file(q, b, ws):
+    return fs_delete_file(ws, q.get("path", [""])[0] or "")
 def h_post_set_ws_plugin(q, b, ws):      return set_workspace_plugin(ws, b.get("plugin_id", ""), b.get("enabled"))
 def h_post_launch(q, b, ws):
     if not safe_id(ws): return 400, {"error": "id invalide"}
@@ -381,6 +410,10 @@ ROUTES_GET = [
     (re.compile(rf"^/api/workspaces/({_ID})/plugins$"),                                     h_get_ws_plugins),
     (re.compile(rf"^/api/workspaces/({_ID})/mcp-check$"),                                   h_get_ws_mcp_check),
     (re.compile(rf"^/api/workspaces/({_ID})/export$"),                                      h_get_ws_export),
+    # Workspace file explorer (lecture)
+    (re.compile(rf"^/api/workspaces/({_ID})/fs/tree$"),                                     h_get_ws_fs_tree),
+    (re.compile(rf"^/api/workspaces/({_ID})/fs/file$"),                                     h_get_ws_fs_file),
+    (re.compile(rf"^/api/workspaces/({_ID})/fs/search$"),                                   h_get_ws_fs_search),
     # MCPs
     (re.compile(rf"^/api/mcps$"),                                                           h_get_mcps),
     (re.compile(rf"^/api/mcps/recipes$"),                                                   h_get_mcp_recipes),
@@ -443,6 +476,7 @@ ROUTES_POST = [
     (re.compile(rf"^/api/workspaces/({_ID})/settings$"),                                    h_post_save_settings),
     (re.compile(rf"^/api/workspaces/({_ID})/settings/([a-zA-Z]+)$"),                        h_post_patch_settings),
     (re.compile(rf"^/api/workspaces/({_ID})/file$"),                                        h_post_write_ws_file),
+    (re.compile(rf"^/api/workspaces/({_ID})/fs/file$"),                                     h_post_ws_fs_file),
     (re.compile(rf"^/api/workspaces/({_ID})/plugins$"),                                     h_post_set_ws_plugin),
     (re.compile(rf"^/api/launch/({_ID})$"),                                                 h_post_launch),
     (re.compile(rf"^/api/launch-resume/({_ID})$"),                                          h_post_launch_resume),
@@ -504,6 +538,7 @@ ROUTES_POST = [
 
 ROUTES_DELETE = [
     (re.compile(rf"^/api/workspaces/({_ID})$"),                                             h_del_ws),
+    (re.compile(rf"^/api/workspaces/({_ID})/fs/file$"),                                     h_del_ws_fs_file),
     (re.compile(rf"^/api/mcps/recipes/local/({_ID})$"),                                     h_del_local_recipe),
     (re.compile(rf"^/api/mcps/({_ID})$"),                                                   h_del_mcp),
     (re.compile(rf"^/api/env/(.+)$"),                                                       h_del_env),

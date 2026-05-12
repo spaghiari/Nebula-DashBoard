@@ -903,7 +903,311 @@ async function renderWorkspace(wsId) {
   bottom.appendChild(filesBlock);
 
   page.appendChild(bottom);
+
+  // ── Section E : Fichiers du workspace (explorateur + éditeur) ──
+  const fsHost = el('div');
+  page.appendChild(fsHost);
+  renderWsFileExplorer(w.id, fsHost);
+
   c.appendChild(page);
+}
+
+/* ================================================================
+   WORKSPACE FILE EXPLORER (Section E sur la page workspace detail)
+   ================================================================ */
+
+// Point d'entrée : monte l'explorateur dans `host`. État local porté
+// par l'objet `state` pour ne pas polluer STATE global. Tous les fetches
+// passent par /api/workspaces/<id>/fs/* (cf. server.py).
+async function renderWsFileExplorer(wsId, host) {
+  const section = el('div', 'ws-fs-section');
+
+  // Header : titre + bouton Nouveau fichier
+  const sectionLabel = el('div', 'section-label', '<span class="num">E.</span> Fichiers du workspace');
+  const headerRow = el('div', 'ws-fs-header');
+  const newBtn = btn('Nouveau fichier', 'btn-sm btn-ghost', I.plus);
+  newBtn.title = 'Créer un fichier (les dossiers parents sont créés automatiquement)';
+  newBtn.addEventListener('click', () => promptNewWsFile(wsId));
+  headerRow.append(sectionLabel, newBtn);
+
+  // Toolbar : recherche
+  const toolbar = el('div', 'ws-fs-toolbar');
+  const searchInput = document.createElement('input');
+  searchInput.type = 'search';
+  searchInput.className = 'input ws-fs-search-input';
+  searchInput.placeholder = 'Rechercher dans le workspace…';
+  searchInput.spellcheck = false;
+  toolbar.appendChild(searchInput);
+
+  // Split : tree à gauche, éditeur à droite
+  const split = el('div', 'ws-fs-split');
+  const treePane = el('div', 'ws-fs-tree');
+  const editorPane = el('div', 'ws-fs-editor');
+  split.append(treePane, editorPane);
+
+  section.append(headerRow, toolbar, split);
+  host.appendChild(section);
+
+  // État local de cette instance d'explorer
+  const state = {
+    wsId,
+    openFile: null,    // {path, content, mtime, encoding} ou null
+    dirty: false,
+    treePane,
+    editorPane,
+    textarea: null,
+    dirtyDot: null,
+    rootEntries: null, // cache pour restaurer après search
+  };
+
+  // Rendu initial : éditeur vide + arbre racine
+  renderWsFsEmpty(state);
+  await loadWsFsSubtree(state, treePane, '');
+
+  // Recherche avec debounce
+  let searchTimer = null;
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    const q = searchInput.value.trim();
+    if (q.length < 2) {
+      treePane.innerHTML = '';
+      loadWsFsSubtree(state, treePane, '');
+      return;
+    }
+    searchTimer = setTimeout(() => doWsFsSearch(state, q), 300);
+  });
+}
+
+async function loadWsFsSubtree(state, container, relPath) {
+  container.innerHTML = '<div class="dim ws-fs-loading">Chargement…</div>';
+  try {
+    const r = await API.get(`/api/workspaces/${state.wsId}/fs/tree?path=${encodeURIComponent(relPath)}&depth=1`);
+    container.innerHTML = '';
+    if (!r.entries || r.entries.length === 0) {
+      container.appendChild(el('div', 'dim ws-fs-empty-line', '(dossier vide)'));
+      return;
+    }
+    for (const entry of r.entries) {
+      const fullPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+      container.appendChild(renderWsFsRow(state, entry, fullPath));
+    }
+  } catch (e) {
+    container.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderWsFsRow(state, entry, fullPath) {
+  const isDir = entry.type === 'dir';
+  const isExcluded = !!entry.excluded;
+  const isBinary = !!entry.binary && !isDir;
+
+  const row = el('div', 'ws-fs-tree-row' +
+    (isDir ? ' ws-fs-tree-row-dir' : ' ws-fs-tree-row-file') +
+    (isExcluded ? ' is-excluded' : '') +
+    (isBinary ? ' is-binary' : ''));
+
+  const icon = isExcluded ? '🚫' : (isDir ? '📁' : (isBinary ? '⛔' : '📄'));
+  const childCount = (isDir && entry.children_count != null) ? ` (${entry.children_count})` : '';
+  const sizeStr = (!isDir && entry.size != null) ? `<span class="ws-fs-tree-size dim">${fmtBytes(entry.size)}</span>` : '';
+
+  row.innerHTML = `
+    <span class="ws-fs-tree-icon">${icon}</span>
+    <span class="ws-fs-tree-name">${escapeHtml(entry.name)}</span>
+    <span class="ws-fs-tree-meta dim">${childCount}</span>
+    ${sizeStr}
+  `;
+
+  if (isExcluded) {
+    row.title = 'Dossier exclu (non explorable)';
+    return row;
+  }
+
+  if (isDir) {
+    const childContainer = el('div', 'ws-fs-tree-children');
+    childContainer.style.display = 'none';
+    let loaded = false;
+    row.title = `Cliquer pour ${childCount ? 'voir le contenu' : 'explorer'}`;
+    row.addEventListener('click', async () => {
+      if (childContainer.style.display === 'none') {
+        if (!loaded) { await loadWsFsSubtree(state, childContainer, fullPath); loaded = true; }
+        childContainer.style.display = '';
+        row.classList.add('is-expanded');
+      } else {
+        childContainer.style.display = 'none';
+        row.classList.remove('is-expanded');
+      }
+    });
+    const wrapper = el('div');
+    wrapper.append(row, childContainer);
+    return wrapper;
+  }
+
+  if (isBinary) {
+    row.title = 'Fichier binaire (non éditable)';
+    row.addEventListener('click', () => toast('Fichier binaire non éditable.', 'info'));
+    return row;
+  }
+
+  row.title = `Cliquer pour ouvrir ${fullPath}`;
+  row.addEventListener('click', () => openWsFsFileInEditor(state, fullPath, row));
+  return row;
+}
+
+async function openWsFsFileInEditor(state, path, rowEl) {
+  // Garde-fou : modifs non sauvegardées
+  if (state.dirty) {
+    toastErr('Modifications non-sauvegardées sur le fichier courant. Sauvegarde ou annule avant de changer.');
+    return;
+  }
+  try {
+    const r = await API.get(`/api/workspaces/${state.wsId}/fs/file?path=${encodeURIComponent(path)}`);
+    if (r.binary) {
+      toast(r.reason ? `Binaire (${r.reason})` : 'Fichier binaire non éditable', 'info');
+      return;
+    }
+    state.openFile = { path, content: r.content || '', mtime: r.mtime, encoding: r.encoding };
+    state.dirty = false;
+    renderWsFsEditor(state);
+    document.querySelectorAll('.ws-fs-tree-row.is-open').forEach(e => e.classList.remove('is-open'));
+    if (rowEl) rowEl.classList.add('is-open');
+  } catch (e) {
+    toastErr(e.message);
+  }
+}
+
+function renderWsFsEditor(state) {
+  const pane = state.editorPane;
+  pane.innerHTML = '';
+  if (!state.openFile) { renderWsFsEmpty(state); return; }
+
+  const header = el('div', 'ws-fs-editor-header');
+  const titleSpan = el('div', 'ws-fs-editor-title mono');
+  titleSpan.textContent = `📄 ${state.openFile.path}`;
+  const dirtyDot = el('span', 'ws-fs-editor-dirty');
+  dirtyDot.textContent = state.dirty ? '• modifié' : '';
+  header.append(titleSpan, dirtyDot);
+
+  const ta = document.createElement('textarea');
+  ta.className = 'ws-fs-editor-textarea mono';
+  ta.value = state.openFile.content;
+  ta.spellcheck = false;
+  ta.addEventListener('input', () => {
+    state.dirty = (ta.value !== state.openFile.content);
+    dirtyDot.textContent = state.dirty ? '• modifié' : '';
+  });
+  ta.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveWsFsCurrentFile(state); }
+  });
+  state.textarea = ta;
+  state.dirtyDot = dirtyDot;
+
+  const footer = el('div', 'ws-fs-editor-footer');
+  const hint = el('span', 'dim ws-fs-editor-hint');
+  hint.textContent = 'Ctrl+S pour sauvegarder';
+  const cancelBtn = btn('Annuler', 'btn-sm btn-ghost');
+  cancelBtn.addEventListener('click', () => {
+    if (!state.dirty) return;
+    ta.value = state.openFile.content;
+    state.dirty = false;
+    dirtyDot.textContent = '';
+  });
+  const saveBtn = btn('Sauvegarder', 'btn-sm btn-primary', I.check);
+  saveBtn.title = 'Ctrl+S';
+  saveBtn.addEventListener('click', () => saveWsFsCurrentFile(state));
+  footer.append(hint, cancelBtn, saveBtn);
+
+  pane.append(header, ta, footer);
+}
+
+function renderWsFsEmpty(state) {
+  state.editorPane.innerHTML = '';
+  const empty = el('div', 'ws-fs-empty');
+  const title = el('div', 'ws-fs-empty-title');
+  title.textContent = 'Aucun fichier sélectionné';
+  const hint = el('div', 'ws-fs-empty-hint dim');
+  hint.innerHTML = "▸ Clique sur un fichier dans l'arbre pour l'ouvrir<br>▸ Ou utilise la recherche ci-dessus";
+  empty.append(title, hint);
+  state.editorPane.appendChild(empty);
+}
+
+async function saveWsFsCurrentFile(state) {
+  if (!state.openFile) return;
+  if (!state.dirty) { toast('Rien à sauvegarder', 'info'); return; }
+  try {
+    const r = await API.post(`/api/workspaces/${state.wsId}/fs/file`, {
+      path: state.openFile.path,
+      content: state.textarea.value,
+    });
+    state.openFile.content = state.textarea.value;
+    state.openFile.mtime = r.mtime;
+    state.dirty = false;
+    if (state.dirtyDot) state.dirtyDot.textContent = '';
+    toastOk(`Sauvegardé : ${state.openFile.path}`);
+  } catch (e) {
+    toastErr(e.message);
+  }
+}
+
+async function doWsFsSearch(state, query) {
+  const container = state.treePane;
+  container.innerHTML = '<div class="dim ws-fs-loading">Recherche…</div>';
+  try {
+    const r = await API.get(`/api/workspaces/${state.wsId}/fs/search?q=${encodeURIComponent(query)}&max=50`);
+    container.innerHTML = '';
+    if (!r.hits || r.hits.length === 0) {
+      container.appendChild(el('div', 'dim ws-fs-empty-line', 'Aucun résultat.'));
+      return;
+    }
+    const header = el('div', 'ws-fs-search-results-header dim');
+    header.textContent = `${r.hits.length} résultat${r.hits.length > 1 ? 's' : ''}${r.truncated ? ' (tronqué)' : ''} · ${r.files_scanned} fichiers scannés`;
+    container.appendChild(header);
+    for (const hit of r.hits) {
+      const row = el('div', 'ws-fs-search-hit');
+      const pathEl = el('div', 'ws-fs-search-hit-path mono');
+      pathEl.textContent = `${hit.path}:${hit.line}`;
+      const snippetEl = el('div', 'ws-fs-search-hit-snippet dim');
+      snippetEl.textContent = hit.snippet;
+      row.append(pathEl, snippetEl);
+      row.title = `Ouvrir ${hit.path}`;
+      row.addEventListener('click', () => openWsFsFileInEditor(state, hit.path, null));
+      container.appendChild(row);
+    }
+  } catch (e) {
+    container.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function promptNewWsFile(wsId) {
+  const body = el('div');
+  const hint = el('p', 'muted');
+  hint.style.cssText = 'margin-top:0;font-size:13px';
+  hint.textContent = 'Le chemin doit être relatif à la racine du workspace. Les dossiers parents sont créés automatiquement.';
+  const field = el('div', 'field');
+  const label = el('label', 'field-label');
+  label.textContent = 'Chemin (ex: agents/expert.md)';
+  const input = document.createElement('input');
+  input.className = 'input mono';
+  input.name = 'path';
+  input.placeholder = 'agents/expert.md';
+  field.append(label, input);
+  body.append(hint, field);
+
+  const cancel = btn('Annuler', 'btn-ghost');
+  const create = btn('Créer', 'btn-primary', I.plus);
+  const { close } = openModal({ title: 'Nouveau fichier dans le workspace', body, footer: [cancel, create] });
+  cancel.addEventListener('click', close);
+  create.addEventListener('click', async () => {
+    const path = input.value.trim();
+    if (!path) { toastErr('Chemin requis'); return; }
+    try {
+      await API.post(`/api/workspaces/${wsId}/fs/file`, { path, content: '' });
+      toastOk(`Créé : ${path}`);
+      close();
+      // Rafraîchit l'arbre via re-render de la page
+      STATE.loading = true; route();
+    } catch (e) { toastErr(e.message); }
+  });
+  setTimeout(() => input.focus(), 50);
 }
 
 async function loadSessions(wsId, host) {
