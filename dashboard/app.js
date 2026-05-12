@@ -798,20 +798,32 @@ async function renderWorkspace(wsId) {
       </div>
     </div>
   `;
-  // Secondary actions (smaller, in header right side)
+  // Secondary actions : 4 actions de maintenance (Modifier / Dupliquer /
+  // Exporter / Dossier) groupées à gauche, Supprimer isolé spatialement
+  // à droite avec bordure rouge permanente (btn-danger-outline). Tous
+  // visibles, aucun caché — la protection contre le clic accidentel
+  // vient du gap visuel + de la distinction de style, pas d'une
+  // hiérarchie cachée. Tooltips ajoutés pour l'a11y et la
+  // découvrabilité.
   const headerActions = el('div', 'ws-actions');
   const editBtn = btn('Modifier', 'btn-sm btn-ghost', I.edit);
+  editBtn.title = "Modifier le nom, l'emoji, la description, le chemin";
   editBtn.addEventListener('click', () => modalEditWorkspace(w));
   const dupBtn = btn('Dupliquer', 'btn-sm btn-ghost', I.copy);
+  dupBtn.title = 'Créer un nouveau workspace à partir de celui-ci';
   dupBtn.addEventListener('click', () => modalDuplicateWorkspace(w));
   const exportBtn = btn('Exporter', 'btn-sm btn-ghost', I.download);
+  exportBtn.title = 'Télécharger un ZIP du workspace';
   exportBtn.addEventListener('click', () => { window.location.href = `/api/workspaces/${w.id}/export`; });
   const openBtn = btn('Dossier', 'btn-sm btn-ghost', I.folder);
+  openBtn.title = "Ouvrir le dossier du workspace dans l'explorateur";
   openBtn.addEventListener('click', async () => {
     try { const r = await API.post('/api/open', { target: `workspace-dir:${w.id}` }); toastOk(r.message); }
     catch (e) { toastErr(e.message); }
   });
-  const delBtn = btn('Supprimer', 'btn-sm btn-ghost btn-danger', I.trash);
+  const delBtn = btn('Supprimer', 'btn-sm btn-danger-outline', I.trash);
+  delBtn.title = 'Supprimer ce workspace (action destructive, confirmation demandée)';
+  delBtn.style.marginLeft = 'auto';  // pousse à droite, isole spatialement
   delBtn.addEventListener('click', () => modalDeleteWorkspace(w));
   headerActions.append(editBtn, dupBtn, exportBtn, openBtn, delBtn);
   header.appendChild(headerActions);
