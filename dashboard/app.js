@@ -2317,8 +2317,18 @@ function modalImportMCPs() {
     if (ws.length) obj.workspaces = ws;
     try {
       const r = await API.post('/api/mcps/import', obj);
-      const ok = (r.results || []).filter(x => x.ok).length;
-      toastOk(`${ok} MCP(s) importés`);
+      const created = r.created || [];
+      const overwritten = r.overwritten || [];
+      const failed = (r.results || []).filter(x => !x.ok);
+      // Récap explicite : un import écrasait un id existant en silence.
+      // On distingue créés / écrasés (audit UX Lot G item 2).
+      let msg = `${created.length} créé(s)`;
+      if (overwritten.length) msg += `, ${overwritten.length} écrasé(s) : ${overwritten.join(', ')}`;
+      if (failed.length) msg += ` -- ${failed.length} en échec`;
+      // Un écrasement mérite un toast info plus long (l'utilisateur doit lire
+      // quels ids existants ont été remplacés), un import 100% création = ok bref.
+      if (overwritten.length) toast(msg, 'info', 7000);
+      else toastOk(msg);
       close(); STATE.loading = true; route();
     } catch (e) { toastErr(e.message); }
   });

@@ -176,6 +176,46 @@ def delete_env_var(key: str) -> tuple[int, dict]:
     return 200, {"ok": True, "key": key}
 
 
+def export_plain_text() -> tuple[int, str | dict]:
+    """Retourne le contenu courant du store env sérialisé en clair (KEY=VALUE).
+
+    Lecture pure, AUCUNE mutation : ni le .enc ni le .env.local ne sont touchés.
+    Sert le filet de sécurité « télécharge une sauvegarde en clair avant de
+    chiffrer » : si la clé DPAPI est perdue (changement de poste/compte),
+    l'utilisateur a une copie hors-ligne de ses secrets.
+
+    Retourne (200, texte) en cas de succès, (status, {error}) sinon.
+    Le contenu EST en clair par construction (c'est l'objet de l'export) ;
+    l'appelant est responsable de l'étiquetage et du transport (pièce jointe).
+    """
+    if is_encrypted_mode():
+        try:
+            plaintext = read_encrypted_file(ENV_ENC_FILE)
+        except CryptoError as e:
+            return 500, {"error": f"déchiffrement échoué : {e}"}
+        try:
+            env = _parse_env_text(plaintext.decode("utf-8"))
+        except Exception as e:  # noqa: BLE001
+            return 500, {"error": f"contenu déchiffré illisible : {e}"}
+    else:
+        if not ENV_FILE.exists():
+            return 404, {"error": ".env.local absent : rien à exporter"}
+        try:
+            env = _parse_env_text(ENV_FILE.read_text(encoding="utf-8"))
+        except OSError as e:
+            return 500, {"error": f"lecture .env.local impossible : {e}"}
+
+    header = (
+        "# .env.local -- SAUVEGARDE EN CLAIR (secrets non chiffrés)\n"
+        f"# Exporté le {time.strftime('%Y-%m-%d %H:%M:%S')} par Nebula.\n"
+        "# ATTENTION : ce fichier contient tes secrets en clair. Stocke-le en\n"
+        "# lieu sûr (gestionnaire de mots de passe, coffre chiffré) et supprime\n"
+        "# toute copie qui traîne. Pour le restaurer : place-le à la racine de\n"
+        "# Nebula sous le nom .env.local puis réactive le chiffrement.\n"
+    )
+    return 200, header + _serialize_env(env)
+
+
 def enable_encryption() -> tuple[int, dict]:
     """Migre .env.local (clair) vers .env.local.enc (chiffré DPAPI).
 

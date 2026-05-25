@@ -17,6 +17,27 @@
    ================================================================ */
 'use strict';
 
+// Collecte les ids de workspaces dont le .mcp.json avait été édité à la main
+// (drapeau `hand_edited` posé par sync_workspace_mcps). `results` = map
+// {ws_id: {hand_edited?, ...}} renvoyée par /api/sync-all.
+function collectHandEdited(results) {
+  return Object.entries(results || {})
+    .filter(([, r]) => r && r.hand_edited)
+    .map(([ws]) => ws);
+}
+
+// Avertit (non bloquant) que des .mcp.json ont été modifiés hors Nebula et
+// viennent d'être remplacés par la régénération depuis le registre. Le registre
+// est la source de vérité : il faut éditer le registre, pas le fichier.
+function warnHandEdited(wsIds) {
+  if (!wsIds || !wsIds.length) return;
+  const list = wsIds.join(', ');
+  toast(
+    `.mcp.json modifié hors Nebula (${list}) -- édite le registre, pas le fichier ; ta modif manuelle a été remplacée.`,
+    'info', 8000
+  );
+}
+
 // Bandeau "Mise en route" sur Home -- affiche tant que la checklist n'est pas complete.
 // Retourne null si tout est OK (6/6 etapes faites) -> la home reste epuree pour les users avances.
 function buildHomeQuickstart() {
@@ -82,7 +103,11 @@ async function renderHome() {
   const syncAllBtn = btn('Sync tous', 'btn', I.refresh);
   syncAllBtn.addEventListener('click', async () => {
     syncAllBtn.disabled = true;
-    try { const r = await API.post('/api/sync-all', {}); toastOk('Sync terminé pour ' + Object.keys(r.results || {}).length + ' workspace(s)'); }
+    try {
+      const r = await API.post('/api/sync-all', {});
+      toastOk('Sync terminé pour ' + Object.keys(r.results || {}).length + ' workspace(s)');
+      warnHandEdited(collectHandEdited(r.results));
+    }
     catch (e) { toastErr(e.message); }
     finally { syncAllBtn.disabled = false; }
   });
@@ -372,6 +397,7 @@ async function loadSanity(host) {
         try {
           const res = await API.post('/api/sync-all', {});
           toastOk('Sync terminé pour ' + Object.keys(res.results || {}).length + ' workspace(s)');
+          warnHandEdited(collectHandEdited(res.results));
           loadSanity(host);
         } catch (e) { toastErr(e.message); }
       }));
@@ -397,8 +423,11 @@ async function loadSanity(host) {
       syncBtn.title = "Synchronise le registre MCP vers le .mcp.json de ce workspace";
       syncBtn.addEventListener('click', () => withBusy(syncBtn, async () => {
         try {
-          await API.post(`/api/workspaces/${f.workspace}/sync-mcps`, {});
+          const res = await API.post(`/api/workspaces/${f.workspace}/sync-mcps`, {});
           toastOk('« ' + f.workspace + ' » synchronisé');
+          // Avertit si le .mcp.json avait été édité à la main : le registre est
+          // la source de vérité, la modif manuelle vient d'être remplacée.
+          if (res && res.hand_edited) warnHandEdited([f.workspace]);
           loadSanity(host);
         } catch (e) { toastErr(e.message); }
       }));

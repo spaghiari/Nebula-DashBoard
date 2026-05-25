@@ -34,6 +34,10 @@
 # UI state runtime (thème, onboarding…)
 /dashboard/data/ui_state.json
 
+# État de sync MCP runtime (hash du dernier .mcp.json généré par workspace,
+# pour détecter les éditions manuelles du fichier)
+/dashboard/data/mcp_sync_state.json
+
 # Reflexive — DB locale, propositions, log d'erreurs hooks
 /dashboard/data/reflexive.db
 /dashboard/data/reflexive.db-wal

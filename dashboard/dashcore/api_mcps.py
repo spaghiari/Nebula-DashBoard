@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import glob
+import hashlib
 import io
 import json
 import logging
@@ -538,13 +539,17 @@ def add_or_update_mcp(payload: dict) -> tuple[int, dict]:
 
         if idx is None:
             mcps.append(clean)
+            action = "created"
         else:
             mcps[idx] = clean
+            action = "overwritten"
         write_json(MCP_REGISTRY, data)
         # Sync sous le verrou : garantit que les .mcp.json reflètent
         # exactement le registre qu'on vient d'écrire (pas d'interleaving).
         synced = _auto_sync(affected)
-    return 200, {"ok": True, "id": clean["id"], "synced": sorted(synced.keys())}
+    # `action` permet à l'import bulk de distinguer création vs écrasement
+    # silencieux d'un id déjà présent (récap front, audit UX Lot G item 2).
+    return 200, {"ok": True, "id": clean["id"], "action": action, "synced": sorted(synced.keys())}
 
 
 def delete_mcp(mcp_id: str) -> tuple[int, dict]:
@@ -608,6 +613,44 @@ def build_mcp_server_entry(mcp: dict, env_local: dict) -> tuple[dict, list[str]]
     return entry, sorted(set(missing_total))
 
 
+# ── Détection d'édition manuelle du .mcp.json (audit UX Lot G item 3) ────────
+# Le registre Nebula EST la source de vérité ; sync_workspace_mcps régénère le
+# .mcp.json de chaque workspace. Si l'utilisateur a édité le .mcp.json à la main
+# (piège documenté : il FAUT éditer le registre, pas le fichier), son edit est
+# écrasé au sync. On détecte la divergence pour l'AVERTIR -- sans bloquer : le
+# sync reste la bonne action, le registre fait foi.
+#
+# Mécanisme : on stocke le hash du DERNIER .mcp.json généré par Nebula dans un
+# état centralisé (data/mcp_sync_state.json, mappé par ws_id). Au sync suivant,
+# si le fichier sur disque ne correspond pas à ce hash -> il a été édité hors
+# Nebula. État centralisé (pas de sidecar dans le workspace) : ne pollue pas
+# l'arbre du workspace, ne part pas dans git, un seul fichier à gérer.
+MCP_SYNC_STATE_FILE = DASHBOARD_DIR / "data" / "mcp_sync_state.json"
+
+
+def _mcp_file_hash(path: Path) -> str | None:
+    """sha256 hex du contenu brut du fichier, ou None s'il n'existe pas/illisible."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _read_mcp_sync_state() -> dict:
+    state = read_json(MCP_SYNC_STATE_FILE, {})
+    return state if isinstance(state, dict) else {}
+
+
+def _set_mcp_sync_hash(ws_id: str, file_hash: str | None) -> None:
+    """Persiste (ou retire si None) le hash du dernier .mcp.json généré pour ws_id."""
+    state = _read_mcp_sync_state()
+    if file_hash is None:
+        state.pop(ws_id, None)
+    else:
+        state[ws_id] = file_hash
+    write_json(MCP_SYNC_STATE_FILE, state)
+
+
 def sync_workspace_mcps(ws_id: str) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
@@ -633,12 +676,30 @@ def sync_workspace_mcps(ws_id: str) -> tuple[int, dict]:
             missing[m["id"]] = miss
 
     out_path = ws_dir / ".mcp.json"
+
+    # Détection AVANT écrasement : le fichier sur disque diverge-t-il du dernier
+    # rendu Nebula connu ? On ne signale que si on a une empreinte de référence
+    # (sinon = première sync ou état perdu : pas d'alerte, on (re)synchronise).
+    prev_hash = _read_mcp_sync_state().get(ws_id)
+    cur_hash = _mcp_file_hash(out_path)
+    hand_edited = bool(prev_hash and cur_hash and cur_hash != prev_hash)
+
     if mcp_servers:
         write_json(out_path, {"mcpServers": mcp_servers})
+        # Stocke le hash du fichier RÉELLEMENT écrit (relu sur disque) pour que
+        # la prochaine comparaison soit exacte, indépendamment du rendu json.
+        _set_mcp_sync_hash(ws_id, _mcp_file_hash(out_path))
     elif out_path.exists():
         out_path.unlink()
+        _set_mcp_sync_hash(ws_id, None)
+    else:
+        # Rien à générer et rien sur disque : nettoie un éventuel hash résiduel.
+        _set_mcp_sync_hash(ws_id, None)
 
-    return 200, {"ok": True, "applied": applied, "missing_env": missing, "path": str(out_path)}
+    result = {"ok": True, "applied": applied, "missing_env": missing, "path": str(out_path)}
+    if hand_edited:
+        result["hand_edited"] = True
+    return 200, result
 
 
 def sync_all_workspaces() -> tuple[int, dict]:

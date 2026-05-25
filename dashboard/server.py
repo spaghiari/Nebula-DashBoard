@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -30,6 +31,7 @@ from dashcore.helpers import (
     setup_logging, read_json, safe_id, load_env_local, port_free, find_port,
     set_env_var, delete_env_var, launch_script, open_target,
     is_encrypted_mode, enable_encryption, disable_encryption, env_health,
+    export_plain_text,
     backup_claude_config, list_backups, restore_backup, read_journal, append_journal, clear_journal,
     all_stats, sanity_check, global_search, cleanup_orphan_bats,
 )
@@ -214,6 +216,17 @@ def h_post_import_mcps(q, b):
     else:
         entries = None
 
+    # Récap created/overwritten : un import bulk écrasait un id existant en
+    # silence (audit UX Lot G item 2). On distingue désormais explicitement
+    # les ids créés des ids écrasés pour que le front prévienne l'utilisateur.
+    def _summary(rs):
+        return {
+            "ok": True,
+            "results": rs,
+            "created": sorted(x["id"] for x in rs if x.get("ok") and x.get("action") == "created"),
+            "overwritten": sorted(x["id"] for x in rs if x.get("ok") and x.get("action") == "overwritten"),
+        }
+
     if entries is not None:
         for cfg in entries:
             mcp_id = cfg.get("id", "")
@@ -225,7 +238,7 @@ def h_post_import_mcps(q, b):
             mcp.setdefault("status", "disponible")
             s, r = add_or_update_mcp(mcp)
             results.append({"id": mcp_id, "ok": s < 400, **r})
-        return 200, {"ok": True, "results": results}
+        return 200, _summary(results)
 
     servers = b.get("mcpServers") or b.get("servers") or {}
     if not isinstance(servers, dict):
@@ -248,7 +261,7 @@ def h_post_import_mcps(q, b):
         }
         s, r = add_or_update_mcp(mcp)
         results.append({"id": name, "ok": s < 400, **r})
-    return 200, {"ok": True, "results": results}
+    return 200, _summary(results)
 
 # ── Templates ───────────────────────────────────────────────────────────────
 def h_get_templates(q, b):                  return 200, {"templates": list_templates()}
@@ -390,6 +403,20 @@ def h_post_system_stash_drop(q, b): return system_drop_stash((b or {}).get("ref"
 def h_post_set_env(q, b):        return set_env_var(b.get("key", ""), b.get("value", ""))
 def h_post_env_encrypt(q, b):    return enable_encryption()
 def h_post_env_decrypt(q, b):    return disable_encryption()
+def h_get_env_export_plain(q, b):
+    """Sert le contenu env courant en clair en pièce jointe (filet anti-perte
+    de clé DPAPI). Route SENSIBLE : exige X-Nebula-XHR (cf. _SENSITIVE_ROUTES).
+    Le téléchargement est toujours déclenché explicitement par l'utilisateur,
+    jamais automatique."""
+    status, payload = export_plain_text()
+    if status != 200:
+        return status, payload
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    return 'raw', {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Disposition": f'attachment; filename="env.local.clair.{ts}.txt"',
+        "Cache-Control": "no-store",
+    }, payload.encode("utf-8")
 def h_post_open(q, b):           return open_target(b.get("target", ""))
 def h_post_backup(q, b):         return backup_claude_config()
 def h_post_backup_restore(q, b): return restore_backup(b.get("name", ""))
@@ -489,6 +516,7 @@ ROUTES_GET = [
     # Système
     (re.compile(rf"^/api/env$"),                                                            h_get_env),
     (re.compile(rf"^/api/env/values$"),                                                     h_get_env_values),
+    (re.compile(rf"^/api/env/export-plain$"),                                               h_get_env_export_plain),
     (re.compile(rf"^/api/snippets$"),                                                       h_get_snippets),
     (re.compile(rf"^/api/stats$"),                                                          h_get_stats),
     (re.compile(rf"^/api/sanity-check$"),                                                   h_get_sanity),
@@ -685,7 +713,8 @@ class Handler(BaseHTTPRequestHandler):
     # Routes qui exposent des données sensibles : exigent un header custom
     # qui ne peut pas être posé par <form>, <img>, <link>… (anti-CSRF basique
     # même si on est sur 127.0.0.1).
-    _SENSITIVE_ROUTES = {"/api/env/values", "/api/env/encrypt", "/api/env/decrypt"}
+    _SENSITIVE_ROUTES = {"/api/env/values", "/api/env/encrypt", "/api/env/decrypt",
+                         "/api/env/export-plain"}
     # Préfixes dont les mutations (POST/DELETE) exigent X-Nebula-XHR.
     # Les GET restent libres (lectures inoffensives).
     _SENSITIVE_PREFIXES = ("/api/reflexive/",)

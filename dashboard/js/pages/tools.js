@@ -188,27 +188,27 @@ async function loadEnvVars(host) {
     wrap['innerHTML'] = `<div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2);flex-wrap:wrap"><h3 class="card-title">${allKeys.length} variable${allKeys.length > 1 ? 's' : ''}${encBadge}${missBadge}</h3><div data-enc-actions style="display:flex;gap:6px"></div></div>`;
 
     const encActions = wrap.querySelector('[data-enc-actions]');
+    const clearPath = r.file || '.env.local';
     if (!encrypted) {
       const enableBtn = btn('Activer le chiffrement', 'btn-sm', I.key);
       enableBtn.title = 'Chiffre .env.local avec DPAPI (clé liée à ton compte Windows)';
-      enableBtn.addEventListener('click', () => {
-        confirmDialog(
-          'Activer le chiffrement DPAPI ?\n\nLe fichier sera lié à ton compte Windows. Si tu réinstalles ou changes de poste, les secrets seront illisibles -- pense à exporter en clair pour backup avant.\n\nUn fichier .env.local.bak.<date> sera conservé.',
-          async () => {
-            try { const res = await API.post('/api/env/encrypt', {}); toastOk(`Chiffré (${res.keys} clé${res.keys > 1 ? 's' : ''})`); loadEnvVars(host); }
-            catch (e) { toastErr(e.message); }
-          }
-        );
-      });
+      enableBtn.addEventListener('click', () => modalEnableEncryption(host));
       encActions.appendChild(enableBtn);
     } else {
       const disableBtn = btn('Désactiver / Exporter clair', 'btn-sm btn-ghost', I.unlock || I.key);
       disableBtn.title = 'Déchiffre et écrit .env.local en clair, supprime le fichier chiffré';
       disableBtn.addEventListener('click', () => {
         confirmDialog(
-          'Désactiver le chiffrement ?\n\nLe fichier .env.local sera réécrit en clair sur disque. Pratique pour un backup hors-poste ou pour migrer. Pense à le supprimer ou à réactiver le chiffrement après.',
+          'Désactiver le chiffrement ?\n\n'
+          + `Le fichier sera réécrit EN CLAIR sur disque ici :\n${clearPath}\n\n`
+          + 'Pratique pour un backup hors-poste ou une migration. Pense ensuite à '
+          + 'le supprimer ou à réactiver le chiffrement -- tes secrets y sont lisibles.',
           async () => {
-            try { const res = await API.post('/api/env/decrypt', {}); toastOk(`Déchiffré (${res.keys} clé${res.keys > 1 ? 's' : ''})`); loadEnvVars(host); }
+            try {
+              const res = await API.post('/api/env/decrypt', {});
+              toastOk(`Déchiffré (${res.keys} clé${res.keys > 1 ? 's' : ''}) -> ${clearPath} (en clair, à re-sécuriser)`);
+              loadEnvVars(host);
+            }
             catch (e) { toastErr(e.message); }
           },
           { danger: true }
@@ -376,6 +376,86 @@ DB_PASSWORD=mon_mot_de_passe</pre>
 
     host['innerHTML'] = ''; host.appendChild(wrap);
   } catch (e) { host['innerHTML'] = `<div class="error-box">${escapeHtml(e.message)}</div>`; }
+}
+
+// Télécharge le .env.local courant EN CLAIR (filet anti-perte de clé DPAPI).
+// fetch authentifié (header X-Nebula-XHR requis sur la route sensible) -> Blob
+// -> <a download>. On NE peut PAS utiliser un <a href> direct : le header ne
+// serait pas posé et le serveur renverrait 403. Toujours déclenché par un clic
+// utilisateur explicite, jamais automatiquement.
+async function downloadEnvPlainBackup() {
+  const r = await fetch('/api/env/export-plain', { headers: { 'X-Nebula-XHR': '1' } });
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`;
+    try { const j = await r.json(); if (j.error) msg = j.error; } catch { /* corps non-JSON */ }
+    throw new Error(msg);
+  }
+  const blob = await r.blob();
+  // Nom de fichier depuis Content-Disposition, fallback raisonnable.
+  let filename = 'env.local.clair.txt';
+  const cd = r.headers.get('content-disposition') || '';
+  const m = cd.match(/filename="?([^"]+)"?/);
+  if (m) filename = m[1];
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Libère l'URL objet après un court délai (laisse le temps au download).
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+// Modale d'activation du chiffrement DPAPI avec filet de sécurité intégré :
+// un bouton « Télécharger une sauvegarde en clair » AVANT de chiffrer, pour
+// éviter la perte définitive des secrets si la clé DPAPI devient illisible
+// (changement de poste/compte Windows). Cf. audit UX Lot G item 1.
+// Contenu HTML 100% statique (aucune donnée utilisateur interpolée).
+function modalEnableEncryption(host) {
+  const body = el('div');
+  body['innerHTML'] = `
+    <div class="callout callout-warn" style="margin-top:0">
+      <div>
+        <strong>⚠ Risque de perte définitive des secrets</strong>
+        <p style="margin:4px 0 0;font-size:12.5px">
+          Le chiffrement DPAPI lie tes secrets à <strong>ce compte Windows sur ce poste</strong>.
+          Si tu réinstalles, changes de compte ou de machine, le fichier
+          <code class="mono">.env.local.enc</code> deviendra <strong>illisible</strong> et
+          tes secrets seront <strong>perdus définitivement</strong>.
+        </p>
+        <p style="margin:6px 0 0;font-size:12.5px">
+          Avant de chiffrer, télécharge une sauvegarde en clair et range-la en lieu sûr
+          (gestionnaire de mots de passe, coffre chiffré).
+        </p>
+      </div>
+    </div>
+    <p class="dim" style="font-size:12px;margin:var(--sp-3) 0 0">
+      Un fichier <code class="mono">.env.local.bak.&lt;date&gt;</code> en clair sera aussi
+      conservé localement à côté du fichier chiffré (à sécuriser ou supprimer).
+    </p>
+  `;
+  const dlBtn = btn('Télécharger une sauvegarde .env.local (clair)', 'btn-sm', I.download);
+  dlBtn.style.marginTop = 'var(--sp-3)';
+  dlBtn.title = 'Fichier de secrets EN CLAIR -- à stocker en lieu sûr';
+  dlBtn.addEventListener('click', () => withBusy(dlBtn, async () => {
+    try { await downloadEnvPlainBackup(); toastOk('Sauvegarde en clair téléchargée -- range-la en lieu sûr'); }
+    catch (e) { toastErr(e.message); }
+  }));
+  body.appendChild(dlBtn);
+
+  const cancel = btn('Annuler', 'btn-ghost');
+  const ok = btn('Chiffrer maintenant', 'btn-primary', I.key);
+  const { close } = openModal({ title: 'Activer le chiffrement DPAPI', body, footer: [cancel, ok] });
+  cancel.addEventListener('click', close);
+  ok.addEventListener('click', () => withBusy(ok, async () => {
+    try {
+      const res = await API.post('/api/env/encrypt', {});
+      toastOk(`Chiffré (${res.keys} clé${res.keys > 1 ? 's' : ''})`);
+      close();
+      loadEnvVars(host);
+    } catch (e) { toastErr(e.message); }
+  }));
 }
 
 async function loadBackups(host) {
