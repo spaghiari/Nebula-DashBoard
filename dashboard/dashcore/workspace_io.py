@@ -109,17 +109,28 @@ def write_launch_bat(ws_id: str, label: str, path: str) -> Path:
     return bat_path
 
 
-def launch_script(bat_name: str, *, ws_id: str | None = None, ws_label: str | None = None) -> tuple[int, dict]:
+def launch_script(bat_name: str, *, ws_id: str | None = None, ws_label: str | None = None,
+                  ws_path: str | None = None) -> tuple[int, dict]:
     """Lance un .bat dans une nouvelle console.
 
     Si ws_id est fourni, enregistre le PID du cmd dans active_sessions
     pour permettre un Stop ultérieur depuis Nebula. cmd /k garde la
     fenêtre ouverte, ce qui maintient Popen.pid valide tant que la
     session tourne.
+
+    Si ws_path est fourni, on vérifie son existence AVANT de spawner le
+    .bat : le `cd /d "path"` du script échoue en silence dans une console
+    neuve, ce qui produisait un toast « Lancé » mensonger sur un dossier
+    inexistant. On préfère une erreur explicite.
     """
     bat = SCRIPTS_DIR / bat_name
     if not bat.exists():
         return 404, {"ok": False, "error": f"Script introuvable : {bat}"}
+    if ws_path is not None and not Path(ws_path).is_dir():
+        return 404, {"ok": False, "error": (
+            f"Dossier introuvable : {ws_path} — corrige le chemin "
+            f"(Modifier le workspace) ou recrée le dossier"
+        )}
     try:
         proc = subprocess.Popen(
             ["cmd", "/k", "call", str(bat)],

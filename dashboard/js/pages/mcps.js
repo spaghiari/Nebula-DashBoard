@@ -93,7 +93,7 @@ async function renderMCPs() {
   const toolbar = el('div', 'mcp-toolbar');
   toolbar['innerHTML'] = `<input class="input input-search" type="search" placeholder="Filtrer par nom, transport, workspace…" />`;
   const filterStatus = el('select', 'select');
-  filterStatus['innerHTML'] = `<option value="">Tous statuts</option><option>connecté</option><option>disponible</option><option>à configurer</option><option>désactivé</option>`;
+  filterStatus['innerHTML'] = `<option value="">Tous statuts</option><option>disponible</option><option>à configurer</option><option>désactivé</option>`;
   filterStatus.style.maxWidth = '180px';
   toolbar.appendChild(filterStatus);
   const filterTransport = el('select', 'select');
@@ -121,7 +121,12 @@ async function renderMCPs() {
     grid['innerHTML'] = '';
     if (!list.length) {
       const empty = el('div', 'empty');
-      empty['innerHTML'] = `<div class="empty-title">Aucun MCP</div><p class="muted">Crée ton premier MCP ou importe depuis Claude Code.</p>`;
+      const filterActive = !!(q || sf || tf);
+      if (filterActive) {
+        empty['innerHTML'] = `<div class="empty-title">Aucun MCP ne correspond</div><p class="muted">Modifie ta recherche ou tes filtres.</p>`;
+      } else {
+        empty['innerHTML'] = `<div class="empty-title">Aucun MCP</div><p class="muted">Crée ton premier MCP ou importe depuis Claude Code.</p>`;
+      }
       grid.appendChild(empty);
       return;
     }
@@ -136,7 +141,7 @@ async function renderMCPs() {
   // Le poller est nettoyé automatiquement via clearPagePollers() au changement de page.
   const liveDot = el('span', 'live-dot');
   liveDot.title = 'Auto-refresh actif (toutes les 30s)';
-  liveDot.style.cssText = 'display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--success,#10b981);margin-left:8px;vertical-align:middle;animation:pulse 2s ease-in-out infinite';
+  liveDot.style.cssText = 'display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin-left:8px;vertical-align:middle;animation:pulse 2s ease-in-out infinite';
   const eyebrow = page.querySelector('.page-eyebrow');
   if (eyebrow) eyebrow.appendChild(liveDot);
 
@@ -158,7 +163,10 @@ async function renderMCPs() {
 
 function mcpCard(m) {
   const card = el('div', 'mcp-card');
-  const statusClass = m.status === 'connecté' ? 'badge-ok' : m.status === 'disponible' ? 'badge-info' : m.status === 'désactivé' ? 'badge-err' : 'badge-warn';
+  // Statut réel calculé par compute_mcp_status (back) : disponible /
+  // à configurer / désactivé. « connecté » n'est jamais retourné (pas de
+  // test live), donc pas de pastille verte ici — ce serait un faux signal.
+  const statusClass = m.status === 'disponible' ? 'badge-info' : m.status === 'désactivé' ? 'badge-err' : 'badge-warn';
   const transportColor = m.transport === 'http' ? 'badge-info' : m.transport === 'sse' ? 'badge-accent' : 'badge';
   const isHttp = m.transport === 'http' || m.transport === 'sse';
   const cmd = isHttp ? (m.url || '—') : (m.command || '—') + (m.args && m.args.length ? ' ' + m.args.join(' ') : '');
@@ -301,10 +309,13 @@ async function modalMcpRecipes() {
           <div class="recipe-meta">
             <span class="badge">${escapeHtml(r.transport || 'stdio')}</span>
             ${paramCount > 0 ? `<span class="badge badge-info">${paramCount} param${paramCount > 1 ? 's' : ''} requis</span>` : '<span class="badge badge-ok">prêt à l\'emploi</span>'}
-            ${safeUrl(r.docs_url) ? `<a class="badge" href="${escapeHtml(safeUrl(r.docs_url))}" target="_blank" rel="noopener" onclick="event.stopPropagation()">docs ↗</a>` : ''}
+            ${safeUrl(r.docs_url) ? `<a class="badge recipe-docs-link" href="${escapeHtml(safeUrl(r.docs_url))}" target="_blank" rel="noopener">docs ↗</a>` : ''}
           </div>
         </div>
       `;
+      // Lien docs : ne pas propager au clic de la card (sinon ouvre la modale)
+      const docsLink = card.querySelector('.recipe-docs-link');
+      if (docsLink) docsLink.addEventListener('click', (e) => e.stopPropagation());
       // Bouton édition (recettes locales uniquement) — ouvre l'éditeur GUI
       const editBtn = card.querySelector('.recipe-edit-btn');
       if (editBtn) {
@@ -709,7 +720,7 @@ function modalNewMCP(existing = null) {
       <div class="field"><label class="field-label">Description</label><input class="input" name="description" value="${escapeHtml(m.description || '')}"></div>
       <div class="field-row">
         <div class="field"><label class="field-label">Transport</label><select class="select" name="transport">${['stdio','http','sse'].map(t => `<option ${m.transport===t?'selected':''}>${t}</option>`).join('')}</select></div>
-        <div class="field"><label class="field-label">Statut</label><select class="select" name="status">${['à configurer','disponible','connecté','désactivé'].map(t => `<option ${m.status===t?'selected':''}>${t}</option>`).join('')}</select></div>
+        <div class="field"><label class="field-label">Statut</label><select class="select" name="status">${['à configurer','disponible','désactivé'].map(t => `<option ${m.status===t?'selected':''}>${t}</option>`).join('')}</select></div>
       </div>
 
       <!-- Champs stdio -->

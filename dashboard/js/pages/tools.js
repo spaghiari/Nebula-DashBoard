@@ -53,7 +53,7 @@ async function renderTools() {
   // Apparence -- selecteur de theme
   stack.appendChild(el('div', 'section-label', '<span class="num">B.</span> Apparence & assistance'));
   const themeCard = el('div', 'card');
-  themeCard['innerHTML'] = `<p class="muted" style="margin:0 0 var(--sp-3);font-size:13px">Choisis l'ambiance visuelle de ton dashboard. Le choix est mémorisé localement.</p>`;
+  themeCard['innerHTML'] = `<p class="muted" style="margin:0 0 var(--sp-3);font-size:13px">Choisis l'ambiance visuelle de ton dashboard. Le choix est synchronisé sur ce serveur Nebula.</p>`;
   const themeGrid = el('div', 'theme-grid');
   const current = getCurrentTheme();
   for (const t of THEMES) {

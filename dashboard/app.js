@@ -58,15 +58,15 @@ async function renderWorkspace(wsId) {
     topbarActions.push(stopBtn);
   } else {
     const launch = btn('Lancer', 'btn-primary', I.play);
-    launch.addEventListener('click', async () => {
+    launch.addEventListener('click', () => withBusy(launch, async () => {
       try { const r = await API.post(`/api/launch/${w.id}`, {}); toastOk(r.message || 'Lancé'); STATE.loading = true; setTimeout(route, 400); }
       catch (e) { toastErr(e.message); }
-    });
+    }, { keepBusyOnSuccess: true }));
     const resume = btn('Reprendre', 'btn', I.history);
-    resume.addEventListener('click', async () => {
+    resume.addEventListener('click', () => withBusy(resume, async () => {
       try { const r = await API.post(`/api/launch-resume/${w.id}`, {}); toastOk(r.message || 'Reprise'); STATE.loading = true; setTimeout(route, 400); }
       catch (e) { toastErr(e.message); }
-    });
+    }, { keepBusyOnSuccess: true }));
     topbarActions.push(resume, launch);
   }
   const sync = btn('Sync MCPs', 'btn', I.refresh);
@@ -557,6 +557,9 @@ async function loadSessions(wsId, host) {
     host.innerHTML = '';
     for (const s of sessions) {
       const row = el('div', 'session-row');
+      row.tabIndex = 0;
+      row.setAttribute('role', 'button');
+      row.setAttribute('aria-label', 'Ouvrir la session');
       row.innerHTML = `
         <div class="session-info">
           <div class="session-msg">${escapeHtml(s.first_message || '(vide)')}</div>
@@ -565,6 +568,9 @@ async function loadSessions(wsId, host) {
         <span class="badge">${escapeHtml(s.file.slice(0, 8))}</span>
       `;
       row.addEventListener('click', () => modalSession(wsId, s.file));
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); modalSession(wsId, s.file); }
+      });
       attachSessionPreview(row, wsId, s.file);
       host.appendChild(row);
     }
@@ -778,7 +784,7 @@ function renderWsMCPs(wsId, host) {
     const m = STATE.mcps.find(x => x.id === mcpId);
     const row = el('div', 'list-row');
     row.innerHTML = `
-      <span class="dot ${m && m.status === 'connecté' ? 'dot-ok' : 'dot-info'}"></span>
+      <span class="dot ${m && m.status === 'désactivé' ? 'dot-err' : 'dot-info'}"></span>
       <div class="list-row-main">
         <div class="list-row-name mono">${escapeHtml(mcpId)}</div>
         ${m ? `<div class="list-row-desc">${escapeHtml(m.description || m.transport || '')}</div>` : ''}
@@ -829,7 +835,7 @@ function modalAttachMcpToWorkspace(wsId) {
     card.dataset.initial = initial ? '1' : '0';
     card.innerHTML = `
       <input type="checkbox" data-mcp-id="${escapeHtml(m.id)}" ${initial ? 'checked' : ''} style="margin-right:10px">
-      <span class="dot ${m.status === 'connecté' ? 'dot-ok' : m.status === 'désactivé' ? 'dot-err' : 'dot-info'}"></span>
+      <span class="dot ${m.status === 'désactivé' ? 'dot-err' : 'dot-info'}"></span>
       <div class="list-row-main">
         <div class="list-row-name mono">${escapeHtml(m.name || m.id)}</div>
         <div class="list-row-desc">${escapeHtml(m.description || m.transport || '')}</div>
@@ -964,11 +970,13 @@ async function loadWsPlugins(wsId, host) {
         <button data-set="off" class="${state === 'off' ? 'is-active' : ''}" title="Forcer inactif">I</button>
         <button data-set="reset" class="${state.startsWith('inherit') ? 'is-active' : ''}" title="Hériter du global">↺</button>
       `;
-      seg.querySelectorAll('button').forEach(b => {
+      const segBtns = Array.from(seg.querySelectorAll('button'));
+      segBtns.forEach(b => {
         b.addEventListener('click', async () => {
           const next = { 'on': true, 'off': false, 'reset': null }[b.dataset.set];
+          segBtns.forEach(x => { x.disabled = true; });
           try { await API.post(`/api/workspaces/${wsId}/plugins`, { plugin_id: pid, enabled: next }); loadWsPlugins(wsId, host); }
-          catch (e) { toastErr(e.message); }
+          catch (e) { toastErr(e.message); segBtns.forEach(x => { x.disabled = false; }); }
         });
       });
       row.appendChild(seg);
@@ -1108,10 +1116,10 @@ async function openWsFile(wsId, filename) {
   const save = btn('Enregistrer', 'btn-primary');
   const { close } = openModal({ title: filename, body, footer: [cancel, save], wide: true });
   cancel.addEventListener('click', close);
-  save.addEventListener('click', async () => {
+  save.addEventListener('click', () => withBusy(save, async () => {
     try { await API.post(`/api/workspaces/${wsId}/file`, { filename, content: ta.value }); toastOk('Enregistré'); close(); }
     catch (e) { toastErr(e.message); }
-  });
+  }));
 }
 
 /* ================================================================
@@ -1142,8 +1150,14 @@ async function startFirstRunWizard() {
   root.innerHTML = '';
   const overlay = el('div', 'firstrun-overlay');
   const wiz = el('div', 'firstrun');
+  wiz.setAttribute('role', 'dialog');
+  wiz.setAttribute('aria-modal', 'true');
+  wiz.setAttribute('aria-label', 'Assistant de premier lancement');
+  wiz.tabIndex = -1;
   overlay.appendChild(wiz);
   root.appendChild(overlay);
+
+  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
   const steps = [
     { id: 'welcome',   render: renderWelcome },
@@ -1157,10 +1171,13 @@ async function startFirstRunWizard() {
     if (markDone) markOnboarded();
     overlay.classList.add('firstrun-closing');
     setTimeout(() => { root.innerHTML = ''; }, 220);
-    document.removeEventListener('keydown', onKey);
+    releaseTrap();
+    if (previouslyFocused && document.body.contains(previouslyFocused)) {
+      try { previouslyFocused.focus(); } catch { /* noop */ }
+    }
   };
-  const onKey = (e) => { if (e.key === 'Escape') close(false); };
-  document.addEventListener('keydown', onKey);
+  // Focus trap partage (Tab cycle + Escape ferme sans marquer onboarded).
+  const releaseTrap = createFocusTrap(wiz, { onEscape: () => close(false) });
 
   const goNext = () => { stepIdx = Math.min(stepIdx + 1, steps.length - 1); render(); };
   const goPrev = () => { stepIdx = Math.max(stepIdx - 1, 0); render(); };
@@ -1210,6 +1227,14 @@ async function startFirstRunWizard() {
       footer.appendChild(done);
     }
     wiz.appendChild(footer);
+
+    // Autofocus apres chaque etape : 1er champ du body sinon 1er focusable.
+    setTimeout(() => {
+      const focusables = getFocusables(wiz);
+      const preferred = focusables.find(el => /^(INPUT|TEXTAREA|SELECT)$/i.test(el.tagName));
+      const target = preferred || focusables[0] || wiz;
+      try { target.focus(); } catch { /* noop */ }
+    }, 30);
   };
 
   // ───── Step 1 : Welcome ─────
@@ -1871,10 +1896,14 @@ async function modalSystemUpdate() {
           </div>
         </div>` : `
         <div style="margin-top:var(--sp-4);text-align:center">
-          <button class="btn btn-primary" onclick="location.reload()">${I.refresh}<span>Recharger la page</span></button>
+          <button class="btn btn-primary" data-reload-page>${I.refresh}<span>Recharger la page</span></button>
         </div>
       `}
     `;
+    // Bouton recharger : addEventListener plutot qu'onclick inline (CSP +
+    // coherence avec le reste du code).
+    const reloadBtn = body.querySelector('[data-reload-page]');
+    if (reloadBtn) reloadBtn.addEventListener('click', () => location.reload());
     // Rafraîchit le badge
     setTimeout(() => checkForUpdates({ force: true }).then(renderUpdateBadge), 500);
   });
@@ -2403,13 +2432,13 @@ function modalNewWorkspace() {
   const create = btn('Créer', 'btn-primary', I.plus);
   const { close } = openModal({ title: 'Nouveau workspace', body, footer: [cancel, create] });
   cancel.addEventListener('click', close);
-  create.addEventListener('click', async () => {
+  create.addEventListener('click', () => withBusy(create, async () => {
     const get = n => body.querySelector(`[name=${n}]`).value.trim();
     const payload = { id: get('id'), emoji: get('emoji'), label: get('label'), description: get('description'), tools: get('tools'), template: get('template') || 'blank' };
     if (!payload.id) { toastErr('ID requis'); return; }
     try { await API.post('/api/workspaces', payload); toastOk('Workspace créé'); close(); STATE.loading = true; location.hash = `#/workspace/${payload.id}`; }
     catch (e) { toastErr(e.message); }
-  });
+  }));
 }
 
 function modalEditWorkspace(w) {
@@ -2436,6 +2465,7 @@ function modalEditWorkspace(w) {
   const cb = document.createElement('input');
   cb.type = 'checkbox';
   cb.checked = !!w.reflexive_enabled;
+  cb.setAttribute('aria-label', `Activer l'observation Reflexive pour ${w.label || w.id}`);
   const slider = el('span', 'switch-slider');
   sw.appendChild(cb); sw.appendChild(slider);
   refxRow.appendChild(refxLeft); refxRow.appendChild(sw);
@@ -2461,11 +2491,11 @@ function modalEditWorkspace(w) {
   const save = btn('Enregistrer', 'btn-primary');
   const { close } = openModal({ title: `Modifier ${w.id}`, body, footer: [cancel, save] });
   cancel.addEventListener('click', close);
-  save.addEventListener('click', async () => {
+  save.addEventListener('click', () => withBusy(save, async () => {
     const get = n => body.querySelector(`[name=${n}]`).value.trim();
     try { await API.post(`/api/workspaces/${w.id}/update`, { label: get('label'), emoji: get('emoji'), description: get('description'), path: get('path') }); toastOk('Mis à jour'); close(); STATE.loading = true; route(); }
     catch (e) { toastErr(e.message); }
-  });
+  }));
 }
 
 function modalDuplicateWorkspace(w) {
@@ -2479,11 +2509,11 @@ function modalDuplicateWorkspace(w) {
   const dup = btn('Dupliquer', 'btn-primary', I.copy);
   const { close } = openModal({ title: `Dupliquer ${w.id}`, body, footer: [cancel, dup] });
   cancel.addEventListener('click', close);
-  dup.addEventListener('click', async () => {
+  dup.addEventListener('click', () => withBusy(dup, async () => {
     const get = n => body.querySelector(`[name=${n}]`).value.trim();
     try { await API.post('/api/workspaces/duplicate', { source: w.id, id: get('id'), label: get('label'), description: get('description'), emoji: w.emoji }); toastOk('Dupliqué'); close(); STATE.loading = true; location.hash = `#/workspace/${get('id')}`; }
     catch (e) { toastErr(e.message); }
-  });
+  }));
 }
 
 function modalDeleteWorkspace(w) {
@@ -2557,14 +2587,19 @@ function modalEditSettings(wsId) {
     body.appendChild(ta);
     const cancel = btn('Annuler', 'btn-ghost');
     const save = btn('Enregistrer', 'btn-primary');
-    const { close } = openModal({ title: 'settings.json', body, footer: [cancel, save], wide: true });
-    cancel.addEventListener('click', close);
-    save.addEventListener('click', async () => {
+    // Garde anti-perte de saisie (croix/Escape/Annuler demandent confirmation
+    // si la textarea a ete modifiee sans sauvegarde).
+    const guard = makeDirtyGuard();
+    ta.addEventListener('input', guard.markDirty);
+    const { close, requestClose } = openModal({ title: 'settings.json', body, footer: [cancel, save], wide: true, confirmClose: guard.confirmClose });
+    guard.bind(close);
+    cancel.addEventListener('click', requestClose);
+    save.addEventListener('click', () => withBusy(save, async () => {
       try { JSON.parse(ta.value); }
       catch (e) { toastErr('JSON invalide : ' + e.message); return; }
-      try { await API.post(`/api/workspaces/${wsId}/settings`, { content: ta.value }); toastOk('Enregistré'); close(); }
+      try { await API.post(`/api/workspaces/${wsId}/settings`, { content: ta.value }); toastOk('Enregistré'); guard.markSaved(); close(); }
       catch (e) { toastErr(e.message); }
-    });
+    }));
   })();
 }
 
@@ -2585,13 +2620,13 @@ function modalPermissions(wsId) {
     const save = btn('Enregistrer', 'btn-primary');
     const { close } = openModal({ title: 'Permissions', body, footer: [cancel, save], wide: true });
     cancel.addEventListener('click', close);
-    save.addEventListener('click', async () => {
+    save.addEventListener('click', () => withBusy(save, async () => {
       const a = body.querySelector('[name=allow]').value.split('\n').map(s => s.trim()).filter(Boolean);
       const d = body.querySelector('[name=deny]').value.split('\n').map(s => s.trim()).filter(Boolean);
       const value = (a.length || d.length) ? { allow: a, deny: d } : null;
       try { await API.post(`/api/workspaces/${wsId}/settings/permissions`, { value }); toastOk('Enregistré'); close(); }
       catch (e) { toastErr(e.message); }
-    });
+    }));
   })();
 }
 
@@ -2653,18 +2688,22 @@ function modalHooks(wsId) {
     `;
     const cancel = btn('Annuler', 'btn-ghost');
     const save = btn('Enregistrer', 'btn-primary');
-    const { close } = openModal({ title: wsId ? `Hooks · ${wsId}` : 'Hooks globaux', body, footer: [cancel, save], wide: true });
-    cancel.addEventListener('click', close);
-    save.addEventListener('click', async () => {
+    // Garde anti-perte de saisie.
+    const guard = makeDirtyGuard();
+    body.querySelector('[name=hooks]').addEventListener('input', guard.markDirty);
+    const { close, requestClose } = openModal({ title: wsId ? `Hooks · ${wsId}` : 'Hooks globaux', body, footer: [cancel, save], wide: true, confirmClose: guard.confirmClose });
+    guard.bind(close);
+    cancel.addEventListener('click', requestClose);
+    save.addEventListener('click', () => withBusy(save, async () => {
       let hooks;
       try { hooks = JSON.parse(body.querySelector('[name=hooks]').value); }
       catch (e) { toastErr('JSON invalide : ' + e.message); return; }
       try {
         if (wsId) await API.post(`/api/workspaces/${wsId}/settings/hooks`, { value: Object.keys(hooks).length ? hooks : null });
         else await API.post('/api/hooks/global', { hooks });
-        toastOk('Enregistré'); close();
+        toastOk('Enregistré'); guard.markSaved(); close();
       } catch (e) { toastErr(e.message); }
-    });
+    }));
   })();
 }
 
@@ -2840,10 +2879,10 @@ function modalEditSkill(scope, name) {
     const save = btn('Enregistrer', 'btn-primary');
     const { close } = openModal({ title: `Skill ${scope}/${name}`, body, footer: [cancel, save], wide: true });
     cancel.addEventListener('click', close);
-    save.addEventListener('click', async () => {
+    save.addEventListener('click', () => withBusy(save, async () => {
       try { await API.post(`/api/skills/${scope}/${name}/content`, { content: ta.value }); toastOk('Enregistré'); close(); }
       catch (e) { toastErr(e.message); }
-    });
+    }));
   })();
 }
 
@@ -2864,7 +2903,7 @@ function modalEditFileItem(kind, scope, name) {
     const save = btn('Enregistrer', 'btn-primary');
     const { close } = openModal({ title: `${name ? 'Modifier' : 'Nouveau'} ${kind === 'agents' ? 'agent' : 'commande'}`, body, footer: [cancel, save], wide: true });
     cancel.addEventListener('click', close);
-    save.addEventListener('click', async () => {
+    save.addEventListener('click', () => withBusy(save, async () => {
       const get = n => body.querySelector(`[name=${n}]`).value;
       try {
         if (name) {
@@ -2877,7 +2916,7 @@ function modalEditFileItem(kind, scope, name) {
         }
         toastOk('Enregistré'); close(); route();
       } catch (e) { toastErr(e.message); }
-    });
+    }));
   })();
 }
 
@@ -2889,6 +2928,9 @@ function openPalette() {
   root.innerHTML = '';
   const overlay = el('div', 'palette-overlay');
   const palette = el('div', 'palette');
+  palette.setAttribute('role', 'dialog');
+  palette.setAttribute('aria-modal', 'true');
+  palette.setAttribute('aria-label', 'Recherche et actions rapides');
   palette.innerHTML = `
     <input class="palette-input" type="text" placeholder="Recherche · workspaces · MCPs · skills · templates…" />
     <div class="palette-list"></div>
@@ -2900,7 +2942,16 @@ function openPalette() {
   const list = palette.querySelector('.palette-list');
   let active = 0; let results = [];
 
-  const close = () => { root.innerHTML = ''; document.removeEventListener('keydown', onKey); };
+  // Sauvegarde du focus precedent pour le restaurer a la fermeture (le
+  // declencheur est en general le bouton #open-palette).
+  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const close = () => {
+    root.innerHTML = '';
+    document.removeEventListener('keydown', onKey);
+    const restore = (previouslyFocused && document.body.contains(previouslyFocused))
+      ? previouslyFocused : $('#open-palette');
+    if (restore) { try { restore.focus(); } catch { /* noop */ } }
+  };
   const goto = (r) => {
     if (r.route) { location.hash = r.route; }
     else if (r.kind === 'action') { r.action(); }
@@ -2912,12 +2963,16 @@ function openPalette() {
       list.innerHTML = '<div class="palette-empty">Aucun résultat</div>';
       return;
     }
+    let activeEl = null;
     results.forEach((r, i) => {
       const item = el('div', 'palette-item' + (i === active ? ' active' : ''));
       item.innerHTML = `<span class="kind">${escapeHtml(r.kind)}</span><span class="label">${escapeHtml(r.label)}</span>`;
       item.addEventListener('click', () => goto(r));
       list.appendChild(item);
+      if (i === active) activeEl = item;
     });
+    // Garde l'item actif dans le viewport lors de la navigation clavier.
+    if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
   };
   const search = debounce(async (q) => {
     if (!q) {
@@ -3148,22 +3203,36 @@ async function tourGoto(idx) {
 function startTour(name = 'main', startStep = 0) {
   const def = TOURS[name];
   if (!def) return;
-  STATE.tour = { name, step: startStep, definition: def };
+  // Focus a restaurer a la sortie du tour.
+  const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  STATE.tour = { name, step: startStep, definition: def, previouslyFocused, releaseTrap: null };
   tourGoto(startStep);
+  // Piege le Tab dans la bulle (Escape/fleches restent geres par
+  // _tourKeyHandler, donc pas de onEscape ici pour eviter le double-handler).
+  const bubble = document.querySelector('#tour-overlay .tour-bubble');
+  if (bubble) STATE.tour.releaseTrap = createFocusTrap(bubble);
   // Échap pour quitter
   window.addEventListener('keydown', _tourKeyHandler);
   // Reposition sur resize
   window.addEventListener('resize', _tourResizeHandler);
+  // Autofocus sur le bouton « Suivant » a l'ouverture.
+  setTimeout(() => {
+    const next = document.querySelector('#tour-overlay [data-tour-next]');
+    if (next) { try { next.focus(); } catch { /* noop */ } }
+  }, 60);
 }
 
 function endTour() {
   const overlay = document.getElementById('tour-overlay');
   if (overlay) overlay.classList.remove('is-active');
+  const prev = STATE.tour && STATE.tour.previouslyFocused;
+  if (STATE.tour && STATE.tour.releaseTrap) STATE.tour.releaseTrap();
   STATE.tour = null;
   window.removeEventListener('keydown', _tourKeyHandler);
   window.removeEventListener('resize', _tourResizeHandler);
   try { sessionStorage.removeItem('nebula-tour-progress'); } catch {}
   try { localStorage.setItem('nebula-tour-completed', '1'); } catch {}
+  if (prev && document.body.contains(prev)) { try { prev.focus(); } catch { /* noop */ } }
 }
 
 function _tourKeyHandler(e) {

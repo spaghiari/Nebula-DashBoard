@@ -846,6 +846,13 @@ def launch_resume(ws_id: str) -> tuple[int, dict]:
     path = w.get("path", "")
     if not safe_path(path):
         return 400, {"ok": False, "error": "chemin de workspace invalide"}
+    # Le `cd path` implicite de `cmd /k` échoue en silence si le dossier
+    # n'existe pas → toast « Reprise » mensonger. On préfère une erreur claire.
+    if not Path(path).is_dir():
+        return 404, {"ok": False, "error": (
+            f"Dossier introuvable : {path} — corrige le chemin "
+            f"(Modifier le workspace) ou recrée le dossier"
+        )}
     try:
         # cmd /k directement (pas cmd /c start) pour que Popen.pid reste valide
         # tant que la fenêtre cmd est ouverte. Permet d'enregistrer le PID

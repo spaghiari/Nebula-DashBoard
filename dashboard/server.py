@@ -160,7 +160,8 @@ def h_post_launch(q, b, ws):
     # (l'utilisateur pourra Stop la session depuis Nebula).
     ws_obj = next((x for x in list_workspaces() if x["id"] == ws), None)
     label = ws_obj.get("label") if ws_obj else None
-    return launch_script(f"launch-{ws}.bat", ws_id=ws, ws_label=label)
+    ws_path = ws_obj.get("path") if ws_obj else None
+    return launch_script(f"launch-{ws}.bat", ws_id=ws, ws_label=label, ws_path=ws_path)
 def h_post_launch_resume(q, b, ws):      return launch_resume(ws)
 def h_get_sessions_active(q, b):         return 200, {"sessions": list_active_sessions()}
 def h_get_hooks_errors(q, b):

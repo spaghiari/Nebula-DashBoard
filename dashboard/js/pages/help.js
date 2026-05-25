@@ -138,7 +138,7 @@ function _helpSections() {
         <li><strong>à configurer</strong> — config incomplète (pas de command pour stdio, pas d'url pour http/sse).</li>
         <li><strong>disponible</strong> — config OK, prêt à fonctionner.</li>
       </ul>
-      <p class="dim" style="font-size:12px">Le statut "connecté" demanderait un test live à chaque check (lourd). Utilise <em>Tester</em> ou <em>Diag</em> pour vérifier en réel.</p>
+      <p class="dim" style="font-size:12px">Le statut n'inclut volontairement pas de "connecté" : ce serait un test live à chaque rafraîchissement (lourd). Un diagnostic à la demande par MCP est en cours de déploiement ; en attendant, la card affiche uniquement l'état dérivé de la config.</p>
 
       <h3>Sauver une config MCP comme recette</h3>
       <p>Tu as configuré un MCP qui marche (HomeAssistant avec ton token, OPNsense avec creds firewall…) ? Tu peux le transformer en <strong>recette locale réutilisable</strong> :</p>
@@ -398,7 +398,10 @@ function _helpSections() {
       <h2>${I.brain}<span>Reflexive — boucle d'amélioration</span></h2>
       <p>Reflexive observe les sessions Claude Code et mesure leur qualité sur 4 dimensions, pour faire émerger des propositions d'amélioration concrètes. <strong>Optionnel</strong> et <strong>opt-in par workspace</strong> : aucun workspace n'est observé tant que tu n'as pas activé le toggle.</p>
       <h3>À quoi ça sert</h3>
-      <p>Au fil des sessions, le score moyen et les <em>flags</em> récurrents (ex. <code class="mono">missing-claude-md-read</code>, <code class="mono">redundant-grep</code>) révèlent des patterns que tu peux corriger via un skill, une convention dans <code class="mono">CLAUDE.md</code> ou un hook. Chaque correctif vient avec un <em>plan de mesure</em> qui vérifie si l'amélioration tient sur N interactions suivantes.</p>
+      <p>Au fil des sessions, le score moyen et les <em>flags</em> récurrents (ex. <code class="mono">missing-claude-md-read</code>, <code class="mono">redundant-grep</code>) révèlent des patterns que tu peux corriger via un skill, une convention dans <code class="mono">CLAUDE.md</code> ou un hook.</p>
+      <div class="callout callout-warn">
+        <strong>En cours de déploiement :</strong> la collecte et le scoring des interactions fonctionnent. En revanche le <em>diagnostic automatique</em> (génération de propositions à partir des évaluations) et la <em>génération de plans de mesure</em> ne sont pas encore actifs. Pour l'instant, à toi de lire les stats et d'en tirer les corrections.
+      </div>
       <h3>Activer Reflexive sur un workspace</h3>
       <ol class="help-list">
         <li>Page <strong>Accueil</strong> → menu d'une card workspace → <em>Modifier</em>.</li>
@@ -409,8 +412,8 @@ function _helpSections() {
       <ul class="help-list">
         <li><strong>Vue d'ensemble</strong> (<kbd>g</kbd> <kbd>r</kbd>) : score moyen + tendance, courbe 30 jours, barres par dimension (la plus basse est le meilleur axe d'attaque).</li>
         <li><strong>Interactions</strong> : table cliquable → modale avec full transcript / tools / files / éval.</li>
-        <li><strong>Propositions</strong> : cards Apply / Reject. Le rejet capture une raison pour ajuster le diagnostician.</li>
-        <li><strong>Mesures en cours</strong> : les plans déclenchés par les propositions appliquées.</li>
+        <li><strong>Propositions</strong> : cards avec <em>Marquer comme traitée</em> / <em>Rejeter</em>. « Marquer comme traitée » enregistre seulement ta décision — aucun fichier n'est modifié automatiquement (l'application reste manuelle). Le rejet capture une raison. <span class="dim">(Les propositions seront générées automatiquement une fois le diagnostic automatique déployé.)</span></li>
+        <li><strong>Mesures en cours</strong> : emplacement des plans de mesure. La génération automatique de plans n'est pas encore active.</li>
       </ul>
       <h3>Dépannage</h3>
       <ul class="help-list">

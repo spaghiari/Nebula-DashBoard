@@ -92,13 +92,13 @@ async function renderReflexive() {
 
   setBreadcrumbs([{ label: 'Reflexive' }]);
 
-  const runBtn = btn('Lancer diagnostic', 'btn-primary', I.sparkle);
-  runBtn.addEventListener('click', async () => {
-    try {
-      await API.post('/api/reflexive/diagnostician/run', {});
-      toastOk('Diagnostic lancé');
-    } catch (e) { toastErr(e.message); }
-  });
+  // Diagnostic automatique : le backend est encore un stub (501). Plutôt
+  // qu'un bouton actif qui échoue avec un message dev brut, on l'affiche
+  // désactivé avec un libellé/tooltip explicite. Sera réactivé quand le
+  // diagnostician sera implémenté (lot C de l'audit UX 2026-05-25).
+  const runBtn = btn('Diagnostic automatique — bientôt disponible', 'btn-primary', I.sparkle);
+  runBtn.disabled = true;
+  runBtn.title = "Le diagnostic automatique (génération de propositions à partir des évaluations) est en cours de déploiement.";
   setTopbarActions([runBtn]);
 
   const c = $('#content');
@@ -304,6 +304,8 @@ async function renderReflexiveInteractions(host) {
   for (const it of data.items) {
     const tr = el('tr', 'refx-row');
     tr.tabIndex = 0;
+    tr.setAttribute('role', 'button');
+    tr.setAttribute('aria-label', "Voir le détail de l'interaction");
     const td1 = el('td', 'mono dim'); td1.textContent = fmtDate(it.started_at);
     const td2 = el('td'); td2.textContent = it.workspace_id || '—';
     const td3 = el('td');
@@ -327,7 +329,9 @@ async function renderReflexiveInteractions(host) {
     tr.appendChild(td4); tr.appendChild(td5); tr.appendChild(td6);
     const openDetail = () => modalReflexiveInteraction(it.id);
     tr.addEventListener('click', openDetail);
-    tr.addEventListener('keydown', (e) => { if (e.key === 'Enter') openDetail(); });
+    tr.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(); }
+    });
     tbody.appendChild(tr);
   }
   table.appendChild(tbody);
@@ -442,12 +446,18 @@ async function renderReflexiveProposals(host) {
     head.appendChild(left); head.appendChild(actions);
     card.appendChild(head);
 
-    const applyBtn = btn('Apply', 'btn-primary btn-sm', I.check);
-    const rejectBtn = btn('Reject', 'btn-ghost btn-sm', I.x);
+    // « Marquer comme traitée » plutôt que « Apply » : le backend ne fait
+    // qu'enregistrer la décision en DB (status='applied'), il ne modifie
+    // AUCUN fichier de config. La modification fichier reste manuelle pour
+    // l'instant (automatisation = lot ultérieur). Le libellé et la note
+    // ci-dessous évitent de laisser croire à un correctif appliqué.
+    const applyBtn = btn('Marquer comme traitée', 'btn-primary btn-sm', I.check);
+    applyBtn.title = "Enregistre ta décision (proposition traitée). Aucun fichier n'est modifié automatiquement — applique le changement toi-même.";
+    const rejectBtn = btn('Rejeter', 'btn-ghost btn-sm', I.x);
     applyBtn.addEventListener('click', async () => {
       try {
         await API.post('/api/reflexive/proposals/' + p.id + '/apply');
-        snackbar('Proposition « ' + (p.title || p.id) + ' » appliquée', {
+        snackbar('Proposition « ' + (p.title || p.id) + ' » marquée comme traitée (aucun fichier modifié)', {
           actionLabel: 'Voir',
           onAction: () => location.hash = '#/reflexive/proposals',
         });
@@ -457,6 +467,13 @@ async function renderReflexiveProposals(host) {
     rejectBtn.addEventListener('click', () => modalRejectProposal(p));
     actions.appendChild(applyBtn);
     actions.appendChild(rejectBtn);
+
+    // Note honnête : on enregistre une décision, pas une mutation fichier.
+    const note = el('p', 'muted');
+    note.style.cssText = 'margin:var(--sp-2) 0 0;font-size:11.5px';
+    note.textContent = "« Marquer comme traitée » enregistre seulement ta décision. La modification du fichier de config n'est pas encore automatisée — applique-la manuellement.";
+    card.appendChild(note);
+
     host.appendChild(card);
   }
 }
