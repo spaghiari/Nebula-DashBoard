@@ -166,7 +166,10 @@ function mcpCard(m) {
   // Statut réel calculé par compute_mcp_status (back) : disponible /
   // à configurer / désactivé. « connecté » n'est jamais retourné (pas de
   // test live), donc pas de pastille verte ici — ce serait un faux signal.
-  const statusClass = m.status === 'disponible' ? 'badge-info' : m.status === 'désactivé' ? 'badge-err' : 'badge-warn';
+  // Lot E item 2 : « désactivé » est un choix VOLONTAIRE -> neutre (gris),
+  // pas rouge. Le rouge est réservé aux états réellement cassés (env
+  // manquant ci-dessous), pour ne pas mélanger « off » et « KO ».
+  const statusClass = m.status === 'disponible' ? 'badge-info' : m.status === 'désactivé' ? 'badge' : 'badge-warn';
   const transportColor = m.transport === 'http' ? 'badge-info' : m.transport === 'sse' ? 'badge-accent' : 'badge';
   const isHttp = m.transport === 'http' || m.transport === 'sse';
   const cmd = isHttp ? (m.url || '—') : (m.command || '—') + (m.args && m.args.length ? ' ' + m.args.join(' ') : '');
@@ -176,13 +179,30 @@ function mcpCard(m) {
   if (m.cwd) extraBadges.push(`<span class="badge" title="cwd : ${escapeHtml(m.cwd)}">cwd</span>`);
   if (headerCount) extraBadges.push(`<span class="badge badge-info" title="${headerCount} header(s)">${headerCount} hdr</span>`);
   if (envCount) extraBadges.push(`<span class="badge" title="${envCount} variable(s) d'env">${envCount} env</span>`);
+
+  // Lot E item 2 : sous-badge « env manquant » dérivé du même lint que le
+  // diagnostic (lintInterpolation, js/lint.js). On compare les ${VAR}
+  // référencées aux clés de .env.local déjà chargées (STATE.envKeys) -- aucun
+  // appel réseau. Distingue un MCP réellement cassé (rouge) du statut neutre.
+  const lint = lintInterpolation(mcpInterpolableStrings(m), STATE.envKeys);
+  const missingEnv = lint.missing;
+  // On ne montre le badge par card QUE si .env.local existe mais qu'une var
+  // precise manque. Si le fichier n'existe pas du tout, le bandeau global en
+  // tete de page le signale deja -- inutile de rougir chaque card (bruit).
+  const missingBadge = (STATE.envExists && missingEnv.length)
+    ? `<span class="badge badge-err mcp-missing-env" role="button" tabindex="0" title="Variable(s) référencée(s) mais absente(s) de .env.local : ${escapeHtml(missingEnv.join(', '))}. Clique pour diagnostiquer.">env manquant: ${escapeHtml(missingEnv.join(', '))}</span>`
+    : '';
+
   card['innerHTML'] = `
     <div class="mcp-card-header">
       <div style="min-width:0">
         <h3 class="mcp-name">${escapeHtml(m.name || m.id)}</h3>
         <div class="dim mono" style="font-size:11px;margin-top:2px">${escapeHtml(m.id)}</div>
       </div>
-      <span class="badge ${statusClass}">${escapeHtml(m.status || 'à configurer')}</span>
+      <div class="mcp-card-badges">
+        <span class="badge ${statusClass}">${escapeHtml(m.status || 'à configurer')}</span>
+        ${missingBadge}
+      </div>
     </div>
     ${m.description ? `<p class="mcp-desc">${escapeHtml(m.description)}</p>` : ''}
     <div class="row" style="gap:6px">
@@ -194,6 +214,17 @@ function mcpCard(m) {
     <div class="mcp-cmd" title="${escapeHtml(cmd)}">${escapeHtml(cmd)}</div>
     ${m.cwd ? `<div class="dim mono" style="font-size:10.5px;padding:2px 8px;background:var(--bg);border-radius:4px;border:1px solid var(--border)" title="working directory">cd: ${escapeHtml(m.cwd)}</div>` : ''}
   `;
+  // Sous-badge « env manquant » cliquable -> ouvre le diagnostic (lot C).
+  // Le badge LIE vers l'action existante, il ne la réimplémente pas.
+  const missingEl = card.querySelector('.mcp-missing-env');
+  if (missingEl) {
+    missingEl.style.cursor = 'pointer';
+    missingEl.addEventListener('click', () => modalDiagnoseMCP(m));
+    missingEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); modalDiagnoseMCP(m); }
+    });
+  }
+
   const footer = el('div', 'mcp-card-footer');
   const diag = btn('Diagnostiquer', 'btn-sm btn-ghost', I.activity || I.search);
   diag.title = 'Vérifier pourquoi ce MCP ne marche pas (variables, commande, sonde HTTP, sync)';

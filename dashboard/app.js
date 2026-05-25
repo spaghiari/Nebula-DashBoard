@@ -3467,6 +3467,11 @@ function init() {
       setTimeout(() => startFirstRunWizard(), 400);
     }
 
+    // Badge compteur « propositions Reflexive en attente » sur la sidebar
+    // (lot E item 3). Fetch léger au boot ; rafraîchi ensuite après chaque
+    // action sur une proposition + au rendu de l'overview Reflexive.
+    refreshReflexiveBadge();
+
     // Vérification de mise à jour en arrière-plan (non-bloquante)
     setTimeout(() => {
       checkForUpdates().then(renderUpdateBadge).catch(e => console.warn('[updates] check au boot échoué :', e.message));

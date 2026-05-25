@@ -12,6 +12,7 @@ Modèle :
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 from pathlib import Path
 
@@ -58,6 +59,23 @@ def _hash_dir(d: Path) -> str:
     return h.hexdigest()
 
 
+def _read_origin(d: Path) -> dict | None:
+    """Lit `.nebula-origin.json` d'un skill importé (repo, commit, source_path).
+
+    Écrit par l'import GitHub (cf. `import_dir_into_library`). Retourné par
+    `list_library` pour le chip « GitHub: owner/repo@sha » (lot E item 5).
+    Tolérant : retourne None si absent ou JSON cassé.
+    """
+    f = d / ".nebula-origin.json"
+    if not f.exists():
+        return None
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def list_library() -> list[dict]:
     _ensure_library()
     out = []
@@ -75,6 +93,8 @@ def list_library() -> list[dict]:
             "description": meta.get("description") or "",
             "distributed_to": [t["target"] for t in dist],
             "outdated_count": sum(1 for t in dist if t["outdated"]),
+            # Origine GitHub (lot E item 5) : None si le skill n'a pas été importé.
+            "origin": _read_origin(sub),
         })
     return out
 

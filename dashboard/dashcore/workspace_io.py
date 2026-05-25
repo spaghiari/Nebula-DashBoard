@@ -25,6 +25,29 @@ def list_workspaces() -> list[dict]:
     return data.get("workspaces", [])
 
 
+def list_workspaces_with_status() -> dict:
+    """Comme le registre brut, mais chaque workspace est annoté de `path_exists`.
+
+    `path_exists` = le dossier du workspace existe-t-il sur disque (1 `is_dir`
+    par workspace, peu coûteux). Surface la donnée pour le badge « chemin KO »
+    de la home card (lot E item 1b) sans appel réseau supplémentaire côté front.
+    Le chemin réel passe par `resolve_ws_dir` (point d'accès unique disque).
+    """
+    data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+    out = dict(data)
+    annotated = []
+    for w in data.get("workspaces", []):
+        w2 = dict(w)
+        ws_id = w.get("id")
+        try:
+            w2["path_exists"] = bool(ws_id) and resolve_ws_dir(ws_id).is_dir()
+        except OSError:
+            w2["path_exists"] = False
+        annotated.append(w2)
+    out["workspaces"] = annotated
+    return out
+
+
 def cleanup_orphan_bats() -> dict:
     """Retire les .bat qui ne correspondent à aucun workspace du registre."""
     ws_ids = {w["id"] for w in list_workspaces()}

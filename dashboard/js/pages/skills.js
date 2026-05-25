@@ -172,6 +172,21 @@ function librarySkillCard(s) {
     badge = `<span class="badge badge-ok">${distributed.length} distribué(s)</span>`;
   }
 
+  // Lot E item 5 : chip d'origine GitHub pour les skills importés.
+  // s.origin = {repo:"owner/repo", commit:"<sha>", source_path, branch}.
+  // Exposé par list_library (lit .nebula-origin.json). Le sha est tronqué à 7.
+  let originChip = '';
+  if (s.origin && s.origin.repo) {
+    const repo = s.origin.repo;
+    const sha = s.origin.commit ? String(s.origin.commit).slice(0, 7) : '';
+    const label = sha ? `GitHub: ${repo}@${sha}` : `GitHub: ${repo}`;
+    const titleParts = [`Importé depuis ${repo}`];
+    if (s.origin.branch && s.origin.branch !== 'default') titleParts.push(`branche ${s.origin.branch}`);
+    if (s.origin.source_path) titleParts.push(`chemin ${s.origin.source_path}`);
+    if (s.origin.imported_at) titleParts.push(`le ${s.origin.imported_at}`);
+    originChip = `<span class="chip chip-origin" title="${escapeHtml(titleParts.join(' · '))}">${escapeHtml(label)}</span>`;
+  }
+
   card['innerHTML'] = `
     <div class="skill-card-header">
       <div class="skill-icon">${I.sparkle}</div>
@@ -182,6 +197,7 @@ function librarySkillCard(s) {
       ${badge}
     </div>
     <p class="skill-desc">${escapeHtml(s.description || 'Pas de description')}</p>
+    ${originChip ? `<div class="skill-origin">${originChip}</div>` : ''}
     ${distributed.length ? `<div class="skill-ws-list">${distributed.map(t => `<span class="chip">${escapeHtml(distLabel(t))}</span>`).join('')}</div>` : ''}
   `;
   const actions = el('div', 'skill-actions');

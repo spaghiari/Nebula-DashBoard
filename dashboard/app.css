@@ -320,6 +320,39 @@ body {
   border-radius: 3px;
   border: 1px solid var(--border);
 }
+/* Lot E item 3 : badge compteur (propositions Reflexive) sur l'entrée de nav.
+   Tokenisé (--accent*) pour rester lisible dans les 5 thèmes. Placé avant le
+   <kbd> : la marge auto du badge le pousse à droite, le kbd suit. */
+.nav-badge {
+  margin-left: auto;
+  min-width: 18px; height: 18px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 5px;
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+  line-height: 1;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+}
+.nav-badge[hidden] { display: none; }
+/* Quand le badge est visible, il prend le margin-left:auto ; le kbd revient
+   à une marge fixe pour ne pas se télescoper avec le badge. */
+.nav-badge:not([hidden]) ~ kbd { margin-left: var(--sp-2); }
+/* Pastille sur un onglet (ex. Propositions Reflexive). */
+.tab-badge {
+  margin-left: 6px;
+  min-width: 16px; height: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0 4px;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+  line-height: 1;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  vertical-align: middle;
+}
 
 .sidebar-footer {
   border-top: 1px solid var(--border);
@@ -1649,6 +1682,12 @@ body {
   overflow: hidden;
   line-height: 1.45;
 }
+/* Lot E item 1 : rangée de badges d'état (désync MCP, chemin KO) sous le header. */
+.workspace-state-badges {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  margin: 0 0 var(--sp-1);
+}
+.workspace-state-badges [role=button] { cursor: pointer; }
 .workspace-meta {
   display: flex; flex-wrap: wrap; gap: var(--sp-2);
   align-items: center;
@@ -1875,6 +1914,8 @@ body {
 }
 .mcp-card:hover { border-color: var(--border-strong); }
 .mcp-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); }
+/* Lot E item 2 : statut + sous-badges (env manquant) empilés à droite du header. */
+.mcp-card-badges { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; flex: none; max-width: 60%; }
 .mcp-name { font-size: 14px; font-weight: 600; margin: 0; }
 .mcp-desc {
   font-size: 12.5px; color: var(--text-muted); margin: 0;
@@ -3084,6 +3125,16 @@ body {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+/* Lot E item 5 : chip d'origine GitHub d'un skill importé. */
+.skill-origin { display: flex; flex-wrap: wrap; gap: 4px; padding-top: var(--sp-2); }
+.chip-origin {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .skill-ws-list {
   display: flex; flex-wrap: wrap; gap: 4px;

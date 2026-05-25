@@ -103,8 +103,15 @@ async function renderHome() {
   const quickstart = buildHomeQuickstart();
   if (quickstart) page.appendChild(quickstart);
 
-  const stats = await safe('/api/stats', {});
+  // Stats + sanity en parallèle : la sanity alimente les badges « désync »
+  // des workspace cards (lot E item 1a). On stocke l'ensemble des ids désync
+  // dans STATE pour que workspaceCard() le lise sans refaire d'appel réseau.
+  const [stats, sanity] = await Promise.all([
+    safe('/api/stats', {}),
+    safe('/api/sanity-check', { findings: [] }),
+  ]);
   STATE.stats = stats;
+  STATE.sanityDesync = new Set((sanity.findings || []).map(f => f.workspace));
   const wsCount = STATE.workspaces.length;
   const mcpCount = STATE.mcps.filter(m => m.status !== 'désactivé').length;
   const pluginCount = STATE.plugins.count || Object.keys(STATE.plugins.enabled || {}).length;
@@ -214,6 +221,24 @@ function workspaceCard(w) {
   const stats = STATE.stats[w.id] || {};
   const mcpsInfo = STATE.wsMcps[w.id] || { active: [] };
   const last = stats.last ? fmtDate(stats.last) : 'jamais';
+
+  // Lot E item 1 : badges d'état conditionnels surfacés depuis des données
+  // déjà chargées (sanity-check, path_exists du registre). Cliquables vers la
+  // vue/action concernée -- ils LIENT, ne réimplémentent rien.
+  //   1a désync MCP  : workspace présent dans les findings de sanity-check.
+  //   1b chemin KO   : w.path_exists === false (champ ajouté à /api/workspaces).
+  const stateBadges = [];
+  // Chemin KO en premier : c'est le plus bloquant (le dossier n'existe pas).
+  if (w.path_exists === false) {
+    stateBadges.push(`<span class="badge badge-err ws-badge-pathko" role="button" tabindex="0" title="Le dossier de ce workspace est introuvable sur le disque : ${escapeHtml(w.path || '(chemin inconnu)')}. Clique pour ouvrir le détail.">⛔ chemin KO</span>`);
+  }
+  if ((STATE.sanityDesync instanceof Set) && STATE.sanityDesync.has(w.id)) {
+    stateBadges.push(`<span class="badge badge-warn ws-badge-desync" role="button" tabindex="0" title="Le registre MCP et le .mcp.json de ce workspace divergent. Clique pour ouvrir le détail et synchroniser.">⚠ désync</span>`);
+  }
+  const stateBadgesRow = stateBadges.length
+    ? `<div class="workspace-state-badges">${stateBadges.join('')}</div>`
+    : '';
+
   card['innerHTML'] = `
     <div class="workspace-card-header">
       <span class="workspace-emoji">${escapeHtml(w.emoji || '📁')}</span>
@@ -222,6 +247,7 @@ function workspaceCard(w) {
         <div class="workspace-id mono">${escapeHtml(w.id)}</div>
       </div>
     </div>
+    ${stateBadgesRow}
     <p class="workspace-desc">${escapeHtml(w.description || '—')}</p>
     <div class="workspace-meta">
       <span class="workspace-meta-item">${I.cpu}<span>${mcpsInfo.active.length} MCP${mcpsInfo.active.length > 1 ? 's' : ''}</span></span>
@@ -229,6 +255,18 @@ function workspaceCard(w) {
       <span class="workspace-meta-item">${I.history}<span>${last}</span></span>
     </div>
   `;
+
+  // Badges d'état : navigation clavier vers le détail (le click souris remonte
+  // déjà au handler de la card via propagation). On garde le même flux que le
+  // clic sur la card -- le détail expose le panneau de sync / le chemin.
+  for (const b of card.querySelectorAll('.workspace-state-badges [role=button]')) {
+    b.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault(); e.stopPropagation();
+        location.hash = `#/workspace/${w.id}`;
+      }
+    });
+  }
 
   // Chip Reflexive en coin haut-droit, click toggle direct.
   const refxChip = document.createElement('button');

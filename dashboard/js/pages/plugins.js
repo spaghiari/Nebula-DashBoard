@@ -76,17 +76,34 @@ async function loadInstalledPlugins(host) {
       for (const p of installed) {
         const tr = el('tr');
         const [shortId, mkt] = p.id.includes('@') ? p.id.split('@') : [p.id, null];
-        const absent = !p.on_disk ? '<span class="badge badge-warn" title="Absent du disque" style="margin-left:6px">absent</span>' : '';
+        // Lot E item 4 : distinguer 3 états dégradés.
+        //   cassé    : activé (enabled) mais absent du disque -> rouge, switch
+        //              désactivé (l'activer n'a aucun effet réel).
+        //   absent   : présent dans settings.json mais plus sur disque, pas activé
+        //              -> neutre (warn), simple constat.
+        //   actif/désactivé : sur disque, géré normalement par le switch.
+        const broken = p.enabled && !p.on_disk;
+        let stateBadge = '';
+        if (broken) {
+          stateBadge = '<span class="badge badge-err" title="Plugin activé mais introuvable sur le disque -- il ne fait rien. Réinstalle-le ou désinstalle l\'entrée." style="margin-left:6px">cassé</span>';
+        } else if (!p.on_disk) {
+          stateBadge = '<span class="badge badge-warn" title="Absent du disque" style="margin-left:6px">absent</span>';
+        }
         tr['innerHTML'] = `
           <td>
-            <div><strong style="font-size:13px">${escapeHtml(shortId)}</strong>${absent}</div>
+            <div><strong style="font-size:13px">${escapeHtml(shortId)}</strong>${stateBadge}</div>
             ${mkt ? `<div class="dim mono" style="font-size:10.5px">${escapeHtml(mkt)}</div>` : ''}
           </td>
           <td><div class="muted" style="font-size:12.5px;max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(p.description || '')}">${escapeHtml(p.description || '—')}</div></td>
           <td></td>
           <td style="text-align:right"></td>
         `;
-        const sw = el('label', 'switch', `<input type="checkbox" aria-label="Activer ${escapeHtml(shortId)}" ${p.enabled ? 'checked' : ''}><span class="switch-slider"></span>`);
+        const sw = el('label', 'switch', `<input type="checkbox" aria-label="Activer ${escapeHtml(shortId)}" ${p.enabled ? 'checked' : ''}${!p.on_disk ? ' disabled' : ''}><span class="switch-slider"></span>`);
+        // Switch désactivé si le plugin est absent du disque : (dés)activer un
+        // plugin introuvable n'a aucun effet -> on évite le faux levier.
+        if (!p.on_disk) {
+          sw.title = "Plugin absent du disque -- impossible de l'activer tant qu'il n'est pas réinstallé.";
+        }
         sw.querySelector('input').addEventListener('change', async (ev) => {
           const url = ev.target.checked ? '/api/plugins/enable' : '/api/plugins/disable';
           ev.target.disabled = true;

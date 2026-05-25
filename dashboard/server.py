@@ -56,7 +56,7 @@ from dashcore.active_sessions import (
     list_active as list_active_sessions,
     kill as kill_active_session,
 )
-from dashcore.workspace_io import list_workspaces
+from dashcore.workspace_io import list_workspaces, list_workspaces_with_status
 from dashcore.api_mcps import (
     add_or_update_mcp, delete_mcp, sync_workspace_mcps, sync_all_workspaces,
     workspace_mcp_status, mcp_live_check, diagnose_mcp, scan_claude_config,
@@ -105,7 +105,7 @@ from dashcore.api_skills_library import (
 # ────────────────────────────────────────────────────────────────────────────
 
 # ── Workspaces ──────────────────────────────────────────────────────────────
-def h_get_workspaces(q, b):       return 200, read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+def h_get_workspaces(q, b):       return 200, list_workspaces_with_status()
 def h_get_ws_mcps(q, b, ws):      return workspace_mcp_status(ws)
 def h_get_ws_config(q, b, ws):    return read_workspace_config(ws)
 def h_get_ws_settings(q, b, ws):  return get_workspace_settings(ws)

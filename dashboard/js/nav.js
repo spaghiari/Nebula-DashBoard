@@ -36,10 +36,44 @@ function renderSidebar() {
     a.href = item.route;
     a.className = 'nav-link';
     a.dataset.id = item.id;
-    a['innerHTML'] = `${item.icon}<span>${escapeHtml(item.label)}</span>${item.key ? `<kbd>g ${item.key}</kbd>` : ''}`;
+    // Slot de badge compteur (lot E item 3) : caché par défaut, alimenté par
+    // setNavBadge(). Placé avant le <kbd> pour rester lisible.
+    a['innerHTML'] = `${item.icon}<span>${escapeHtml(item.label)}</span>` +
+      `<span class="nav-badge" data-nav-badge hidden></span>` +
+      `${item.key ? `<kbd>g ${item.key}</kbd>` : ''}`;
     nav.appendChild(a);
   }
   updateActiveNav();
+}
+
+// Met à jour le badge compteur d'une entrée de nav (lot E item 3).
+// count <= 0 (ou non-fini) -> badge caché. Robuste si la sidebar n'est pas
+// encore rendue (appel précoce au boot).
+function setNavBadge(itemId, count) {
+  const link = $(`.nav-link[data-id="${itemId}"]`, $('#sidebar'));
+  if (!link) return;
+  const badge = link.querySelector('[data-nav-badge]');
+  if (!badge) return;
+  const n = Number(count);
+  if (!Number.isFinite(n) || n <= 0) {
+    badge.hidden = true;
+    badge.textContent = '';
+    return;
+  }
+  badge.textContent = n > 99 ? '99+' : String(n);
+  badge.title = `${n} proposition(s) Reflexive en attente`;
+  badge.hidden = false;
+}
+
+// Rafraîchit le badge « propositions en attente » de l'entrée Reflexive.
+// Source : GET /api/reflexive/stats (proposals_pending). Appelé au boot,
+// après une action sur une proposition, et au rendu de l'overview Reflexive.
+// Silencieux : un blip réseau ne doit pas casser la nav.
+async function refreshReflexiveBadge() {
+  try {
+    const stats = await API.get('/api/reflexive/stats?days=30');
+    setNavBadge('reflexive', stats && stats.proposals_pending);
+  } catch { /* silencieux */ }
 }
 
 function updateActiveNav() {

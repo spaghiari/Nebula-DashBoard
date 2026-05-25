@@ -120,11 +120,26 @@ async function renderReflexive() {
 
   const tabs = el('nav', 'tabs');
   tabs.setAttribute('aria-label', 'Sections Reflexive');
+  // Pastille « propositions en attente » sur l'onglet Propositions (lot E
+  // item 3). On réutilise le compteur déjà calculé pour le badge sidebar
+  // (alimenté au boot / après action) -- aucun appel réseau supplémentaire.
+  const pendingForTab = (function () {
+    const b = $('.nav-link[data-id="reflexive"] [data-nav-badge]', $('#sidebar'));
+    if (!b || b.hidden) return 0;
+    const n = parseInt(b.textContent, 10);
+    return Number.isFinite(n) ? n : 0;
+  })();
   for (const [id, label] of REFX_TABS) {
     const a = document.createElement('a');
     a.href = id === 'overview' ? '#/reflexive' : '#/reflexive/' + id;
     a.className = 'tab' + (id === tab ? ' active' : '');
     a.textContent = label;
+    if (id === 'proposals' && pendingForTab > 0) {
+      const pill = el('span', 'tab-badge');
+      pill.textContent = pendingForTab > 99 ? '99+' : String(pendingForTab);
+      pill.title = `${pendingForTab} proposition(s) en attente`;
+      a.appendChild(pill);
+    }
     tabs.appendChild(a);
   }
   page.appendChild(tabs);
@@ -231,6 +246,9 @@ async function renderReflexiveOverview(host) {
   kpiRow.appendChild(refxKpi('Propositions en attente', fmtNum(stats.proposals_pending), propSub));
 
   host.appendChild(kpiRow);
+
+  // Synchronise le badge sidebar avec les stats déjà chargées (pas de re-fetch).
+  setNavBadge('reflexive', stats.proposals_pending);
 
   // Sparkline
   const sparkCard = el('div', 'card');
@@ -497,6 +515,7 @@ async function renderReflexiveProposals(host) {
             onAction: () => location.hash = '#/reflexive/proposals',
           });
           renderReflexiveProposals(host);
+          refreshReflexiveBadge();  // lot E item 3 : maj du compteur sidebar
         } catch (e) { toastErr(e.message); }
       }));
       rejectBtn.addEventListener('click', () => modalRejectProposal(p));
@@ -523,6 +542,7 @@ async function renderReflexiveProposals(host) {
           await API.post('/api/reflexive/proposals/' + p.id + '/revert');
           toastOk('Proposition remise en attente');
           renderReflexiveProposals(host);
+          refreshReflexiveBadge();  // lot E item 3 : maj du compteur sidebar
         } catch (e) { toastErr(e.message); }
       }));
       actions.appendChild(undoBtn);
@@ -564,6 +584,7 @@ function modalRejectProposal(p) {
       await API.post('/api/reflexive/proposals/' + p.id + '/reject', { reason });
       toastOk('Proposition rejetée');
       close();
+      refreshReflexiveBadge();  // lot E item 3 : maj du compteur sidebar
       route();
     } catch (e) { toastErr(e.message); }
   });
