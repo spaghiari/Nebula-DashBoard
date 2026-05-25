@@ -869,17 +869,68 @@ function modalNewMCP(existing = null) {
         notes: get('notes').trim(),
       };
     }
-    try {
-      const resp = await API.post('/api/mcps', payload);
-      // Affiche les workspaces synchronisés automatiquement (auto-sync backend)
-      const synced = resp.synced || [];
-      const verb = isEdit ? 'mis à jour' : 'créé';
-      if (synced.length === 0) {
-        toastOk(`MCP ${verb}`);
-      } else {
-        toastOk(`MCP ${verb} et synchronisé vers ${synced.length} workspace(s) : ${synced.slice(0, 3).join(', ')}${synced.length > 3 ? '…' : ''}`);
-      }
-      close(); STATE.loading = true; route();
-    } catch (e) { toastErr(e.message); }
+    // Envoi effectif (factorisé : appelé directement ou après confirmation du lint).
+    const doSave = async () => {
+      try {
+        const resp = await API.post('/api/mcps', payload);
+        // Affiche les workspaces synchronisés automatiquement (auto-sync backend)
+        const synced = resp.synced || [];
+        const verb = isEdit ? 'mis à jour' : 'créé';
+        if (synced.length === 0) {
+          toastOk(`MCP ${verb}`);
+        } else {
+          toastOk(`MCP ${verb} et synchronisé vers ${synced.length} workspace(s) : ${synced.slice(0, 3).join(', ')}${synced.length > 3 ? '…' : ''}`);
+        }
+        close(); STATE.loading = true; route();
+      } catch (e) { toastErr(e.message); }
+    };
+
+    // Lint préventif (Lot B item 1) : char parasite après ${VAR} (1a) +
+    // ${VAR} absent de .env.local (1b). WARN non-bloquant -> confirmation.
+    const lintResult = lintInterpolation(mcpInterpolableStrings(payload), STATE.envKeys);
+    if (lintResult.stuck.length || lintResult.missing.length) {
+      confirmMcpLint(lintResult, doSave);
+      return;
+    }
+    await doSave();
+  });
+}
+
+// Modal de confirmation des warnings de lint MCP (item 1a/1b).
+// Non-bloquant : laisse continuer après affichage des problèmes détectés.
+// Toutes les valeurs dynamiques passent par escapeHtml (convention du fichier).
+function confirmMcpLint(lintResult, onContinue) {
+  const stuck = lintResult.stuck;
+  const missing = lintResult.missing;
+  const body = el('div');
+  const parts = [];
+  if (stuck.length) {
+    const items = stuck.map(h =>
+      `<li>caractère « <strong>${escapeHtml(h.char)}</strong> » accolé à <code class="mono">\${${escapeHtml(h.varName)}}</code> - probable typo</li>`
+    ).join('');
+    parts.push(`<p style="margin:0 0 6px"><strong>Caractère parasite après une variable</strong></p><ul style="margin:0 0 var(--sp-3);padding-left:18px;font-size:13px">${items}</ul>`);
+  }
+  if (missing.length) {
+    const vars = missing.map(v => `<code class="mono">\${${escapeHtml(v)}}</code>`).join(', ');
+    parts.push(`<p style="margin:0 0 6px"><strong>Variable(s) absente(s) de <code class="mono">.env.local</code></strong></p>
+             <p style="margin:0 0 6px;font-size:13px">${vars} - ne seront pas substituées tant qu'elles ne sont pas définies (le MCP plantera à la sync si elles restent vides).</p>`);
+  }
+  parts.push(`<p style="margin:var(--sp-2) 0 0;font-size:12.5px;color:var(--text-muted)">Continuer l'enregistrement quand même ?</p>`);
+  body.innerHTML = parts.join('');
+
+  const cancel = btn('Annuler', 'btn-ghost');
+  const cont = btn('Continuer', 'btn-primary');
+  const footer = [cancel];
+  if (missing.length) {
+    const goEnv = btn('Configurer .env.local', 'btn-ghost', I.key);
+    goEnv.addEventListener('click', () => { close(); location.hash = '#/tools'; });
+    footer.push(goEnv);
+  }
+  footer.push(cont);
+  const { close } = openModal({ title: 'Vérification avant enregistrement', body, footer });
+  cancel.addEventListener('click', close);
+  cont.addEventListener('click', async () => {
+    close();
+    await onContinue();
   });
 }

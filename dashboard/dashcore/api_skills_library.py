@@ -231,8 +231,17 @@ def save_library_skill_content(name: str, content: str) -> tuple[int, dict]:
     d = SKILLS_LIBRARY_DIR / name
     if not d.exists():
         return 404, {"error": "introuvable"}
-    (d / "SKILL.md").write_text(content or "", encoding="utf-8")
-    return 200, {"ok": True}
+    skill_md = d / "SKILL.md"
+    # Backup auto avant écrasement (aligné sur save_skill_content dans
+    # api_plugins.py : une édition qui casse le frontmatter rend le skill
+    # invisible pour Claude, le .bak permet de revenir en arrière).
+    backup = None
+    if skill_md.exists():
+        bak = skill_md.with_suffix(".md.bak")
+        bak.write_text(skill_md.read_text(encoding="utf-8"), encoding="utf-8")
+        backup = str(bak)
+    skill_md.write_text(content or "", encoding="utf-8")
+    return 200, {"ok": True, "backup": backup}
 
 
 def import_dir_into_library(src_dir: Path, requested_name: str | None = None,

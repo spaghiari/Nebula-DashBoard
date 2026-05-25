@@ -2612,20 +2612,50 @@ function modalPermissions(wsId) {
     const deny = (perms.deny || []).join('\n');
     const body = el('div');
     body.innerHTML = `
-      <p class="muted" style="margin-top:0">Une règle par ligne. Ex : <code class="mono">Bash(npm:*)</code>, <code class="mono">mcp__*</code></p>
-      <div class="field"><label class="field-label text-ok">Allow</label><textarea class="textarea" name="allow" rows="6">${escapeHtml(allow)}</textarea></div>
-      <div class="field"><label class="field-label text-err">Deny</label><textarea class="textarea" name="deny" rows="6">${escapeHtml(deny)}</textarea></div>
+      <p class="muted" style="margin-top:0">Une règle par ligne. Ex : <code class="mono">Bash(npm:*)</code>, <code class="mono">mcp__server__tool</code> (doubles underscores), <code class="mono">mcp__server__*</code></p>
+      <div class="field"><label class="field-label text-ok">Allow</label><textarea class="textarea" name="allow" rows="6">${escapeHtml(allow)}</textarea><div class="perm-lint" data-lint="allow" style="font-size:11.5px;margin-top:4px"></div></div>
+      <div class="field"><label class="field-label text-err">Deny</label><textarea class="textarea" name="deny" rows="6">${escapeHtml(deny)}</textarea><div class="perm-lint" data-lint="deny" style="font-size:11.5px;margin-top:4px"></div></div>
     `;
+    // Validation live (item 2) : marque les lignes douteuses sous chaque
+    // textarea. WARN non-bloquant (la liste des outils natifs n'est pas
+    // exhaustive) ; le save propose une confirmation s'il en reste.
+    const lintField = (which) => {
+      const ta = body.querySelector(`[name=${which}]`);
+      const host = body.querySelector(`[data-lint=${which}]`);
+      const bad = ta.value.split('\n').map(s => s.trim()).filter(Boolean)
+        .filter(line => !isValidPermissionLine(line));
+      if (!bad.length) { host.innerHTML = ''; return []; }
+      host.innerHTML = bad.map(line =>
+        `<div class="text-err">⚠ ${escapeHtml(permissionHint(line))}</div>`
+      ).join('');
+      return bad;
+    };
+    body.querySelector('[name=allow]').addEventListener('input', () => lintField('allow'));
+    body.querySelector('[name=deny]').addEventListener('input', () => lintField('deny'));
+    lintField('allow'); lintField('deny');
+
     const cancel = btn('Annuler', 'btn-ghost');
     const save = btn('Enregistrer', 'btn-primary');
     const { close } = openModal({ title: 'Permissions', body, footer: [cancel, save], wide: true });
     cancel.addEventListener('click', close);
-    save.addEventListener('click', () => withBusy(save, async () => {
+    const doSave = async () => {
       const a = body.querySelector('[name=allow]').value.split('\n').map(s => s.trim()).filter(Boolean);
       const d = body.querySelector('[name=deny]').value.split('\n').map(s => s.trim()).filter(Boolean);
       const value = (a.length || d.length) ? { allow: a, deny: d } : null;
       try { await API.post(`/api/workspaces/${wsId}/settings/permissions`, { value }); toastOk('Enregistré'); close(); }
       catch (e) { toastErr(e.message); }
+    };
+    save.addEventListener('click', () => withBusy(save, async () => {
+      const bad = [...lintField('allow'), ...lintField('deny')];
+      if (bad.length) {
+        confirmDialog(
+          `${bad.length} règle(s) au format douteux (ex : « ${bad[0]} »). `
+          + `Une permission mal formée est ignorée en silence par Claude Code. Enregistrer quand même ?`,
+          () => withBusy(save, doSave)
+        );
+        return;
+      }
+      await doSave();
     }));
   })();
 }
@@ -2698,10 +2728,31 @@ function modalHooks(wsId) {
       let hooks;
       try { hooks = JSON.parse(body.querySelector('[name=hooks]').value); }
       catch (e) { toastErr('JSON invalide : ' + e.message); return; }
+      // Miroir front du lint backend (item 3a) : chemin .sh relatif =
+      // BLOQUANT (casserait toutes les sessions). Feedback immédiat sans
+      // aller-retour réseau ; le backend refuse aussi par sécurité.
+      const relSh = lintHooksRelativeSh(hooks);
+      if (relSh.length) {
+        const h = relSh[0];
+        toastErr(`Chemin de hook relatif dans « ${h.event} » : « ${h.badPath} ». `
+          + `Utilise \${CLAUDE_PROJECT_DIR}/.claude/hooks/${h.badPath.split(/[\\/]/).pop()} `
+          + `(un chemin relatif casse dès que le shell dérive).`);
+        return;
+      }
       try {
-        if (wsId) await API.post(`/api/workspaces/${wsId}/settings/hooks`, { value: Object.keys(hooks).length ? hooks : null });
-        else await API.post('/api/hooks/global', { hooks });
-        toastOk('Enregistré'); guard.markSaved(); close();
+        let resp;
+        if (wsId) resp = await API.post(`/api/workspaces/${wsId}/settings/hooks`, { value: Object.keys(hooks).length ? hooks : null });
+        else resp = await API.post('/api/hooks/global', { hooks });
+        // Affiche les warnings non bloquants remontés par le backend
+        // (3b fichier hook absent, 3c événement inconnu).
+        const warns = (resp && resp.hook_warnings) || [];
+        if (warns.length) {
+          toastOk('Enregistré (avec avertissements)');
+          for (const w of warns.slice(0, 3)) toastErr(w.msg);
+        } else {
+          toastOk('Enregistré');
+        }
+        guard.markSaved(); close();
       } catch (e) { toastErr(e.message); }
     }));
   })();
@@ -2879,9 +2930,27 @@ function modalEditSkill(scope, name) {
     const save = btn('Enregistrer', 'btn-primary');
     const { close } = openModal({ title: `Skill ${scope}/${name}`, body, footer: [cancel, save], wide: true });
     cancel.addEventListener('click', close);
-    save.addEventListener('click', () => withBusy(save, async () => {
+    const doSave = async () => {
       try { await API.post(`/api/skills/${scope}/${name}/content`, { content: ta.value }); toastOk('Enregistré'); close(); }
       catch (e) { toastErr(e.message); }
+    };
+    save.addEventListener('click', () => withBusy(save, async () => {
+      // Validation frontmatter (item 5a) : un SKILL.md sans name+description
+      // valides est invisible pour Claude (auto-découverte échoue). WARN fort
+      // non-bloquant -> confirmation.
+      const fm = validateSkillFrontmatter(ta.value);
+      if (!fm.ok) {
+        const what = fm.missing.length === 2
+          ? 'aucun frontmatter `name`+`description` valide'
+          : `pas de \`${fm.missing[0]}\` dans le frontmatter`;
+        confirmDialog(
+          `Ce SKILL.md n'a ${what}. Sans frontmatter \`name\`+\`description\` valide, `
+          + `Claude ne verra pas ce skill (auto-découverte échouée). Enregistrer quand même ?`,
+          () => withBusy(save, doSave)
+        );
+        return;
+      }
+      await doSave();
     }));
   })();
 }

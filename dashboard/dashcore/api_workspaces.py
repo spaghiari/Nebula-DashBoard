@@ -212,7 +212,14 @@ def create_template(payload: dict) -> tuple[int, dict]:
     return 201, {"ok": True, "id": tpl_id, "starter": starter}
 
 
+_KNOWN_PLACEHOLDERS = frozenset({"name", "label", "description", "tools", "emoji", "date"})
 _PLACEHOLDER_RE = re.compile(r"\{\{(name|label|description|tools|emoji|date)\}\}")
+# Candidat placeholder : 1 ou 2 accolades, espaces tolérés, autour d'un mot.
+# Capture les formes mal écrites (accolade simple, espaces, nom inconnu) pour
+# les distinguer des placeholders valides exacts. Le (?<!\$) évite de
+# flagger les interpolations env shell ${HOME} (qui ne sont pas des
+# placeholders de template Nebula).
+_PLACEHOLDER_CANDIDATE_RE = re.compile(r"(?<!\$)\{\{?\s*(\w+)\s*\}?\}")
 
 
 def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
@@ -225,6 +232,7 @@ def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
 
     suggestions: list[dict] = []
     placeholders_used: set[str] = set()
+    malformed_placeholders: dict[str, str] = {}  # texte fautif -> chemin fichier
     has_claude_md = False
     has_gitignore = False
     has_readme = False
@@ -253,6 +261,16 @@ def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
             text = entry.read_text(encoding="utf-8", errors="ignore")
             for m in _PLACEHOLDER_RE.finditer(text):
                 placeholders_used.add(m.group(1))
+            # Détection des placeholders mal formés : tout candidat dont le
+            # texte exact n'est pas un placeholder valide ({{<known>}} sans
+            # espace). Couvre {{nam}} (nom inconnu), {label} (accolade simple),
+            # {{ name }} (espaces) - qui resteraient littéraux dans le workspace.
+            for m in _PLACEHOLDER_CANDIDATE_RE.finditer(text):
+                raw = m.group(0)
+                word = m.group(1)
+                valid = (raw == "{{" + word + "}}" and word in _KNOWN_PLACEHOLDERS)
+                if not valid and raw not in malformed_placeholders:
+                    malformed_placeholders[raw] = rel
         except OSError:
             continue
 
@@ -266,6 +284,14 @@ def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
         suggestions.append({"level": "error", "msg": f"Dossier interdit dans un template : {f} (sera copié dans chaque workspace)."})
     for bf in big_files:
         suggestions.append({"level": "warn", "msg": f"Fichier > 512 Kio non éditable : {bf['path']}."})
+    for raw, rel in sorted(malformed_placeholders.items()):
+        suggestions.append({
+            "level": "warn",
+            "msg": f"Placeholder inconnu/mal formé : « {raw} » ({rel}) - "
+                   f"ne sera pas substitué et restera littéral dans le workspace créé. "
+                   f"Placeholders valides : {', '.join('{{' + p + '}}' for p in sorted(_KNOWN_PLACEHOLDERS))}.",
+        })
+
     declared = {"name", "label", "description", "tools", "emoji", "date"}
     unused_critical = {"name", "label"} - placeholders_used
     if unused_critical:
@@ -412,6 +438,17 @@ def write_template_file(tpl_id: str, rel_path: str, content: str) -> tuple[int, 
     target, err = _resolve_template_file(tpl_id, rel_path)
     if err:
         return 400, err
+    # Garde-fou : un fichier .json de template doit être un JSON valide.
+    # Sinon un settings.json cassé se propagerait à CHAQUE workspace créé
+    # depuis ce template (le copy ne re-valide pas). Aligné sur
+    # save_workspace_settings qui valide déjà le JSON.
+    if rel_path.lower().endswith(".json"):
+        try:
+            json.loads(content)
+        except json.JSONDecodeError as e:
+            return 400, {"error": f"JSON invalide ({rel_path}) : {e}. "
+                                  "Corrige la syntaxe avant d'enregistrer - "
+                                  "ce fichier serait copié cassé dans chaque workspace."}
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         # Backup si existant
@@ -492,6 +529,15 @@ def save_workspace_settings(ws_id: str, content: str) -> tuple[int, dict]:
     if unknown:
         return 400, {"error": f"clés racine non reconnues : {', '.join(sorted(unknown))}"}
 
+    # Lint structurel des hooks embarqués (3a bloquant) : même garde-fou que
+    # le patch partiel, pour ne pas laisser passer un settings.json complet
+    # contenant un chemin de hook relatif.
+    hook_warnings: list[dict] = []
+    if isinstance(parsed.get("hooks"), dict):
+        errors, hook_warnings = _lint_hooks_structure(parsed["hooks"], project_dir=resolve_ws_dir(ws_id))
+        if errors:
+            return 400, {"error": errors[0]["msg"], "hook_errors": errors, "hook_warnings": hook_warnings}
+
     path = _workspace_settings_path(ws_id)
     with _MUTATION_LOCK:
         if path.exists():
@@ -505,7 +551,7 @@ def save_workspace_settings(ws_id: str, content: str) -> tuple[int, dict]:
             write_json(path, parsed)
         elif path.exists():
             path.unlink()
-    return 200, {"ok": True}
+    return 200, {"ok": True, "hook_warnings": hook_warnings}
 
 
 def patch_workspace_settings(ws_id: str, key: str, value) -> tuple[int, dict]:
@@ -515,6 +561,14 @@ def patch_workspace_settings(ws_id: str, key: str, value) -> tuple[int, dict]:
     allowed = {"permissions", "hooks", "model", "env", "effortLevel", "enabledPlugins"}
     if key not in allowed:
         return 400, {"error": f"clé non gérée : {key}"}
+
+    # Lint structurel des hooks (3a bloquant / 3b-3c warn). project_dir =
+    # racine du workspace pour résoudre ${CLAUDE_PROJECT_DIR} (check d'existence).
+    hook_warnings: list[dict] = []
+    if key == "hooks" and isinstance(value, dict):
+        errors, hook_warnings = _lint_hooks_structure(value, project_dir=resolve_ws_dir(ws_id))
+        if errors:
+            return 400, {"error": errors[0]["msg"], "hook_errors": errors, "hook_warnings": hook_warnings}
 
     path = _workspace_settings_path(ws_id)
     with _MUTATION_LOCK:
@@ -533,12 +587,109 @@ def patch_workspace_settings(ws_id: str, key: str, value) -> tuple[int, dict]:
             write_json(path, settings)
         elif path.exists():
             path.unlink()
-    return 200, {"ok": True}
+    return 200, {"ok": True, "hook_warnings": hook_warnings}
 
 
 def get_global_hooks() -> dict:
     settings = read_json(CLAUDE_SETTINGS, {}) or {}
     return settings.get("hooks") or {}
+
+
+# Événements de hook reconnus par Claude Code (pour le lint 3c).
+_KNOWN_HOOK_EVENTS = frozenset({
+    "PreToolUse", "PostToolUse", "Notification", "UserPromptSubmit",
+    "Stop", "SubagentStop", "PreCompact", "SessionStart", "SessionEnd",
+})
+
+# Token ressemblant à un chemin de script .sh dans une commande de hook.
+# On capture les chemins shell-quotés ou nus se terminant par .sh.
+_HOOK_SH_TOKEN_RE = re.compile(r"""["']?([^\s"']*\.sh)["']?""")
+
+
+def _sh_path_is_safe(path: str) -> bool:
+    """Vrai si le chemin d'un script .sh de hook est robuste au cwd.
+
+    Sûr : variable d'env (${CLAUDE_PROJECT_DIR}/...), chemin absolu POSIX
+    (/...), chemin absolu Windows (C:\\... ou C:/...), home (~/...).
+    Dangereux : chemin relatif (.claude/hooks/x.sh, ./x.sh, hooks/x.sh) -
+    casse dès que le shell s'exécute hors de la racine projet.
+    """
+    p = path.strip()
+    if not p:
+        return True
+    if p.startswith("${") or p.startswith("$"):
+        return True
+    if p.startswith("~"):
+        return True
+    if p.startswith("/") or p.startswith("\\"):
+        return True
+    # Chemin absolu Windows : lettre de lecteur suivie de :\ ou :/
+    if re.match(r"^[A-Za-z]:[\\/]", p):
+        return True
+    return False
+
+
+def _lint_hooks_structure(hooks: dict, project_dir: Path | None = None) -> tuple[list[dict], list[dict]]:
+    """Analyse structurelle d'un objet `hooks` Claude Code.
+
+    Retourne (errors, warnings) :
+      - errors (BLOQUANT) : chemin .sh relatif dans une command (3a).
+      - warnings (non bloquant) : fichier hook absent sur disque (3b),
+        clé d'événement inconnue (3c).
+
+    `project_dir` sert à résoudre ${CLAUDE_PROJECT_DIR} pour vérifier
+    l'existence des fichiers (3b). Si None, le check d'existence est sauté.
+    """
+    errors: list[dict] = []
+    warnings: list[dict] = []
+    if not isinstance(hooks, dict):
+        return errors, warnings
+
+    for event, entries in hooks.items():
+        if event not in _KNOWN_HOOK_EVENTS:
+            warnings.append({
+                "event": event,
+                "msg": f"Événement de hook inconnu : « {event} ». "
+                       f"Claude Code ne déclenchera jamais ce hook. "
+                       f"Événements valides : {', '.join(sorted(_KNOWN_HOOK_EVENTS))}.",
+            })
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            for sub in (entry.get("hooks") or []):
+                if not isinstance(sub, dict):
+                    continue
+                command = sub.get("command") or ""
+                if not isinstance(command, str):
+                    continue
+                for m in _HOOK_SH_TOKEN_RE.finditer(command):
+                    sh_path = m.group(1)
+                    if not _sh_path_is_safe(sh_path):
+                        errors.append({
+                            "event": event,
+                            "command": command,
+                            "bad_path": sh_path,
+                            "msg": f"Chemin de hook relatif dans « {event} » : "
+                                   f"« {sh_path} ». Un chemin relatif casse dès que le "
+                                   f"shell s'exécute hors de la racine projet (toutes les "
+                                   f"sessions Claude Code planteraient). Corrige en "
+                                   f"${{CLAUDE_PROJECT_DIR}}/.claude/hooks/"
+                                   f"{Path(sh_path).name}.",
+                        })
+                    elif project_dir is not None and "${CLAUDE_PROJECT_DIR}" in sh_path:
+                        # 3b : résout la variable et vérifie l'existence du fichier.
+                        rel = sh_path.split("${CLAUDE_PROJECT_DIR}", 1)[1].lstrip("/\\")
+                        resolved = project_dir / rel
+                        if not resolved.exists():
+                            warnings.append({
+                                "event": event,
+                                "msg": f"Fichier hook introuvable : « {sh_path} » "
+                                       f"(résolu : {resolved}). Le hook échouera au "
+                                       f"déclenchement.",
+                            })
+    return errors, warnings
 
 
 def get_hooks_errors(tail_lines: int = 200) -> tuple[int, dict]:
@@ -584,6 +735,12 @@ def get_hooks_errors(tail_lines: int = 200) -> tuple[int, dict]:
 
 
 def set_global_hooks(hooks: dict) -> tuple[int, dict]:
+    # Lint structurel : refuse un chemin .sh relatif (casserait toutes les
+    # sessions). project_dir=None côté global (pas de racine déterministe
+    # pour résoudre ${CLAUDE_PROJECT_DIR}), donc pas de check d'existence.
+    errors, warnings = _lint_hooks_structure(hooks or {}, project_dir=None)
+    if errors:
+        return 400, {"error": errors[0]["msg"], "hook_errors": errors, "hook_warnings": warnings}
     with _MUTATION_LOCK:
         settings = read_json(CLAUDE_SETTINGS, {}) or {}
         if CLAUDE_SETTINGS.exists():
@@ -595,7 +752,7 @@ def set_global_hooks(hooks: dict) -> tuple[int, dict]:
             settings.pop("hooks", None)
         CLAUDE_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
         write_json(CLAUDE_SETTINGS, settings)
-    return 200, {"ok": True}
+    return 200, {"ok": True, "hook_warnings": warnings}
 
 
 def list_sessions_for_workspace(ws_id: str) -> list[dict]:
