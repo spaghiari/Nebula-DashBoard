@@ -42,6 +42,7 @@ async function renderMCPs() {
       <p class="page-subtitle">Servers Model Context Protocol — synchronisés vers les workspaces.</p>
     </div>
   `));
+  mountHelpLink(page, 'mcps', 'les MCPs');
 
   // Bandeau .env.local manquant si des MCPs utilisent ${VAR}
   const usesInterpolation = (STATE.mcps || []).some(m => {

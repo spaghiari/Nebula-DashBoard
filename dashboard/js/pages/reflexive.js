@@ -117,6 +117,7 @@ async function renderReflexive() {
   headerText.appendChild(eyebrow); headerText.appendChild(h1); headerText.appendChild(sub2);
   header.appendChild(headerText);
   page.appendChild(header);
+  mountHelpLink(page, 'reflexive', 'la boucle Reflexive');
 
   const tabs = el('nav', 'tabs');
   tabs.setAttribute('aria-label', 'Sections Reflexive');

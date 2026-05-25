@@ -3124,7 +3124,7 @@ function openPalette() {
   palette.setAttribute('aria-modal', 'true');
   palette.setAttribute('aria-label', 'Recherche et actions rapides');
   palette.innerHTML = `
-    <input class="palette-input" type="text" placeholder="Recherche · workspaces · MCPs · skills · templates…" />
+    <input class="palette-input" type="text" placeholder="Recherche · workspaces · MCPs · skills · templates · aide…" />
     <div class="palette-list"></div>
     <div class="palette-hint"><span><kbd>↑</kbd> <kbd>↓</kbd> naviguer</span><span><kbd>↵</kbd> ouvrir</span><span><kbd>Esc</kbd> fermer</span></div>
   `;
@@ -3174,16 +3174,24 @@ function openPalette() {
         { kind: 'page', label: 'Plugins', route: '#/plugins' },
         { kind: 'page', label: 'Templates', route: '#/templates' },
         { kind: 'page', label: 'Outils', route: '#/tools' },
+        { kind: 'page', label: 'Aide', route: '#/aide' },
         { kind: 'action', label: 'Nouveau workspace', action: () => modalNewWorkspace() },
         { kind: 'action', label: 'Nouveau MCP', action: () => modalNewMCP() },
         { kind: 'action', label: 'Sync tous les workspaces', action: async () => { try { await API.post('/api/sync-all', {}); toastOk('Sync OK'); } catch (e) { toastErr(e.message); } } },
       ];
       active = 0; render(); return;
     }
+    // Entrées d'aide (lot F item 2) : recherche locale dans les topics
+    // d'aide, fusionnée avec la recherche serveur. Calculée hors try pour
+    // rester disponible même si /api/search échoue (offline, etc.).
+    const helpHits = (typeof helpPaletteEntries === 'function') ? helpPaletteEntries(q) : [];
     try {
       const r = await API.get(`/api/search?q=${encodeURIComponent(q)}`);
       results = (r.results || []).map(x => ({ kind: x.kind, label: x.label || x.id, route: x.route }));
     } catch { results = []; }
+    // L'aide vient en fin de liste : la recherche globale (workspaces, MCPs…)
+    // reste prioritaire, l'aide complète sans la noyer.
+    results = results.concat(helpHits);
     active = 0; render();
   }, 120);
 

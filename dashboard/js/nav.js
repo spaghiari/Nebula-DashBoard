@@ -105,3 +105,33 @@ function setTopbarActions(actions = []) {
   c['innerHTML'] = '';
   for (const a of actions) c.appendChild(a);
 }
+
+/* ================================================================
+   AIDE CONTEXTUELLE (lot F item 1)
+   ----------------------------------------------------------------
+   helpLink : petit lien « ? » discret qui pointe vers un topic d'aide
+   ciblé (#/aide/<topicId>). topicId DOIT être un id de HELP_TOPICS
+   (cf. js/pages/help.js), pas un id de section. Mapping page -> topic
+   géré côté appelant.
+   mountHelpLink : greffe ce lien dans le .page-eyebrow d'une page déjà
+   construite (même point d'ancrage que la live-dot des MCPs). No-op si
+   l'eyebrow est absent ou si un lien d'aide y est déjà monté (anti-doublon).
+   ================================================================ */
+function helpLink(topicId, sujet) {
+  const a = document.createElement('a');
+  a.href = `#/aide/${topicId}`;
+  a.className = 'help-eyebrow-link';
+  a.setAttribute('aria-label', `Aide : ${sujet}`);
+  a.title = `Aide : ${sujet}`;
+  a['innerHTML'] = I.info;
+  return a;
+}
+
+function mountHelpLink(page, topicId, sujet) {
+  if (!page) return;
+  const eyebrow = page.querySelector('.page-eyebrow');
+  if (!eyebrow || eyebrow.querySelector('.help-eyebrow-link')) return;
+  eyebrow.appendChild(helpLink(topicId, sujet));
+}
+window.helpLink = helpLink;
+window.mountHelpLink = mountHelpLink;

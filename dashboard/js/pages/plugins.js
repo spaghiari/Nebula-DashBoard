@@ -32,6 +32,7 @@ async function renderPlugins() {
       <p class="page-subtitle">Plugins Claude Code installés et leur scope par workspace.</p>
     </div>
   `));
+  mountHelpLink(page, 'skills-plugins', 'les plugins');
 
   // Installed
   page.appendChild(el('div', 'section-label', '<span class="num">A.</span> Installés'));

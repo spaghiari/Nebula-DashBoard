@@ -2755,6 +2755,16 @@ body {
   color: var(--text-muted);
 }
 
+/* CTA « Ouvrir la feature » en fin de topic d'aide (lot F item 3). */
+.help-cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin-top: var(--sp-8);
+  padding-top: var(--sp-6);
+  border-top: 1px solid var(--border);
+}
+
 .help-topic-nav {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3030,6 +3040,27 @@ body {
   border: 1px solid var(--border-strong);
   box-shadow: 0 1px 0 rgba(0,0,0,0.2);
   margin: 0 2px;
+}
+
+/* === LIEN AIDE CONTEXTUELLE (lot F item 1) ==================== */
+/* Petit « ? » discret dans le page-eyebrow, tappable (>=24px) et lisible
+   dans les 5 thèmes via les tokens d'accent. */
+.help-eyebrow-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin-left: var(--sp-1);
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  transition: color var(--d-fast) var(--ease), background var(--d-fast) var(--ease);
+}
+.help-eyebrow-link svg { width: 15px; height: 15px; }
+.help-eyebrow-link:hover,
+.help-eyebrow-link:focus-visible {
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 /* === HELP CARD (collapsible note) ============================ */

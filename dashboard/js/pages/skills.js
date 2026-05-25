@@ -39,6 +39,7 @@ async function renderSkills() {
       <p class="page-subtitle">Modules de compétences activables par Claude — globaux ou scopés à un workspace.</p>
     </div>
   `));
+  mountHelpLink(page, 'skills-plugins', 'les skills');
 
   // Help collapsible
   const help = el('details', 'help-card');

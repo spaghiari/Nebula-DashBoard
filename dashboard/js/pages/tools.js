@@ -31,6 +31,7 @@ async function renderTools() {
       <p class="page-subtitle">Accès rapide aux fichiers de configuration et utilitaires.</p>
     </div>
   `));
+  mountHelpLink(page, 'outils', 'les outils & la maintenance');
 
   const stack = el('div', 'tools-stack');
 

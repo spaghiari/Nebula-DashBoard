@@ -32,6 +32,7 @@ async function renderTemplates() {
       <p class="page-subtitle">Modèles réutilisables pour créer de nouveaux workspaces — clique <strong>+ Nouveau template</strong> pour démarrer.</p>
     </div>
   `));
+  mountHelpLink(page, 'templates', 'les templates');
 
   // Note "Comment utiliser" (collapsible) — refondu
   const help = el('details', 'help-card');

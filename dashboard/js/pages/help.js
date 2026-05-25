@@ -423,7 +423,7 @@ function _helpSections() {
       <ul class="help-list">
         <li><strong>Vue d'ensemble</strong> (<kbd>g</kbd> <kbd>r</kbd>) : score moyen + tendance, courbe 30 jours, barres par dimension (la plus basse est le meilleur axe d'attaque).</li>
         <li><strong>Interactions</strong> : table cliquable → modale avec full transcript / tools / files / éval.</li>
-        <li><strong>Propositions</strong> : cards avec <em>Marquer comme traitée</em> / <em>Rejeter</em>. « Marquer comme traitée » enregistre seulement ta décision — aucun fichier n'est modifié automatiquement (l'application reste manuelle). Le rejet capture une raison. <span class="dim">(Les propositions seront générées automatiquement une fois le diagnostic automatique déployé.)</span></li>
+        <li><strong>Propositions</strong> : cards avec <em>Marquer comme traitée</em> / <em>Rejeter</em>. « Marquer comme traitée » enregistre seulement ta décision : aucun fichier n'est modifié automatiquement (l'application reste manuelle). Le rejet capture une raison. Un bouton <em>Annuler</em> sur les propositions traitées ou rejetées les remet <strong>en attente</strong> (là encore, aucun fichier n'est touché), pratique si tu changes d'avis. <span class="dim">(Les propositions seront générées automatiquement une fois le diagnostic automatique déployé.)</span></li>
         <li><strong>Mesures en cours</strong> : emplacement des plans de mesure. La génération automatique de plans n'est pas encore active.</li>
       </ul>
       <h3>Dépannage</h3>
@@ -521,8 +521,8 @@ function _helpSections() {
       <h3>Plugin présent dans le matrix mais "absent du disque"</h3>
       <p>Le plugin est listé dans <code class="mono">~/.claude/settings.json</code> mais son dossier a été supprimé. Désinstalle-le proprement via le bouton poubelle pour nettoyer la config.</p>
 
-      <h3>Test MCP échoue avec "Commande introuvable"</h3>
-      <p>L'exécutable de la commande n'est pas dans le PATH. Vérifie que <code class="mono">node</code> / <code class="mono">python</code> / <code class="mono">uvx</code> sont accessibles depuis un terminal système. Sur Windows, <code class="mono">npx</code> s'appelle parfois <code class="mono">npx.cmd</code>.</p>
+      <h3>Le diagnostic MCP signale "Commande introuvable"</h3>
+      <p>Le bouton <strong>Diagnostiquer</strong> d'une card MCP (transport stdio) indique que l'exécutable n'est pas dans le PATH. Vérifie que <code class="mono">node</code> / <code class="mono">python</code> / <code class="mono">uvx</code> sont accessibles depuis un terminal système. Sur Windows, <code class="mono">npx</code> s'appelle parfois <code class="mono">npx.cmd</code>.</p>
 
       <h3>MCPs en doublon entre Nebula et la config Claude globale</h3>
       <p>Si tu avais des MCPs dans <code class="mono">~/.claude.json</code> ou <code class="mono">~/.claude/settings.json</code> avant d'utiliser Nebula, ils peuvent maintenant exister à deux endroits. Ouvre <strong>Outils → Onboarding → Conflits Claude global</strong> pour les détecter et les nettoyer (avec backup automatique). Une bannière jaune apparaît aussi sur la page MCPs si des conflits sont présents.</p>
@@ -537,17 +537,55 @@ function _helpSections() {
 }
 
 // ── Aide : topics (groupements de sections) ────────────────────────────────
+// Le champ `keywords` (lot F item 2) alimente la recherche dans la palette
+// Ctrl+K : termes que l'utilisateur taperait sans connaître le titre exact du
+// topic (« chiffrement », « sanity », « stash »…). Pas affiché dans l'UI.
 const HELP_TOPICS = [
-  { id: 'premiers-pas',   emoji: '🚀', title: 'Premiers pas',         summary: 'Découvre Nebula et importe ta config Claude existante.',          sections: ['overview', 'onboarding'] },
-  { id: 'workspaces',     emoji: '🗂️', title: 'Workspaces',            summary: 'Créer, importer, lancer et gérer tes projets Claude Code.',       sections: ['workspaces', 'scope'] },
-  { id: 'mcps',           emoji: '🔌', title: 'MCPs',                  summary: 'Configurer les serveurs Model Context Protocol et leurs recettes.', sections: ['mcps', 'recipes'] },
-  { id: 'skills-plugins', emoji: '✨', title: 'Skills & Plugins',      summary: 'Bibliothèque de compétences et extensions Claude Code.',          sections: ['skills', 'plugins'] },
-  { id: 'templates',      emoji: '📋', title: 'Templates',             summary: 'Modèles réutilisables pour démarrer un workspace rapidement.',    sections: ['templates'] },
-  { id: 'secrets',        emoji: '🔐', title: 'Secrets & sécurité',    summary: 'Stockage centralisé de tes tokens et clés d\'API, chiffrement.',  sections: ['env'] },
-  { id: 'outils',         emoji: '🛠️', title: 'Outils & maintenance',  summary: 'Hooks, sauvegardes, mises à jour automatiques.',                  sections: ['tools', 'update'] },
-  { id: 'reflexive',      emoji: '🧠', title: 'Reflexive',              summary: 'Boucle d\'observation et d\'amélioration mesurable de Claude.',    sections: ['reflexive'] },
-  { id: 'reference',      emoji: '⌨️', title: 'Référence & dépannage', summary: 'Raccourcis clavier et solutions aux problèmes courants.',         sections: ['shortcuts', 'troubleshoot'] },
+  { id: 'premiers-pas',   emoji: '🚀', title: 'Premiers pas',         summary: 'Découvre Nebula et importe ta config Claude existante.',          sections: ['overview', 'onboarding'], keywords: 'démarrer import onboarding première fois config claude scan wizard récupérer' },
+  { id: 'workspaces',     emoji: '🗂️', title: 'Workspaces',            summary: 'Créer, importer, lancer et gérer tes projets Claude Code.',       sections: ['workspaces', 'scope'], keywords: 'projet créer importer dossier lancer reprendre supprimer purge scope lier' },
+  { id: 'mcps',           emoji: '🔌', title: 'MCPs',                  summary: 'Configurer les serveurs Model Context Protocol et leurs recettes.', sections: ['mcps', 'recipes'], keywords: 'model context protocol serveur transport stdio http sse diagnostiquer recette registry sync statut' },
+  { id: 'skills-plugins', emoji: '✨', title: 'Skills & Plugins',      summary: 'Bibliothèque de compétences et extensions Claude Code.',          sections: ['skills', 'plugins'], keywords: 'skill plugin bibliothèque magasin distribuer marketplace installer github désync scope' },
+  { id: 'templates',      emoji: '📋', title: 'Templates',             summary: 'Modèles réutilisables pour démarrer un workspace rapidement.',    sections: ['templates'], keywords: 'modèle starter placeholder qualité aperçu standard python node docker' },
+  { id: 'secrets',        emoji: '🔐', title: 'Secrets & sécurité',    summary: 'Stockage centralisé de tes tokens et clés d\'API, chiffrement.',  sections: ['env'], keywords: 'secret token clé api mot de passe env.local chiffrement chiffrer variable environnement dpapi' },
+  { id: 'outils',         emoji: '🛠️', title: 'Outils & maintenance',  summary: 'Hooks, sauvegardes, mises à jour automatiques.',                  sections: ['tools', 'update'], keywords: 'hook sauvegarde backup mise à jour update git pull stash restore apparence thème conflits orphelins' },
+  { id: 'reflexive',      emoji: '🧠', title: 'Reflexive',              summary: 'Boucle d\'observation et d\'amélioration mesurable de Claude.',    sections: ['reflexive'], keywords: 'observer score proposition interaction mesure boucle amélioration diagnostic flag dimension' },
+  { id: 'reference',      emoji: '⌨️', title: 'Référence & dépannage', summary: 'Raccourcis clavier et solutions aux problèmes courants.',         sections: ['shortcuts', 'troubleshoot'], keywords: 'raccourci clavier shortcut dépannage troubleshoot sanity check serveur hors ligne erreur problème' },
 ];
+
+// helpPaletteEntries (lot F item 2) : renvoie les topics d'aide matchant une
+// requête, formatés pour la palette Ctrl+K (kind « Aide », label préfixé
+// « Aide › <titre> », navigation vers #/aide/<topic>). Recherche locale,
+// insensible à la casse et aux accents, sur titre + summary + keywords. Sans
+// requête : renvoie [] (l'aide n'encombre pas la liste par défaut de la palette).
+function _helpNormalize(s) {
+  return String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+function helpPaletteEntries(query) {
+  const q = _helpNormalize(query).trim();
+  if (!q) return [];
+  const terms = q.split(/\s+/).filter(Boolean);
+  return HELP_TOPICS
+    .filter(t => {
+      const hay = _helpNormalize(`${t.title} ${t.summary} ${t.keywords || ''}`);
+      return terms.every(term => hay.includes(term));
+    })
+    .map(t => ({ kind: 'Aide', label: `Aide › ${t.title}`, route: `#/aide/${t.id}` }));
+}
+window.helpPaletteEntries = helpPaletteEntries;
+
+// HELP_TOPIC_CTAS (lot F item 3) : pour chaque topic, le ou les boutons
+// « → Ouvrir la feature » affichés en fin de page. Les topics purement
+// informatifs (reference = raccourcis + dépannage) n'ont pas de CTA.
+const HELP_TOPIC_CTAS = {
+  'premiers-pas':   [{ label: 'Ouvrir l\'accueil', route: '#/' }],
+  'workspaces':     [{ label: 'Ouvrir l\'accueil', route: '#/' }],
+  'mcps':           [{ label: 'Ouvrir les MCPs', route: '#/mcps' }],
+  'skills-plugins': [{ label: 'Ouvrir les Skills', route: '#/skills' }, { label: 'Ouvrir les Plugins', route: '#/plugins' }],
+  'templates':      [{ label: 'Ouvrir les Templates', route: '#/templates' }],
+  'secrets':        [{ label: 'Ouvrir les Outils', route: '#/tools' }],
+  'outils':         [{ label: 'Ouvrir les Outils', route: '#/tools' }],
+  'reflexive':      [{ label: 'Ouvrir Reflexive', route: '#/reflexive' }],
+};
 
 /* ================================================================
    PAGE AIDE (hub + topics)
@@ -645,6 +683,19 @@ function renderHelpTopic(topic) {
   }
   content['innerHTML'] = html;
   page.appendChild(content);
+
+  // CTA « → Ouvrir la feature » (lot F item 3) : passerelle directe du texte
+  // vers l'action concernée. Réutilise btn() + I.right, tokenisé via .help-cta.
+  const ctas = HELP_TOPIC_CTAS[topic.id];
+  if (ctas && ctas.length) {
+    const ctaBar = el('div', 'help-cta');
+    for (const cta of ctas) {
+      const b = btn(cta.label, 'btn-primary', I.right);
+      b.addEventListener('click', () => { location.hash = cta.route; });
+      ctaBar.appendChild(b);
+    }
+    page.appendChild(ctaBar);
+  }
 
   // Navigation entre topics (précédent / suivant)
   const idx = HELP_TOPICS.findIndex(t => t.id === topic.id);

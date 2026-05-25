@@ -99,6 +99,7 @@ async function renderHome() {
       <p class="page-subtitle">Pilotage des workspaces, MCPs, plugins et skills Claude Code.</p>
     </div>
   `));
+  mountHelpLink(page, 'premiers-pas', 'vue d\'ensemble de Nebula');
 
   const quickstart = buildHomeQuickstart();
   if (quickstart) page.appendChild(quickstart);
