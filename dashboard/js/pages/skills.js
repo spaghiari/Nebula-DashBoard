@@ -333,13 +333,13 @@ function modalEditLibrarySkill(s) {
     const save = btn('Enregistrer', 'btn-primary', I.check);
     const { close } = openModal({ title: `Éditer ${s.id} (bibliothèque)`, body, footer: [cancel, save], wide: true });
     cancel.addEventListener('click', close);
-    save.addEventListener('click', async () => {
+    save.addEventListener('click', () => withBusy(save, async () => {
       try {
         await API.post(`/api/skills-library/${s.id}/content`, { content: ta.value });
         toastOk('Enregistré dans la bibliothèque');
         close(); STATE.loading = true; route();
       } catch (e) { toastErr(e.message); }
-    });
+    }));
   })();
 }
 

@@ -28,7 +28,9 @@ img, svg { display: block; max-width: 100%; }
   /* Text */
   --text: #e7e7ef;
   --text-muted: #8b8b9a;
-  --text-dim: #5a5a68;
+  /* --text-dim porte de l'info (.workspace-id, .session-meta, .mcp-cmd,
+     .kpi-label...) : remonte a >=4.5:1 sur surface-2. */
+  --text-dim: #7a7a88;
   --text-on-accent: #0a0a0f;
 
   /* Accent */
@@ -124,7 +126,7 @@ body {
   --border-strong: rgba(0, 0, 0, 0.16);
   --text: #1a1721;
   --text-muted: #4a4658;
-  --text-dim: #8a8696;
+  --text-dim: #6b6878;
   --text-on-accent: #ffffff;
   --accent: #7c3aed;
   --accent-2: #6d28d9;
@@ -132,6 +134,14 @@ body {
   --accent-glow: rgba(124, 58, 237, 0.3);
   --warm: #c2410c;
   --warm-soft: rgba(194, 65, 12, 0.08);
+  /* Status : versions assombries pour passer AA sur surface claire.
+     Les variantes par defaut (--ok #34d399 etc.) sont calibrees fond
+     sombre et tombent a ~1.6-2.8:1 sur blanc. Les -soft (fonds) restent
+     inchanges car ce sont des aplats translucides. */
+  --ok: #0f9d6b;
+  --warn: #b45309;
+  --err: #dc2626;
+  --info: #2563eb;
   --shadow-1: 0 1px 0 rgba(0, 0, 0, 0.02) inset;
   --shadow-2: 0 12px 32px rgba(20, 14, 30, 0.12), 0 0 0 1px var(--border-strong);
 }
@@ -473,6 +483,20 @@ body {
   animation: spin 700ms linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Spinner inline pour les boutons en cours de traitement (withBusy).
+   Herite de la couleur du texte du bouton (currentColor). */
+.btn-spinner {
+  display: inline-block;
+  width: 13px; height: 13px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  opacity: .75;
+  vertical-align: -2px;
+  margin-right: 6px;
+  animation: spin 700ms linear infinite;
+}
 
 .skeleton {
   background: linear-gradient(90deg, var(--surface-1), var(--surface-2), var(--surface-1));
@@ -936,7 +960,7 @@ body {
   flex-shrink: 0;
   width: 22px; height: 22px;
   display: flex; align-items: center; justify-content: center;
-  color: var(--success, #10b981);
+  color: var(--ok);
 }
 .checklist-marker svg { width: 18px; height: 18px; }
 .checklist-circle {
@@ -972,7 +996,7 @@ body {
 }
 .checklist-progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--success, #10b981));
+  background: linear-gradient(90deg, var(--accent), var(--ok));
   border-radius: 999px;
   transition: width var(--d-norm) var(--ease);
 }
@@ -1081,8 +1105,8 @@ body {
   font-family: inherit;
 }
 .recipe-delete-btn:hover {
-  border-color: var(--danger, #e5484d);
-  background: var(--danger, #e5484d);
+  border-color: var(--err);
+  background: var(--err);
   color: #fff;
   transform: scale(1.1);
 }
@@ -1198,7 +1222,7 @@ body {
 .topbar-update-badge {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 10px;
-  background: linear-gradient(90deg, var(--accent), var(--success, #10b981));
+  background: linear-gradient(90deg, var(--accent), var(--ok));
   color: var(--bg);
   border: none;
   border-radius: 999px;
@@ -1242,7 +1266,7 @@ body {
   border-radius: 50%;
   background: var(--err);
 }
-.is-ok .diag-status-dot { background: var(--success, #10b981); animation: pulse 2s ease-in-out infinite; }
+.is-ok .diag-status-dot { background: var(--ok); animation: pulse 2s ease-in-out infinite; }
 .is-fail .diag-status-dot { background: var(--err); }
 
 .diag-section {
@@ -1275,7 +1299,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
-.diag-ok  { color: var(--success, #10b981); }
+.diag-ok  { color: var(--ok); }
 .diag-bad { color: var(--err); font-weight: 500; }
 .diag-hint {
   margin-top: var(--sp-2);
@@ -1356,7 +1380,7 @@ body {
 }
 .home-quickstart-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--success, #10b981));
+  background: linear-gradient(90deg, var(--accent), var(--ok));
   border-radius: 999px;
   transition: width var(--d-norm) var(--ease);
 }
@@ -1373,7 +1397,7 @@ body {
   white-space: nowrap;
 }
 .home-quickstart-step.is-done {
-  color: var(--success, #10b981);
+  color: var(--ok);
   border-color: rgba(16, 185, 129, 0.3);
   background: rgba(16, 185, 129, 0.04);
 }
@@ -1941,7 +1965,7 @@ body {
   top: 8px; right: 8px;
   font-size: 10.5px;
   padding: 3px 8px;
-  background: linear-gradient(90deg, var(--accent), var(--success, #10b981));
+  background: linear-gradient(90deg, var(--accent), var(--ok));
   color: var(--bg);
   border-radius: 999px;
   font-weight: 600;
@@ -2166,7 +2190,7 @@ body {
    d'accent (violet). Signale clairement que ce n'est pas une mise à
    jour à appliquer, mais un état à résoudre. */
 .topbar-update-badge.is-diverged {
-  background: linear-gradient(90deg, var(--warn, #f59e0b), var(--warn-2, #f97316));
+  background: linear-gradient(90deg, var(--warn, #f59e0b), var(--warm));
   box-shadow: 0 2px 8px rgba(245, 158, 11, 0.35);
   animation: none;
 }
@@ -3848,4 +3872,38 @@ body {
   .ws-fs-split { grid-template-columns: 1fr; min-height: auto; }
   .ws-fs-tree { max-height: 320px; border-right: none; border-bottom: 1px solid var(--border); }
   .ws-fs-editor { min-height: 320px; max-height: none; }
+}
+
+/* === A11Y : FOCUS-VISIBLE GENERIQUE ============================ */
+/* Indicateur de focus clavier pour tous les controles cliquables
+   non-btn (cards, lignes, onglets, segments). Les .btn et 2 textareas
+   ont deja leur propre regle ; ceci comble le reste. */
+.nav-link:focus-visible, .card.hoverable:focus-visible, .workspace-card:focus-visible,
+.mcp-card:focus-visible, .recipe-card:focus-visible, .session-row:focus-visible,
+.list-row:focus-visible, .palette-item:focus-visible, .theme-card:focus-visible,
+.config-btn:focus-visible, .quick-btn:focus-visible, .tab:focus-visible,
+.seg-control button:focus-visible, .icon-btn:focus-visible, .help-hub-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* L'editeur de template neutralise tout box-shadow au focus (L3205) :
+   on lui rend un anchrage de focus clavier explicite (offset interieur
+   pour ne pas etre rogne par le conteneur, comme les autres editeurs). */
+.tpl-editor-textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* === A11Y : PREFERS-REDUCED-MOTION ============================= */
+/* Neutralise les animations decoratives (pulse-dot, badge-glow,
+   update-glow, *-live-pulse, spin, skel, pulse...) et les transitions
+   pour les utilisateurs sensibles au mouvement. Place en fin de
+   fichier pour primer dans la cascade. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

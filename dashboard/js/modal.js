@@ -17,15 +17,12 @@
    ================================================================ */
 'use strict';
 
-const _FOCUSABLE_SELECTOR = [
-  'a[href]', 'button:not([disabled])', 'input:not([disabled]):not([type=hidden])',
-  'select:not([disabled])', 'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',');
-
+// Selecteur + focus trap partages : voir js/utils.js (FOCUSABLE_SELECTOR,
+// getFocusables, createFocusTrap). Reutilises ici et par les overlays
+// maison (wizard, tour).
 let _modalIdCounter = 0;
 
-function openModal({ title, body, footer = null, wide = false, onClose = null, closeOnBackdrop = false }) {
+function openModal({ title, body, footer = null, wide = false, onClose = null, closeOnBackdrop = false, confirmClose = null }) {
   const root = $('#modal-root');
   root['innerHTML'] = '';
   const overlay = document.createElement('div');
@@ -55,58 +52,41 @@ function openModal({ title, body, footer = null, wide = false, onClose = null, c
 
   const close = () => {
     root['innerHTML'] = '';
-    document.removeEventListener('keydown', onKey, true);
+    releaseTrap();
     if (onClose) onClose();
     if (previouslyFocused && document.body.contains(previouslyFocused)) {
       try { previouslyFocused.focus(); } catch { /* noop */ }
     }
   };
 
-  const getFocusables = () => Array.from(modal.querySelectorAll(_FOCUSABLE_SELECTOR))
-    .filter(el => el.offsetParent !== null || el === modal);
-
-  const onKey = (e) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      close();
-      return;
-    }
-    if (e.key === 'Tab') {
-      const focusables = getFocusables();
-      if (!focusables.length) { e.preventDefault(); return; }
-      const first = focusables[0];
-      const last = focusables[focusables.length - 1];
-      const active = document.activeElement;
-      if (e.shiftKey) {
-        if (active === first || !modal.contains(active)) {
-          e.preventDefault();
-          last.focus();
-        }
-      } else {
-        if (active === last || !modal.contains(active)) {
-          e.preventDefault();
-          first.focus();
-        }
-      }
-    }
+  // Fermeture protegee : si confirmClose est fourni et renvoie false, on
+  // bloque (ex. modifications non sauvegardees). Utilisee par les
+  // declencheurs « softs » : croix, Escape, clic sur le voile.
+  const requestClose = () => {
+    if (confirmClose && confirmClose() === false) return;
+    close();
   };
-  document.addEventListener('keydown', onKey, true);
-  modal.querySelector('[data-close]').addEventListener('click', close);
+
+  const releaseTrap = createFocusTrap(modal, { onEscape: requestClose });
+  modal.querySelector('[data-close]').addEventListener('click', requestClose);
   // Fermeture sur clic du voile : OFF par defaut pour eviter la perte de saisie.
   if (closeOnBackdrop) {
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) requestClose(); });
   }
 
   // Autofocus : premier element focusable du body (input/textarea/select
   // de preference), sinon le modal lui-meme
   setTimeout(() => {
-    const focusables = Array.from(modal.querySelector('.modal-body').querySelectorAll(_FOCUSABLE_SELECTOR));
+    const focusables = Array.from(modal.querySelector('.modal-body').querySelectorAll(FOCUSABLE_SELECTOR));
     const preferred = focusables.find(el => /^(INPUT|TEXTAREA|SELECT)$/i.test(el.tagName));
     const target = preferred || focusables[0] || modal;
     try { target.focus(); } catch { /* noop */ }
   }, 30);
 
-  return { modal, close };
+  // close() ferme sans condition (a utiliser apres une sauvegarde reussie) ;
+  // requestClose() consulte confirmClose (a brancher sur le bouton Annuler
+  // des editeurs avec garde anti-perte de saisie).
+  return { modal, close, requestClose };
 }
 
 function confirmDialog(message, onYes, { danger = false } = {}) {
@@ -116,5 +96,19 @@ function confirmDialog(message, onYes, { danger = false } = {}) {
   const ok = btn(danger ? 'Supprimer' : 'Confirmer', danger ? 'btn-danger' : 'btn-primary');
   const { close } = openModal({ title: 'Confirmation', body, footer: [cancel, ok] });
   cancel.addEventListener('click', close);
-  ok.addEventListener('click', () => { close(); onYes(); });
+  // La modale reste ouverte pendant l'execution de onYes (qui peut etre
+  // async). On desactive OK + spinner via withBusy, on ferme au succes et on
+  // reactive en cas d'erreur (deja toastee en amont par les onYes existants).
+  // wrapper en Promise.resolve pour rester compatible avec les onYes sync.
+  ok.addEventListener('click', async () => {
+    cancel.disabled = true;
+    try {
+      await withBusy(ok, () => Promise.resolve(onYes()));
+      close();
+    } catch {
+      // Erreur : on garde la modale ouverte, withBusy a deja restaure le
+      // bouton OK. On reactive Annuler pour permettre de sortir.
+      cancel.disabled = false;
+    }
+  });
 }

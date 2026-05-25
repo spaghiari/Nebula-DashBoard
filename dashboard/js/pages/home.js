@@ -209,6 +209,8 @@ async function renderHome() {
 function workspaceCard(w) {
   const card = el('div', 'workspace-card');
   card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.setAttribute('aria-label', `Ouvrir le workspace ${w.label || w.id}`);
   const stats = STATE.stats[w.id] || {};
   const mcpsInfo = STATE.wsMcps[w.id] || { active: [] };
   const last = stats.last ? fmtDate(stats.last) : 'jamais';
@@ -288,10 +290,12 @@ function workspaceCard(w) {
     actions.appendChild(stopBtn);
   } else {
     const launch = btn('Lancer', 'btn-primary btn-sm', I.play);
-    launch.addEventListener('click', async (e) => {
+    launch.addEventListener('click', (e) => {
       e.stopPropagation();
-      try { const r = await API.post(`/api/launch/${w.id}`, {}); toastOk(r.message || 'Lancé'); STATE.loading = true; setTimeout(route, 400); }
-      catch (err) { toastErr(err.message); }
+      withBusy(launch, async () => {
+        try { const r = await API.post(`/api/launch/${w.id}`, {}); toastOk(r.message || 'Lancé'); STATE.loading = true; setTimeout(route, 400); }
+        catch (err) { toastErr(err.message); }
+      }, { keepBusyOnSuccess: true });
     });
     actions.appendChild(launch);
   }
@@ -300,7 +304,9 @@ function workspaceCard(w) {
   actions.appendChild(detail);
   card.appendChild(actions);
   card.addEventListener('click', () => { location.hash = `#/workspace/${w.id}`; });
-  card.addEventListener('keydown', (e) => { if (e.key === 'Enter') location.hash = `#/workspace/${w.id}`; });
+  card.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); location.hash = `#/workspace/${w.id}`; }
+  });
   return card;
 }
 

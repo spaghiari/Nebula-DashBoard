@@ -8,8 +8,17 @@
    ================================================================ */
 'use strict';
 
+// Nombre max de toasts simples visibles simultanement : evite le spam sur
+// les actions de masse en erreur (FIFO, les plus anciens degagent).
+const TOAST_MAX = 4;
+
 function toast(msg, type = 'info', duration = 3000) {
   const root = $('#toast-root');
+  // Plafonne le nombre de toasts simples affiches (on epargne les snackbars
+  // d'action .toast-action qui portent un bouton important, ex. UNDO).
+  const simple = Array.from(root.querySelectorAll('.toast:not(.toast-action)'));
+  const overflow = simple.length - (TOAST_MAX - 1);
+  for (let i = 0; i < overflow; i++) simple[i].remove();
   const node = document.createElement('div');
   node.className = `toast toast-${type === true ? 'error' : type === 'error' ? 'error' : type === 'success' ? 'success' : 'info'}`;
   const icon = type === 'error' || type === true ? I.alert : type === 'success' ? I.success : I.info;

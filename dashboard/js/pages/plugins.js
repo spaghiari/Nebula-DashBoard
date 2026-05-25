@@ -86,11 +86,13 @@ async function loadInstalledPlugins(host) {
           <td></td>
           <td style="text-align:right"></td>
         `;
-        const sw = el('label', 'switch', `<input type="checkbox" ${p.enabled ? 'checked' : ''}><span class="switch-slider"></span>`);
+        const sw = el('label', 'switch', `<input type="checkbox" aria-label="Activer ${escapeHtml(shortId)}" ${p.enabled ? 'checked' : ''}><span class="switch-slider"></span>`);
         sw.querySelector('input').addEventListener('change', async (ev) => {
           const url = ev.target.checked ? '/api/plugins/enable' : '/api/plugins/disable';
+          ev.target.disabled = true;
           try { await API.post(url, { plugin_id: p.id }); toastOk('Mis à jour'); }
           catch (e) { toastErr(e.message); ev.target.checked = !ev.target.checked; }
+          finally { ev.target.disabled = false; }
         });
         tr.children[2].appendChild(sw);
 
@@ -231,9 +233,11 @@ async function renderPluginScope(host) {
           <button data-set="reset" class="${state.startsWith('inherit') ? 'is-active' : ''}" title="Hériter du global (${info && info.global ? 'actif' : 'inactif'} actuellement)">Hériter</button>
         </div>
       `;
-      row.querySelectorAll('button[data-set]').forEach(b => {
+      const segBtns = Array.from(row.querySelectorAll('button[data-set]'));
+      segBtns.forEach(b => {
         b.addEventListener('click', async () => {
           const next = { 'on': true, 'off': false, 'reset': null }[b.dataset.set];
+          segBtns.forEach(x => { x.disabled = true; });
           try {
             await API.post(`/api/workspaces/${w.id}/plugins`, { plugin_id: currentPid, enabled: next });
             // Update cache locally pour réactivité
@@ -241,8 +245,11 @@ async function renderPluginScope(host) {
               ? { global: info?.global, effective: info?.global, overridden: false }
               : { global: info?.global, effective: next, overridden: true };
             cache[w.id] = newInfo;
-            render();
-          } catch (e) { toastErr(e.message); }
+            render(); // recree la row (boutons remplaces, plus besoin de reactiver)
+          } catch (e) {
+            toastErr(e.message);
+            segBtns.forEach(x => { x.disabled = false; });
+          }
         });
       });
       listEl.appendChild(row);

@@ -367,6 +367,9 @@ async function modalEditTemplate(tplId) {
   const pane = body.querySelector('.tpl-pane');
   let files = detail.files.slice();
   let currentPath = null;
+  // Garde anti-perte de saisie : passe a true quand l'editeur est modifie,
+  // remis a false au chargement d'un fichier et apres sauvegarde reussie.
+  let dirty = false;
 
   const renderTree = () => {
     treeList['innerHTML'] = '';
@@ -401,6 +404,15 @@ async function modalEditTemplate(tplId) {
   };
 
   const openFile = async (path) => {
+    // Confirmation si on quitte un fichier modifie non sauvegarde.
+    if (dirty && path !== currentPath) {
+      const ok = await new Promise((resolve) => {
+        confirmDialog('Modifications non sauvegardées sur le fichier courant. Changer de fichier sans enregistrer ?',
+          () => resolve(true), { danger: true });
+      });
+      if (!ok) return;
+    }
+    dirty = false;
     currentPath = path;
     renderTree();
     pane['innerHTML'] = `<div class="page-loader"><div class="spinner"></div></div>`;
@@ -424,16 +436,19 @@ async function modalEditTemplate(tplId) {
     const ta = pane.querySelector('textarea');
     ta.value = data.content;
     ta.focus();
-    pane.querySelector('[data-save-file]').addEventListener('click', async () => {
+    ta.addEventListener('input', () => { dirty = true; });
+    const saveBtn = pane.querySelector('[data-save-file]');
+    saveBtn.addEventListener('click', () => withBusy(saveBtn, async () => {
       try {
         const r = await API.post(`/api/templates/${tplId}/file`, { path, content: ta.value });
         const f = files.find(x => x.path === path);
         if (f) f.size = r.size;
+        dirty = false;
         renderTree();
         refreshQuality();
         toastOk('Enregistré');
       } catch (e) { toastErr(e.message); }
-    });
+    }));
     pane.querySelector('[data-preview-file]').addEventListener('click', async () => {
       try {
         const r = await API.get(`/api/templates/${tplId}/preview?path=${encodeURIComponent(path)}`);
