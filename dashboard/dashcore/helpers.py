@@ -96,7 +96,7 @@ def sanitize_bat(s: str) -> str:
 from dashcore.env_local import (  # noqa: E402,F401
     load_env_local, set_env_var, delete_env_var, substitute_env,
     is_encrypted_mode, enable_encryption, disable_encryption, env_health,
-    export_plain_text,
+    export_plain_text, strip_invisible,
 )
 
 

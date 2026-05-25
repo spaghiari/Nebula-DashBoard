@@ -11,6 +11,7 @@ passent alors par le fichier chiffré ; `.env.local` en clair est ignoré
 from __future__ import annotations
 
 import os
+import re
 import time
 
 from dashcore.config import (
@@ -19,6 +20,20 @@ from dashcore.config import (
 from dashcore.env_crypto import (
     CryptoError, read_encrypted_file, write_encrypted_file,
 )
+
+
+# Caracteres invisibles / de controle bidi : zero-width (200B-200D), marqueurs
+# directionnels LRE/RLE/PDF/LRO/RLO (202A-202E), word-joiner (2060), isolates
+# bidi (2066-2069), separateurs ligne/paragraphe (2028/2029), BOM (FEFF).
+# Colles involontairement dans une valeur -- typiquement U+202A insere par
+# « Copier en tant que chemin » de l'Explorateur Windows -- ils cassent en
+# silence les chemins/commandes substitues dans les .mcp.json generes.
+_INVISIBLE_RE = re.compile("[\u200b\u200c\u200d\u202a\u202b\u202c\u202d\u202e\u2060\u2066\u2067\u2068\u2069\u2028\u2029\ufeff]")
+
+
+def strip_invisible(s):
+    """Retire les caracteres invisibles/bidi d'une chaine (no-op si non-str)."""
+    return _INVISIBLE_RE.sub("", s) if isinstance(s, str) else s
 
 
 def is_encrypted_mode() -> bool:
@@ -122,6 +137,10 @@ def set_env_var(key: str, value: str) -> tuple[int, dict]:
         return 400, {"error": "clé invalide (lettres, chiffres, underscore ; ne commence pas par un chiffre)"}
     if "\n" in value or "\r" in value:
         return 400, {"error": "la valeur contient un saut de ligne"}
+    # Retire les caracteres invisibles/bidi (ex. U+202A colle par « Copier le
+    # chemin » de l'Explorateur Windows) : sinon ils sont substitues tels quels
+    # dans les .mcp.json generes et cassent les chemins en silence.
+    value = strip_invisible(value)
 
     with _MUTATION_LOCK:
         if is_encrypted_mode():
@@ -316,7 +335,10 @@ def substitute_env(value, env: dict):
             missing.append(key)
             return m.group(0)
 
-        out = ENV_VAR_PATTERN.sub(repl, value)
+        # Filet de defense : une valeur d'env contenant un caractere invisible/
+        # bidi (collee hors UI, ou presente dans os.environ) ne doit jamais
+        # atterrir dans le .mcp.json genere.
+        out = strip_invisible(ENV_VAR_PATTERN.sub(repl, value))
         return out, missing
     if isinstance(value, list):
         all_missing = []

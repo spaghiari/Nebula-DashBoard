@@ -32,7 +32,7 @@ from dashcore.config import (
 
 from dashcore.helpers import (
     load_env_local, read_json, resolve_cli, resolve_ws_dir, safe_id,
-    substitute_env, write_json,
+    strip_invisible, substitute_env, write_json,
 )
 from dashcore.workspace_io import list_workspaces
 
@@ -424,11 +424,11 @@ def _diagnose_sync(mcp: dict) -> dict | None:
     }
 
 
-_INVISIBLE = re.compile(r"[​‌‍‪‫‬‭‮⁠  ﻿]")
+# _si : alias du sanitizer partage (defini dans env_local, importe via
+# helpers). Retire les caracteres invisibles/bidi des args/command/cwd au
+# save registre. cf. audit-ux-2026-05-25.
+_si = strip_invisible
 
-def _si(s: str) -> str:
-    """Strip invisible Unicode directional/zero-width characters from a string."""
-    return _INVISIBLE.sub("", s)
 
 def _si_list(lst: list) -> list:
     return [_si(x) if isinstance(x, str) else x for x in lst]
