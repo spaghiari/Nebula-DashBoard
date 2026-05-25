@@ -83,6 +83,346 @@ def mcp_live_check(ws_id: str) -> tuple[int, dict]:
         return 500, {"error": str(e)}
 
 
+# ── Diagnostic actionnable d'un MCP (Lot C audit UX 2026-05-25) ──────────────
+# Le principe : passer de « connecté / pas connecté » à « POURQUOI + COMMENT
+# réparer ». Chaque check renvoie {label, status, detail, fix} avec un mapping
+# symptôme -> cause précis (le coeur de la valeur : Forbidden=token, env
+# manquant=.env.local, commande absente=PATH...).
+
+# Détecte un caractère alphanumérique collé juste après le `}` d'un ${VAR}
+# (le « Q » wikijs). Miroir back de detectStuckCharAfterVar (js/lint.js).
+_STUCK_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}([A-Za-z0-9])")
+_VAR_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
+
+
+def _mcp_interpolable_strings(mcp: dict) -> list[str]:
+    """Champs d'un MCP susceptibles de contenir des ${VAR} (miroir du front)."""
+    out: list[str] = []
+    for v in (mcp.get("command"), mcp.get("url"), mcp.get("cwd")):
+        if v:
+            out.append(str(v))
+    for a in (mcp.get("args") or []):
+        if a:
+            out.append(str(a))
+    for v in (mcp.get("env") or {}).values():
+        if v:
+            out.append(str(v))
+    for v in (mcp.get("headers") or {}).values():
+        if v:
+            out.append(str(v))
+    return out
+
+
+def _stdio_executable(mcp: dict) -> str:
+    """1er token de la commande stdio (npx / uvx / node / python...)."""
+    cmd = (mcp.get("command") or "").strip()
+    if not cmd:
+        return ""
+    parts = shlex.split(cmd, posix=False)
+    return parts[0] if parts else cmd
+
+
+def diagnose_mcp(mcp_id: str) -> tuple[int, dict]:
+    """Diagnostic actionnable d'un MCP : agrège des checks structurés.
+
+    Retourne {verdict: "ok"|"warn"|"err", checks: [{label, status, detail, fix}]}.
+    PÉRIMÈTRE = diagnostic (lecture + verdict). N'effectue aucune mutation.
+    Aucun secret en clair n'est renvoyé : on ne manipule que les NOMS de vars
+    et on ne renvoie jamais une valeur de header/env résolue.
+    """
+    if not safe_id(mcp_id):
+        return 400, {"error": "id invalide"}
+    registry = read_json(MCP_REGISTRY, {"mcps": []}).get("mcps", [])
+    mcp = next((m for m in registry if m.get("id") == mcp_id), None)
+    if mcp is None:
+        return 404, {"error": "MCP absent du registre"}
+
+    transport = mcp.get("transport", "stdio")
+    env_local = load_env_local()
+    checks: list[dict] = []
+
+    # ── 1a. Résolution des ${VAR} ────────────────────────────────────────────
+    referenced: list[str] = []
+    seen_vars: set[str] = set()
+    for s in _mcp_interpolable_strings(mcp):
+        for v in _VAR_RE.findall(s):
+            if v not in seen_vars:
+                seen_vars.add(v)
+                referenced.append(v)
+    missing_vars = [
+        v for v in referenced
+        if v not in env_local and v not in os.environ
+    ]
+    if not referenced:
+        checks.append({
+            "label": "Résolution des variables ${VAR}",
+            "status": "ok",
+            "detail": "Aucune variable ${VAR} référencée dans la config.",
+            "fix": "",
+        })
+    elif missing_vars:
+        checks.append({
+            "label": "Résolution des variables ${VAR}",
+            "status": "err",
+            "detail": f"{len(missing_vars)} variable(s) référencée(s) mais absente(s) de .env.local : "
+                      + ", ".join(missing_vars) + ". Le MCP plantera : les ${VAR} ne seront pas substituées.",
+            "fix": "Définis " + ", ".join(missing_vars) + " dans .env.local (Outils -> Variables d'environnement).",
+        })
+    else:
+        checks.append({
+            "label": "Résolution des variables ${VAR}",
+            "status": "ok",
+            "detail": f"{len(referenced)} variable(s) référencée(s), toutes définies : "
+                      + ", ".join(referenced) + ".",
+            "fix": "",
+        })
+
+    # ── 1b. Lint statique : caractère parasite après ${VAR} (le « Q » wikijs) ──
+    stuck: list[dict] = []
+    for s in _mcp_interpolable_strings(mcp):
+        for m in _STUCK_VAR_RE.finditer(s):
+            stuck.append({"var": m.group(1), "char": m.group(2)})
+    if stuck:
+        details = ", ".join(f"« {h['char']} » accolé à ${{{h['var']}}}" for h in stuck)
+        checks.append({
+            "label": "Lint statique de la config",
+            "status": "warn",
+            "detail": f"Caractère parasite accolé à une variable : {details}. "
+                      "Probable typo (ex. la valeur copiée a un char en trop).",
+            "fix": "Retire le caractère accolé juste après le } de la variable.",
+        })
+    else:
+        checks.append({
+            "label": "Lint statique de la config",
+            "status": "ok",
+            "detail": "Aucun caractère parasite accolé à une variable.",
+            "fix": "",
+        })
+
+    # ── 1c. Commande disponible (stdio) ──────────────────────────────────────
+    if transport == "stdio":
+        exe = _stdio_executable(mcp)
+        if not exe:
+            checks.append({
+                "label": "Commande exécutable",
+                "status": "err",
+                "detail": "Aucune commande définie pour un transport stdio.",
+                "fix": "Renseigne le champ Command (ex. npx, uvx, node, python).",
+            })
+        elif shutil.which(exe):
+            checks.append({
+                "label": "Commande exécutable",
+                "status": "ok",
+                "detail": f"« {exe} » est résoluble dans le PATH ({shutil.which(exe)}).",
+                "fix": "",
+            })
+        else:
+            checks.append({
+                "label": "Commande exécutable",
+                "status": "err",
+                "detail": f"« {exe} » est introuvable dans le PATH. Le MCP ne démarrera pas "
+                          "(Claude affichera « commande introuvable »).",
+                "fix": f"Installe « {exe} » ou vérifie qu'il est dans le PATH "
+                       "(ex. Node.js pour npx, uv pour uvx).",
+            })
+
+    # ── 1d. Sonde HTTP (http/sse) ────────────────────────────────────────────
+    if transport in ("http", "sse"):
+        url_raw = (mcp.get("url") or "").strip()
+        url, miss_url = substitute_env(url_raw, env_local)
+        headers_dict, _ = substitute_env(mcp.get("headers") or {}, env_local)
+        if not url_raw:
+            checks.append({
+                "label": "Sonde HTTP",
+                "status": "err",
+                "detail": "Aucune URL définie pour un transport http/sse.",
+                "fix": "Renseigne le champ URL.",
+            })
+        elif miss_url:
+            # URL non résolue : 1a a déjà signalé les vars manquantes ; on évite
+            # une requête vers une URL qui contient encore des ${VAR}.
+            checks.append({
+                "label": "Sonde HTTP",
+                "status": "warn",
+                "detail": "URL non sondée : elle contient des ${VAR} non résolues "
+                          + "(" + ", ".join(miss_url) + ").",
+                "fix": "Définis les variables manquantes puis relance le diagnostic.",
+            })
+        elif not (url.lower().startswith("http://") or url.lower().startswith("https://")):
+            checks.append({
+                "label": "Sonde HTTP",
+                "status": "err",
+                "detail": "L'URL ne commence pas par http:// ou https://.",
+                "fix": "Corrige l'URL pour qu'elle soit un endpoint HTTP(S) valide.",
+            })
+        else:
+            checks.append(_probe_http(url, headers_dict))
+
+    # ── 1e. Sync registre <-> workspaces ─────────────────────────────────────
+    desync = _diagnose_sync(mcp)
+    if desync is not None:
+        checks.append(desync)
+
+    # ── Verdict global (le pire des statuts l'emporte) ───────────────────────
+    statuses = {c["status"] for c in checks}
+    if "err" in statuses:
+        verdict = "err"
+    elif "warn" in statuses:
+        verdict = "warn"
+    else:
+        verdict = "ok"
+
+    return 200, {"id": mcp_id, "verdict": verdict, "checks": checks}
+
+
+def _probe_http(url: str, headers: dict) -> dict:
+    """Sonde HTTP légère (stdlib only). Mappe le code -> cause actionnable.
+
+    Profondeur volontairement minimale : on ne lit pas le body (peut contenir
+    des données sensibles ou être volumineux), on ne renvoie JAMAIS la valeur
+    des headers (qui contiennent les secrets résolus). Timeout court (5s).
+    HEAD d'abord (moins coûteux), fallback GET si la méthode est refusée (405).
+    """
+    import urllib.error
+    import urllib.request
+
+    label = "Sonde HTTP"
+
+    def _request(method: str):
+        req = urllib.request.Request(url, method=method)
+        for k, v in (headers or {}).items():
+            # On envoie les headers résolus (auth comprise) mais on ne les
+            # renvoie jamais dans la réponse : pas de fuite de secret.
+            req.add_header(k, v)
+        return urllib.request.urlopen(req, timeout=5)
+
+    try:
+        try:
+            resp = _request("HEAD")
+        except urllib.error.HTTPError as e:
+            if e.code == 405:  # HEAD non supporté -> on retente en GET
+                resp = _request("GET")
+            else:
+                raise
+        code = getattr(resp, "status", None) or resp.getcode()
+        resp.close()
+        return {
+            "label": label,
+            "status": "ok",
+            "detail": f"Le serveur répond (HTTP {code}). Endpoint joignable et auth acceptée.",
+            "fix": "",
+        }
+    except urllib.error.HTTPError as e:
+        code = e.code
+        if code in (401, 403):
+            return {
+                "label": label,
+                "status": "err",
+                "detail": f"HTTP {code} (Forbidden/Unauthorized) : le serveur refuse l'accès. "
+                          "Cause la plus fréquente : un token/header d'auth invalide "
+                          "(ex. JWT tronqué ou avec un caractère en trop -> fallback invité).",
+                "fix": "Vérifie la valeur du token/header d'auth dans .env.local "
+                       "(compare les derniers caractères, attention à un char collé).",
+            }
+        if code in (405, 400, 406):
+            # Endpoint MCP qui n'accepte ni HEAD ni GET (attend POST/JSON-RPC).
+            # Le serveur EST joignable et l'auth est passée (sinon 401/403) :
+            # c'est un signal positif pour notre objectif (joignabilité + auth).
+            return {
+                "label": label,
+                "status": "ok",
+                "detail": f"Le serveur répond (HTTP {code}) : endpoint joignable et auth acceptée "
+                          "(le code reflète juste que la méthode de sonde n'est pas celle attendue, "
+                          "un endpoint MCP attend POST/JSON-RPC).",
+                "fix": "",
+            }
+        if code == 404:
+            return {
+                "label": label,
+                "status": "warn",
+                "detail": "HTTP 404 : l'endpoint répond mais le chemin est introuvable. "
+                          "L'URL pointe peut-être sur la mauvaise route.",
+                "fix": "Vérifie le chemin de l'URL (souvent /mcp ou /sse selon le serveur).",
+            }
+        return {
+            "label": label,
+            "status": "warn",
+            "detail": f"HTTP {code} : le serveur répond mais avec une erreur.",
+            "fix": "Consulte la doc du serveur MCP pour ce code de statut.",
+        }
+    except urllib.error.URLError as e:
+        # Connexion refusée, DNS, timeout enrobé... reason peut être un
+        # socket.timeout ou une OSError. L'URL n'est pas un secret ; on ne
+        # logue/renvoie jamais les headers.
+        reason = getattr(e, "reason", e)
+        return {
+            "label": label,
+            "status": "err",
+            "detail": f"Serveur injoignable : {url} ({reason}).",
+            "fix": "Vérifie que le serveur tourne et que l'URL/le port sont corrects "
+                   "(et que la machine est joignable depuis ce poste).",
+        }
+    except socket.timeout:
+        return {
+            "label": label,
+            "status": "err",
+            "detail": f"Délai dépassé (5s) en contactant {url}.",
+            "fix": "Le serveur est lent ou injoignable : vérifie l'URL, le port et le réseau.",
+        }
+    except Exception as e:  # noqa: BLE001 — robustesse de la sonde
+        return {
+            "label": label,
+            "status": "warn",
+            "detail": f"Sonde HTTP impossible : {type(e).__name__}.",
+            "fix": "Vérifie l'URL et les headers de la config.",
+        }
+
+
+def _diagnose_sync(mcp: dict) -> dict | None:
+    """Compare le registre aux .mcp.json des workspaces ciblés (réutilise la
+    logique de sanity_check). Signale les workspaces désync (warn).
+
+    Retourne None si le MCP est désactivé (rien à synchroniser). PÉRIMÈTRE :
+    le fix est TEXTUEL (« lance Sync ») — aucun bouton d'action ici (Lot D).
+    """
+    if mcp.get("status") == "désactivé":
+        return None
+    targeted = _workspaces_affected_by_mcp(mcp)
+    if not targeted:
+        return {
+            "label": "Synchronisation workspaces",
+            "status": "warn",
+            "detail": "Ce MCP ne cible aucun workspace : il est enregistré mais distribué nulle part.",
+            "fix": "Coche au moins un workspace dans « Workspaces ciblés » (modale Modifier).",
+        }
+    mcp_id = mcp["id"]
+    not_synced = []
+    for w in list_workspaces():
+        if w["id"] not in targeted:
+            continue
+        mcp_file = Path(w["path"]) / ".mcp.json"
+        actual = set()
+        if mcp_file.exists():
+            data = read_json(mcp_file, {})
+            actual = set((data.get("mcpServers") or {}).keys())
+        if mcp_id not in actual:
+            not_synced.append(w["id"])
+    if not_synced:
+        return {
+            "label": "Synchronisation workspaces",
+            "status": "warn",
+            "detail": f"Absent du .mcp.json de {len(not_synced)} workspace(s) ciblé(s) : "
+                      + ", ".join(not_synced) + ". La config registre n'est pas propagée.",
+            "fix": "Lance « Sync » (Home ou page workspace) pour régénérer les .mcp.json.",
+        }
+    return {
+        "label": "Synchronisation workspaces",
+        "status": "ok",
+        "detail": f"Propagé dans les {len(targeted)} workspace(s) ciblé(s).",
+        "fix": "",
+    }
+
+
 _INVISIBLE = re.compile(r"[​‌‍‪‫‬‭‮⁠  ﻿]")
 
 def _si(s: str) -> str:

@@ -138,7 +138,18 @@ function _helpSections() {
         <li><strong>à configurer</strong> — config incomplète (pas de command pour stdio, pas d'url pour http/sse).</li>
         <li><strong>disponible</strong> — config OK, prêt à fonctionner.</li>
       </ul>
-      <p class="dim" style="font-size:12px">Le statut n'inclut volontairement pas de "connecté" : ce serait un test live à chaque rafraîchissement (lourd). Un diagnostic à la demande par MCP est en cours de déploiement ; en attendant, la card affiche uniquement l'état dérivé de la config.</p>
+      <p class="dim" style="font-size:12px">Le statut n'inclut volontairement pas de "connecté" : ce serait un test live à chaque rafraîchissement (lourd). Pour vérifier qu'un MCP marche vraiment, utilise le bouton <strong>Diagnostiquer</strong> à la demande (ci-dessous).</p>
+
+      <h3>Bouton « Diagnostiquer »</h3>
+      <p>Sur chaque card MCP, à côté de <em>Modifier</em>, le bouton <strong>Diagnostiquer</strong> ouvre une analyse à la demande. Il passe une série de vérifications et te donne, pour chacune, un <strong>POURQUOI</strong> (le symptôme) et un <strong>COMMENT réparer</strong> (le correctif) :</p>
+      <ul class="help-list">
+        <li><strong>Résolution des <code class="mono">\${VAR}</code></strong> — chaque variable référencée (command, args, env, headers, url, cwd) est-elle bien définie dans <code class="mono">.env.local</code> ? Sinon : <span class="badge badge-err">erreur</span> avec la liste des variables à définir.</li>
+        <li><strong>Lint statique</strong> — un caractère parasite collé juste après un <code class="mono">\${VAR}</code> (le piège classique : un char en trop dans un token copié) ? <span class="badge badge-warn">attention</span>.</li>
+        <li><strong>Commande exécutable</strong> (transport stdio) — l'exécutable (<code class="mono">npx</code>, <code class="mono">uvx</code>, <code class="mono">node</code>…) est-il dans le PATH ? Sinon : <span class="badge badge-err">erreur</span> « commande introuvable ».</li>
+        <li><strong>Sonde HTTP</strong> (transport http/sse) — une requête légère est envoyée à l'URL avec les headers résolus. <strong>401/403</strong> = token/header d'auth probablement invalide (JWT tronqué ou char en trop) ; <strong>injoignable/timeout</strong> = serveur down ou URL/port faux ; <strong>2xx</strong> = OK. <em>Les valeurs de secrets ne sont jamais affichées ni renvoyées.</em></li>
+        <li><strong>Synchronisation workspaces</strong> — le MCP est-il bien propagé dans le <code class="mono">.mcp.json</code> de chaque workspace ciblé ? Sinon : <span class="badge badge-warn">attention</span> « lance Sync ».</li>
+      </ul>
+      <p>En tête de la modale, une <strong>pastille de verdict global</strong> résume l'ensemble : vert (tout bon), orange (points à vérifier), rouge (problème bloquant). Le verdict prend le pire statut parmi les checks. Les vérifications purement locales (variables, char parasite) s'affichent instantanément ; la sonde réseau peut prendre quelques secondes.</p>
 
       <h3>Sauver une config MCP comme recette</h3>
       <p>Tu as configuré un MCP qui marche (HomeAssistant avec ton token, OPNsense avec creds firewall…) ? Tu peux le transformer en <strong>recette locale réutilisable</strong> :</p>

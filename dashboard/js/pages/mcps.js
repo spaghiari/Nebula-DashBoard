@@ -195,6 +195,9 @@ function mcpCard(m) {
     ${m.cwd ? `<div class="dim mono" style="font-size:10.5px;padding:2px 8px;background:var(--bg);border-radius:4px;border:1px solid var(--border)" title="working directory">cd: ${escapeHtml(m.cwd)}</div>` : ''}
   `;
   const footer = el('div', 'mcp-card-footer');
+  const diag = btn('Diagnostiquer', 'btn-sm btn-ghost', I.activity || I.search);
+  diag.title = 'Vérifier pourquoi ce MCP ne marche pas (variables, commande, sonde HTTP, sync)';
+  diag.addEventListener('click', () => modalDiagnoseMCP(m));
   const ed = btn('Modifier', 'btn-sm btn-ghost', I.edit);
   ed.addEventListener('click', () => modalNewMCP(m));
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
@@ -214,9 +217,128 @@ function mcpCard(m) {
     }
     catch (e) { toastErr(e.message); }
   }, { danger: true }));
-  footer.append(ed, rm);
+  footer.append(diag, ed, rm);
   card.appendChild(footer);
   return card;
+}
+
+// ── Diagnostic actionnable d'un MCP (Lot C audit UX 2026-05-25) ───────────────
+// Modale qui appelle GET /api/mcps/<id>/diagnose : verdict global + liste de
+// checks (label + statut coloré + detail + fix). Le lint statique front
+// (lintInterpolation de js/lint.js) s'affiche INSTANTANÉMENT — les ${VAR}
+// manquants et le char parasite sont connus côté client sans aller-retour
+// réseau — pendant que la sonde HTTP (potentiellement lente) tourne au fond.
+function modalDiagnoseMCP(m) {
+  // Map statut -> classe de pastille / pictogramme (réutilise les badges projet).
+  const STAT = {
+    ok: { cls: 'badge-ok', dot: 'var(--ok)', icon: '✓', label: 'OK' },
+    warn: { cls: 'badge-warn', dot: 'var(--warn)', icon: '!', label: 'Attention' },
+    err: { cls: 'badge-err', dot: 'var(--err)', icon: '✗', label: 'Erreur' },
+  };
+
+  const body = el('div');
+
+  // En-tête : verdict global (rempli plus bas, "en cours" au départ).
+  const verdictBox = el('div', 'diag-verdict');
+  verdictBox.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;margin-bottom:var(--sp-3);border:1px solid var(--border)';
+  verdictBox['innerHTML'] = `
+    <span class="diag-verdict-dot" style="width:12px;height:12px;border-radius:50%;background:var(--text-muted);flex:none"></span>
+    <div style="flex:1;min-width:0">
+      <strong class="diag-verdict-label">Diagnostic en cours…</strong>
+      <div class="dim diag-verdict-sub" style="font-size:12px">Analyse de la config de <code class="mono">${escapeHtml(m.id)}</code>.</div>
+    </div>
+  `;
+  body.appendChild(verdictBox);
+
+  // Hôte de la liste des checks.
+  const list = el('div', 'diag-checks');
+  body.appendChild(list);
+
+  // Rend un check {label, status, detail, fix} en bloc.
+  const renderCheck = (c) => {
+    const s = STAT[c.status] || STAT.warn;
+    const row = el('div', 'diag-check');
+    row.style.cssText = 'display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--border)';
+    row['innerHTML'] = `
+      <span class="diag-check-icon" title="${escapeHtml(s.label)}" style="width:20px;height:20px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;background:${s.dot}">${s.icon}</span>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <strong style="font-size:13px">${escapeHtml(c.label)}</strong>
+          <span class="badge ${s.cls}">${escapeHtml(s.label)}</span>
+        </div>
+        ${c.detail ? `<p style="margin:4px 0 0;font-size:12.5px;color:var(--text-muted)">${escapeHtml(c.detail)}</p>` : ''}
+        ${c.fix ? `<p style="margin:4px 0 0;font-size:12.5px"><strong>Correctif :</strong> ${escapeHtml(c.fix)}</p>` : ''}
+      </div>
+    `;
+    return row;
+  };
+
+  // Met à jour l'en-tête de verdict global.
+  const setVerdict = (verdict, sub) => {
+    const s = STAT[verdict] || STAT.warn;
+    verdictBox.querySelector('.diag-verdict-dot').style.background = s.dot;
+    const LABELS = { ok: 'Tout est bon', warn: 'Points à vérifier', err: 'Problème(s) bloquant(s)' };
+    verdictBox.querySelector('.diag-verdict-label').textContent = LABELS[verdict] || 'Diagnostic';
+    if (sub) verdictBox.querySelector('.diag-verdict-sub').textContent = sub;
+    verdictBox.style.borderColor = s.dot;
+  };
+
+  // Pré-affichage INSTANTANÉ du lint statique front (avant la réponse réseau).
+  // On reconstruit le payload interpolable depuis le MCP courant.
+  const preStrings = [
+    m.command || '', m.url || '', m.cwd || '',
+    ...(m.args || []).map(String),
+    ...Object.values(m.env || {}).map(String),
+    ...Object.values(m.headers || {}).map(String),
+  ];
+  const pre = lintInterpolation(preStrings, STATE.envKeys);
+  if (pre.missing.length) {
+    list.appendChild(renderCheck({
+      label: 'Variables ${VAR} (pré-vérif locale)',
+      status: 'err',
+      detail: `Référencée(s) mais absente(s) de .env.local : ${pre.missing.join(', ')}.`,
+      fix: `Définis ${pre.missing.join(', ')} dans .env.local (Outils -> Variables d'environnement).`,
+    }));
+  }
+  if (pre.stuck.length) {
+    const d = pre.stuck.map(h => `« ${h.char} » accolé à \${${h.varName}}`).join(', ');
+    list.appendChild(renderCheck({
+      label: 'Lint statique (pré-vérif locale)',
+      status: 'warn',
+      detail: `Caractère parasite : ${d}. Probable typo.`,
+      fix: 'Retire le caractère accolé juste après le } de la variable.',
+    }));
+  }
+  const loadingRow = el('div', 'diag-loading');
+  loadingRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:12px 0;color:var(--text-muted);font-size:12.5px';
+  loadingRow['innerHTML'] = `<span class="spinner"></span><span>Sonde réseau et vérifications serveur en cours…</span>`;
+  list.appendChild(loadingRow);
+
+  const close = btn('Fermer', 'btn-ghost');
+  const { close: doClose } = openModal({
+    title: `Diagnostic — ${m.name || m.id}`, body, footer: close, wide: true,
+  });
+  close.addEventListener('click', doClose);
+
+  // Appel réseau : remplace la pré-vérif par le diagnostic serveur complet.
+  (async () => {
+    try {
+      const r = await API.get(`/api/mcps/${m.id}/diagnose`);
+      list['innerHTML'] = '';
+      for (const c of (r.checks || [])) list.appendChild(renderCheck(c));
+      const nb = (r.checks || []).length;
+      setVerdict(r.verdict, `${nb} vérification(s) effectuée(s) sur ${m.id}.`);
+    } catch (e) {
+      loadingRow.remove();
+      setVerdict('err', 'Le diagnostic a échoué (voir ci-dessous).');
+      list.appendChild(renderCheck({
+        label: 'Diagnostic',
+        status: 'err',
+        detail: e.message || 'Erreur réseau pendant le diagnostic.',
+        fix: 'Vérifie que le serveur Nebula tourne, puis relance le diagnostic.',
+      }));
+    }
+  })();
 }
 
 // ── Recettes MCP : catalogue 1-clic ──────────────────────────────────────────

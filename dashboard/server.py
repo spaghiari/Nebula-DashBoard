@@ -59,7 +59,7 @@ from dashcore.active_sessions import (
 from dashcore.workspace_io import list_workspaces
 from dashcore.api_mcps import (
     add_or_update_mcp, delete_mcp, sync_workspace_mcps, sync_all_workspaces,
-    workspace_mcp_status, mcp_live_check, scan_claude_config,
+    workspace_mcp_status, mcp_live_check, diagnose_mcp, scan_claude_config,
     find_global_mcp_conflicts, remove_mcp_from_claude_global, migrate_global_mcp_to_registry,
     list_mcp_recipes, ensure_local_recipes_file,
     add_or_update_local_recipe, delete_local_recipe, list_mcps_with_computed_status,
@@ -179,6 +179,7 @@ def h_del_ws(q, b, ws):
 
 # ── MCPs ────────────────────────────────────────────────────────────────────
 def h_get_mcps(q, b):           return 200, list_mcps_with_computed_status()
+def h_get_mcp_diagnose(q, b, mid): return diagnose_mcp(mid)
 def h_get_mcp_recipes(q, b):    return list_mcp_recipes()
 def h_post_ensure_local_recipes(q, b):
     p = ensure_local_recipes_file()
@@ -445,6 +446,7 @@ ROUTES_GET = [
     (re.compile(rf"^/api/mcps$"),                                                           h_get_mcps),
     (re.compile(rf"^/api/mcps/recipes$"),                                                   h_get_mcp_recipes),
     (re.compile(rf"^/api/mcps/conflicts$"),                                                 h_get_mcp_conflicts),
+    (re.compile(rf"^/api/mcps/({_ID})/diagnose$"),                                          h_get_mcp_diagnose),
     # Templates
     (re.compile(rf"^/api/templates$"),                                                      h_get_templates),
     (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_get_template_file),
