@@ -421,14 +421,48 @@ async function modalReflexiveInteraction(id) {
   close.addEventListener('click', doClose);
 }
 
+// Filtre de statut courant pour l'onglet Propositions. Persisté en mémoire
+// module (pas en URL) : on reste sur l'onglet, on bascule juste la vue.
+let _refxPropStatus = 'pending';
+
+const REFX_PROP_FILTERS = [
+  ['pending',  'En attente'],
+  ['applied',  'Traitées'],
+  ['rejected', 'Rejetées'],
+];
+
+const REFX_PROP_EMPTY = {
+  pending:  ['Aucune proposition en attente.', 'Le diagnosticien génère des propositions à partir des évaluations accumulées.'],
+  applied:  ['Aucune proposition traitée.', "Les propositions que tu marques comme traitées apparaîtront ici (annulables)."],
+  rejected: ['Aucune proposition rejetée.', 'Les propositions rejetées apparaîtront ici (annulables).'],
+};
+
 async function renderReflexiveProposals(host) {
   refxLoader(host);
-  const data = await safe('/api/reflexive/proposals?status=pending', { items: [] });
+  const status = _refxPropStatus;
+  const data = await safe('/api/reflexive/proposals?status=' + status, { items: [] });
   host['innerHTML'] = '';
+
+  // Barre de filtres par statut : permet d'accéder aux traitées/rejetées
+  // pour pouvoir les annuler (item 5 lot D).
+  const filterBar = el('div', 'refx-prop-filters');
+  filterBar.style.cssText = 'display:flex;gap:6px;margin-bottom:var(--sp-3);flex-wrap:wrap';
+  for (const [id, label] of REFX_PROP_FILTERS) {
+    const b = btn(label, 'btn-sm' + (id === status ? ' btn-primary' : ' btn-ghost'));
+    b.addEventListener('click', () => {
+      if (_refxPropStatus === id) return;
+      _refxPropStatus = id;
+      renderReflexiveProposals(host);
+    });
+    filterBar.appendChild(b);
+  }
+  host.appendChild(filterBar);
+
   if (!data.items.length) {
-    refxEmpty(host,
-      'Aucune proposition en attente.',
-      'Le diagnosticien génère des propositions à partir des évaluations accumulées.');
+    const [t, hint] = REFX_PROP_EMPTY[status] || ['Aucune proposition.', ''];
+    const emptyHost = el('div');
+    host.appendChild(emptyHost);
+    refxEmpty(emptyHost, t, hint);
     return;
   }
   for (const p of data.items) {
@@ -446,33 +480,60 @@ async function renderReflexiveProposals(host) {
     head.appendChild(left); head.appendChild(actions);
     card.appendChild(head);
 
-    // « Marquer comme traitée » plutôt que « Apply » : le backend ne fait
-    // qu'enregistrer la décision en DB (status='applied'), il ne modifie
-    // AUCUN fichier de config. La modification fichier reste manuelle pour
-    // l'instant (automatisation = lot ultérieur). Le libellé et la note
-    // ci-dessous évitent de laisser croire à un correctif appliqué.
-    const applyBtn = btn('Marquer comme traitée', 'btn-primary btn-sm', I.check);
-    applyBtn.title = "Enregistre ta décision (proposition traitée). Aucun fichier n'est modifié automatiquement — applique le changement toi-même.";
-    const rejectBtn = btn('Rejeter', 'btn-ghost btn-sm', I.x);
-    applyBtn.addEventListener('click', async () => {
-      try {
-        await API.post('/api/reflexive/proposals/' + p.id + '/apply');
-        snackbar('Proposition « ' + (p.title || p.id) + ' » marquée comme traitée (aucun fichier modifié)', {
-          actionLabel: 'Voir',
-          onAction: () => location.hash = '#/reflexive/proposals',
-        });
-        route();
-      } catch (e) { toastErr(e.message); }
-    });
-    rejectBtn.addEventListener('click', () => modalRejectProposal(p));
-    actions.appendChild(applyBtn);
-    actions.appendChild(rejectBtn);
+    if (status === 'pending') {
+      // « Marquer comme traitée » plutôt que « Apply » : le backend ne fait
+      // qu'enregistrer la décision en DB (status='applied'), il ne modifie
+      // AUCUN fichier de config. La modification fichier reste manuelle pour
+      // l'instant (automatisation = lot ultérieur). Le libellé et la note
+      // ci-dessous évitent de laisser croire à un correctif appliqué.
+      const applyBtn = btn('Marquer comme traitée', 'btn-primary btn-sm', I.check);
+      applyBtn.title = "Enregistre ta décision (proposition traitée). Aucun fichier n'est modifié automatiquement -- applique le changement toi-même.";
+      const rejectBtn = btn('Rejeter', 'btn-ghost btn-sm', I.x);
+      applyBtn.addEventListener('click', () => withBusy(applyBtn, async () => {
+        try {
+          await API.post('/api/reflexive/proposals/' + p.id + '/apply');
+          snackbar('Proposition « ' + (p.title || p.id) + ' » marquée comme traitée (aucun fichier modifié)', {
+            actionLabel: 'Voir',
+            onAction: () => location.hash = '#/reflexive/proposals',
+          });
+          renderReflexiveProposals(host);
+        } catch (e) { toastErr(e.message); }
+      }));
+      rejectBtn.addEventListener('click', () => modalRejectProposal(p));
+      actions.appendChild(applyBtn);
+      actions.appendChild(rejectBtn);
 
-    // Note honnête : on enregistre une décision, pas une mutation fichier.
-    const note = el('p', 'muted');
-    note.style.cssText = 'margin:var(--sp-2) 0 0;font-size:11.5px';
-    note.textContent = "« Marquer comme traitée » enregistre seulement ta décision. La modification du fichier de config n'est pas encore automatisée — applique-la manuellement.";
-    card.appendChild(note);
+      // Note honnête : on enregistre une décision, pas une mutation fichier.
+      const note = el('p', 'muted');
+      note.style.cssText = 'margin:var(--sp-2) 0 0;font-size:11.5px';
+      note.textContent = "« Marquer comme traitée » enregistre seulement ta décision. La modification du fichier de config n'est pas encore automatisée -- applique-la manuellement.";
+      card.appendChild(note);
+    } else {
+      // Statut traité/rejeté : badge + bouton « Annuler » (revert → pending).
+      // L'annulation ne défait aucun fichier (rien n'a été muté), c'est juste
+      // un changement de statut DB -- pas besoin de confirmation destructive.
+      const badge = el('span', 'badge ' + (status === 'applied' ? 'badge-ok' : 'badge-warn'));
+      badge.textContent = status === 'applied' ? 'traitée' : 'rejetée';
+      actions.appendChild(badge);
+
+      const undoBtn = btn('Annuler', 'btn-ghost btn-sm', I.refresh);
+      undoBtn.title = "Remet cette proposition en attente (aucun fichier n'est touché)";
+      undoBtn.addEventListener('click', () => withBusy(undoBtn, async () => {
+        try {
+          await API.post('/api/reflexive/proposals/' + p.id + '/revert');
+          toastOk('Proposition remise en attente');
+          renderReflexiveProposals(host);
+        } catch (e) { toastErr(e.message); }
+      }));
+      actions.appendChild(undoBtn);
+
+      if (status === 'rejected' && p.rejection_reason) {
+        const reason = el('p', 'muted');
+        reason.style.cssText = 'margin:var(--sp-2) 0 0;font-size:11.5px';
+        reason.textContent = 'Raison du rejet : ' + p.rejection_reason;
+        card.appendChild(reason);
+      }
+    }
 
     host.appendChild(card);
   }

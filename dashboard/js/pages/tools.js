@@ -396,7 +396,35 @@ async function loadBackups(host) {
       const list = el('div', 'stack');
       for (const it of r.items.slice(0, 10)) {
         const row = el('div', 'list-row');
-        row['innerHTML'] = `<div class="list-row-main"><div class="list-row-name mono">${escapeHtml(it.name)}</div><div class="list-row-desc">${fmtDate(it.mtime)} · ${fmtBytes(it.size)}</div></div>`;
+        row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2)';
+        const main = el('div', 'list-row-main');
+        main['innerHTML'] = `<div class="list-row-name mono">${escapeHtml(it.name)}</div><div class="list-row-desc">${fmtDate(it.mtime)} · ${fmtBytes(it.size)}</div>`;
+        row.appendChild(main);
+
+        // Bouton « Restaurer » uniquement pour les fichiers dont on connaît
+        // la destination (claude.json / settings.json). Les autres restent
+        // en lecture seule.
+        const dest = it.name.endsWith('-claude.json') ? '~/.claude.json'
+          : it.name.endsWith('-settings.json') ? '~/.claude/settings.json'
+          : null;
+        if (dest) {
+          const restoreBtn = btn('Restaurer', 'btn-sm', I.refresh);
+          restoreBtn.title = `Écrase ${dest} avec cette sauvegarde`;
+          restoreBtn.addEventListener('click', () => {
+            confirmDialog(
+              `Restaurer cette sauvegarde ?\n\nLe fichier ${dest} sera écrasé par « ${it.name} ».\n\nUn backup automatique de l'état actuel est créé avant l'écrasement -- l'action reste réversible.`,
+              () => withBusy(restoreBtn, async () => {
+                try {
+                  const res = await API.post('/api/backups/restore', { name: it.name });
+                  toastOk(res.message || 'Restauré');
+                  loadBackups(host);
+                } catch (e) { toastErr(e.message); }
+              }),
+              { danger: true }
+            );
+          });
+          row.appendChild(restoreBtn);
+        }
         list.appendChild(row);
       }
       wrap.appendChild(list);

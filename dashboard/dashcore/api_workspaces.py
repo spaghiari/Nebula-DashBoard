@@ -595,6 +595,95 @@ def get_global_hooks() -> dict:
     return settings.get("hooks") or {}
 
 
+def _hooks_settings_paths(ws_id: str | None) -> tuple[Path, Path]:
+    """Retourne (settings.json, settings.json.bak) pour le scope demandé.
+
+    ws_id None/"" => settings global (~/.claude/settings.json). Sinon le
+    settings.json du workspace. Le `.bak` est écrit par `set_global_hooks`
+    (global) et `save_workspace_settings` / `patch_workspace_settings` (ws).
+    """
+    if ws_id:
+        path = _workspace_settings_path(ws_id)
+    else:
+        path = CLAUDE_SETTINGS
+    return path, path.with_suffix(".json.bak")
+
+
+def get_hooks_backup(ws_id: str | None = None) -> tuple[int, dict]:
+    """Indique si un settings.json.bak existe et expose sa section `hooks`.
+
+    Lecture seule. Sert à conditionner l'affichage du bouton « Restaurer la
+    version précédente » dans la modale Hooks et à proposer un aperçu de ce
+    qui serait restauré.
+    """
+    if ws_id and not safe_id(ws_id):
+        return 400, {"error": "id invalide"}
+    path, bak = _hooks_settings_paths(ws_id)
+    if not bak.exists():
+        return 200, {"exists": False}
+    try:
+        raw = bak.read_text(encoding="utf-8")
+        parsed = json.loads(raw) if raw.strip() else {}
+    except (OSError, json.JSONDecodeError) as e:
+        # Un .bak illisible/corrompu : on le signale mais sans 500 (l'UI
+        # affichera juste « sauvegarde présente mais illisible »).
+        return 200, {"exists": True, "readable": False, "error": str(e)}
+    hooks = parsed.get("hooks") if isinstance(parsed, dict) else None
+    try:
+        mtime = dt.datetime.fromtimestamp(bak.stat().st_mtime).isoformat(timespec="seconds")
+    except OSError:
+        mtime = None
+    return 200, {
+        "exists": True,
+        "readable": True,
+        "hooks": hooks or {},
+        "mtime": mtime,
+    }
+
+
+def restore_hooks_backup(ws_id: str | None = None) -> tuple[int, dict]:
+    """Restaure settings.json depuis son .bak, en gardant la réversibilité.
+
+    Swap atomique en mémoire : on lit l'état courant ET le .bak, puis on écrit
+    l'état courant DANS le .bak (nouveau backup) avant d'écrire le contenu du
+    .bak dans settings.json. Re-cliquer « Restaurer » re-swap donc -- l'action
+    reste réversible et ne perd jamais la version courante.
+
+    Périmètre : on restaure le settings.json complet (le .bak est un snapshot
+    intégral du fichier, pas seulement de la section hooks).
+    """
+    if ws_id and not safe_id(ws_id):
+        return 400, {"error": "id invalide"}
+    path, bak = _hooks_settings_paths(ws_id)
+    if not bak.exists():
+        return 404, {"error": "aucune sauvegarde (.bak) à restaurer"}
+    try:
+        bak_content = bak.read_text(encoding="utf-8")
+    except OSError as e:
+        return 500, {"error": f"lecture de la sauvegarde impossible : {e}"}
+    # Valide que le .bak est un JSON exploitable avant tout écrasement.
+    try:
+        bak_parsed = json.loads(bak_content) if bak_content.strip() else {}
+    except json.JSONDecodeError as e:
+        return 400, {"error": f"sauvegarde corrompue (JSON invalide) : {e}"}
+    if not isinstance(bak_parsed, dict):
+        return 400, {"error": "sauvegarde invalide (objet JSON attendu)"}
+
+    with _MUTATION_LOCK:
+        # État courant en mémoire (peut ne pas exister si jamais sauvé).
+        cur_content = path.read_text(encoding="utf-8") if path.exists() else ""
+        try:
+            # 1. L'état courant devient le nouveau backup (réversibilité).
+            bak.write_text(cur_content, encoding="utf-8")
+            # 2. On restaure l'ancien backup dans settings.json.
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write_json(path, bak_parsed)
+        except OSError as e:
+            return 500, {"error": f"restauration impossible : {e}"}
+    log.info("Hooks: settings.json restauré depuis .bak (scope=%s)", ws_id or "global")
+    return 200, {"ok": True, "hooks": bak_parsed.get("hooks") or {}}
+
+
 # Événements de hook reconnus par Claude Code (pour le lint 3c).
 _KNOWN_HOOK_EVENTS = frozenset({
     "PreToolUse", "PostToolUse", "Notification", "UserPromptSubmit",

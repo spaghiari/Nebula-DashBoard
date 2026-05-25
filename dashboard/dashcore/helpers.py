@@ -304,6 +304,60 @@ def backup_claude_config() -> tuple[int, dict]:
     return 200, {"ok": True, "message": "Sauvegardés : " + ", ".join(copied)}
 
 
+def restore_backup(name: str) -> tuple[int, dict]:
+    """Restaure un fichier de sauvegarde vers sa destination Claude.
+
+    Réversibilité (lot D-3) : un backup auto de l'état courant est créé AVANT
+    tout écrasement (via `backup_claude_config`) -- la restauration est donc
+    annulable en restaurant le snapshot fraîchement créé.
+
+    Périmètre identique à `backup_claude_config` : on ne restaure que les
+    deux fichiers couverts par la sauvegarde (claude.json + settings.json).
+    Le `name` doit correspondre à une entrée existante de `list_backups()`
+    et se terminer par l'un des suffixes connus.
+    """
+    name = (name or "").strip()
+    # Garde-fou anti-traversal : pas de séparateur de chemin, doit exister
+    # dans le dossier de backups (et donc dedans, pas ailleurs).
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        return 400, {"ok": False, "error": "nom de sauvegarde invalide"}
+
+    src = BACKUPS_DIR / name
+    try:
+        # resolve() pour neutraliser tout ".." résiduel et confiner à BACKUPS_DIR.
+        if BACKUPS_DIR.resolve() not in src.resolve().parents:
+            return 400, {"ok": False, "error": "nom de sauvegarde invalide"}
+    except OSError:
+        return 400, {"ok": False, "error": "nom de sauvegarde invalide"}
+    if not src.is_file():
+        return 404, {"ok": False, "error": "sauvegarde introuvable"}
+
+    # Mappe le suffixe du fichier de backup vers sa destination réelle.
+    suffix_to_dst = {"-claude.json": CLAUDE_JSON, "-settings.json": CLAUDE_SETTINGS}
+    dst = next((d for sfx, d in suffix_to_dst.items() if name.endswith(sfx)), None)
+    if dst is None:
+        return 400, {"ok": False, "error": "type de sauvegarde non restaurable"}
+
+    # 1. Backup auto de l'état courant AVANT d'écraser (réversibilité).
+    status, info = backup_claude_config()
+    auto_backup = info.get("message") if status == 200 else None
+
+    # 2. Restauration.
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+    except OSError as e:
+        return 500, {"ok": False, "error": f"restauration impossible : {e}"}
+
+    msg = f"Restauré : {dst.name}"
+    return 200, {
+        "ok": True,
+        "message": msg,
+        "restored": dst.name,
+        "auto_backup": auto_backup,
+    }
+
+
 def list_backups() -> list[dict]:
     if not BACKUPS_DIR.exists():
         return []

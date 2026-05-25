@@ -319,6 +319,27 @@ async function loadSanity(host) {
       return;
     }
     const list = el('div', 'sanity-list');
+
+    // « Tout synchroniser » si plusieurs workspaces désync (réutilise
+    // /api/sync-all). Placé en tête de liste pour rester découvrable.
+    if (r.findings.length > 1) {
+      const allRow = el('div', 'sanity-item');
+      allRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2)';
+      const lbl = el('div', 'dim');
+      lbl.style.fontSize = '12px';
+      lbl['innerHTML'] = `<strong>${r.findings.length} workspaces désync</strong> registre ↔ <code class="mono">.mcp.json</code>`;
+      const syncAllBtn = btn('Tout synchroniser', 'btn-sm btn-primary', I.refresh);
+      syncAllBtn.addEventListener('click', () => withBusy(syncAllBtn, async () => {
+        try {
+          const res = await API.post('/api/sync-all', {});
+          toastOk('Sync terminé pour ' + Object.keys(res.results || {}).length + ' workspace(s)');
+          loadSanity(host);
+        } catch (e) { toastErr(e.message); }
+      }));
+      allRow.append(lbl, syncAllBtn);
+      list.appendChild(allRow);
+    }
+
     for (const f of r.findings) {
       const item = el('div', 'sanity-item');
       item['innerHTML'] = `
@@ -329,6 +350,21 @@ async function loadSanity(host) {
         ${f.missing_sync.length ? `<div class="dim">à sync : <span class="mono">${f.missing_sync.map(escapeHtml).join(', ')}</span></div>` : ''}
         ${f.stale.length ? `<div class="dim">obsolètes : <span class="mono">${f.stale.map(escapeHtml).join(', ')}</span></div>` : ''}
       `;
+      // Bouton de réparation 1-clic : sync ce workspace précis
+      // (POST /api/workspaces/<id>/sync-mcps), puis rafraîchit le panneau.
+      const actionRow = el('div');
+      actionRow.style.cssText = 'display:flex;justify-content:flex-end;margin-top:var(--sp-2)';
+      const syncBtn = btn('Sync ce workspace', 'btn-sm', I.refresh);
+      syncBtn.title = "Synchronise le registre MCP vers le .mcp.json de ce workspace";
+      syncBtn.addEventListener('click', () => withBusy(syncBtn, async () => {
+        try {
+          await API.post(`/api/workspaces/${f.workspace}/sync-mcps`, {});
+          toastOk('« ' + f.workspace + ' » synchronisé');
+          loadSanity(host);
+        } catch (e) { toastErr(e.message); }
+      }));
+      actionRow.appendChild(syncBtn);
+      item.appendChild(actionRow);
       list.appendChild(item);
     }
     for (const [mcpId, vars] of Object.entries(r.missing_env || {})) {

@@ -311,7 +311,11 @@ def system_apply_update() -> tuple[int, dict]:
     # 5. Pull a échoué : on diagnostique et on rapporte
     if rc_p != 0:
         hint = _diagnose_pull_failure(pull_err, pull_out)
-        return 500, {
+        # 200 (et non 500) volontaire : echec recuperable rapporte EN BANDE
+        # (ok:false) pour que le front rende le panneau riche (hint, recup du
+        # stash, reset). API.post throw sur HTTP non-ok, ce qui court-circuiterait
+        # ce panneau (cf. lot D, audit-ux-2026-05-25).
+        return 200, {
             "ok": False,
             "error": "git pull a échoué",
             "stderr": pull_err,
@@ -354,6 +358,170 @@ def system_apply_update() -> tuple[int, dict]:
             if needs_restart
             else "Mise à jour appliquée. Recharge la page (F5) pour voir les changements."
         ),
+    }
+
+
+def _list_nebula_stashes() -> list[dict]:
+    """Liste les entrées de stash créées par l'auto-update Nebula.
+
+    Repère les labels `nebula-autostash-*` / `nebula-pre-reset-*` posés par
+    `system_apply_update` / `system_reset_to_upstream`. Retourne une liste
+    ordonnée (le plus récent en premier, comme `git stash list`) de dicts
+    `{ref, label, subject}` où `ref` est la référence stable (`stash@{N}`).
+    """
+    rc, out, _ = _git("stash", "list", "--format=%gd%x1f%gs")
+    if rc != 0 or not out.strip():
+        return []
+    stashes = []
+    for line in out.splitlines():
+        parts = line.split("\x1f", 1)
+        if len(parts) != 2:
+            continue
+        ref, subject = parts[0].strip(), parts[1].strip()
+        if "nebula-autostash-" in subject or "nebula-pre-reset-" in subject:
+            # Extrait le label nebula-* lisible pour l'UI.
+            label = ""
+            for token in subject.replace(":", " ").split():
+                if token.startswith("nebula-"):
+                    label = token
+                    break
+            stashes.append({"ref": ref, "label": label or subject, "subject": subject})
+    return stashes
+
+
+def system_recover_stash() -> tuple[int, dict]:
+    """Tente de récupérer les modifs stashées par l'auto-update (le plus récent).
+
+    Contexte (lot D-4) : quand `git stash pop` échoue après un pull, les modifs
+    restent dans `git stash list`. Cet endpoint évite à l'utilisateur de
+    passer en CLI : il applique le stash nebula le plus récent.
+
+    Sécurité -- ne JAMAIS laisser un état cassé :
+    - On refuse si le working tree a déjà des modifs non committées (un
+      apply par-dessus produirait des conflits ingérables) ; l'utilisateur
+      doit d'abord traiter ses modifs courantes.
+    - On utilise `git stash apply` (PAS `pop`) : le stash reste TOUJOURS dans
+      la pile, donc zéro perte possible.
+    - En cas de conflit à l'apply, on annule proprement les fichiers trackés
+      modifiés (`git checkout -- .`) pour revenir à un état propre, et on
+      signale clairement. Le stash intact reste récupérable.
+    - Les fichiers user-data (cf. USER_DATA_FILES) ne sont jamais touchés ici :
+      on ne fait aucun reset/clean destructif, juste un apply de stash.
+    """
+    if not _is_git_repo():
+        return 400, {"ok": False, "error": "Pas un dépôt git"}
+
+    _check_stale_lock()
+
+    stashes = _list_nebula_stashes()
+    if not stashes:
+        return 404, {
+            "ok": False,
+            "error": "Aucune modification stashée par Nebula à récupérer.",
+            "hint": "Le `git stash list` ne contient aucun stash nebula-* "
+                    "(soit aucun pull n'a stashé, soit les modifs ont déjà été récupérées).",
+        }
+
+    target = stashes[0]  # le plus récent
+
+    # Refus si le working tree n'est pas propre (hors user-data attendues).
+    rc_st, status, _ = _git("status", "--porcelain")
+    raw_lines = status.splitlines() if status.strip() else []
+    significant = _filter_user_data(raw_lines)
+    if significant:
+        return 409, {
+            "ok": False,
+            "error": "Tu as des modifications locales non sauvegardées.",
+            "hint": "Commit, stash ou annule tes modifs courantes avant de "
+                    "récupérer le stash, pour éviter des conflits ingérables.",
+            "dirty_files": significant[:10],
+            "stashes": stashes,
+        }
+
+    # Apply (pas pop) : le stash reste dans la pile quoi qu'il arrive.
+    rc_a, _apply_out, apply_err = _git("stash", "apply", target["ref"], timeout=GIT_TIMEOUT_QUICK)
+    if rc_a != 0:
+        # Conflit ou échec : on revient à un état propre pour ne pas laisser
+        # de marqueurs de conflit. checkout -- . annule les fichiers trackés
+        # modifiés par l'apply partiel ; le stash intact reste récupérable.
+        _git("checkout", "--", ".")
+        return 409, {
+            "ok": False,
+            "error": "Conflit lors de la récupération du stash.",
+            "hint": f"Tes modifs sont SAUVES dans la pile (label '{target['label']}'). "
+                    f"L'application automatique provoque un conflit avec la version "
+                    f"actuelle des fichiers. Résous-le manuellement : "
+                    f"`git stash apply {target['ref']}` puis traite les conflits.",
+            "stderr": (apply_err or "")[:300],
+            "stash_label": target["label"],
+            "stash_ref": target["ref"],
+            "stashes": stashes,
+        }
+
+    # Apply réussi. On laisse le stash dans la pile par prudence (l'utilisateur
+    # peut le dropper manuellement une fois sûr que tout est OK).
+    rc_d, diff_out, _ = _git("diff", "--name-only")
+    changed_files = diff_out.splitlines() if rc_d == 0 else []
+    needs_restart = any(f.endswith(".py") for f in changed_files)
+
+    log.info("Stash récupéré (apply %s, %d fichiers, restart=%s)",
+             target["ref"], len(changed_files), needs_restart)
+
+    return 200, {
+        "ok": True,
+        "applied_ref": target["ref"],
+        "stash_label": target["label"],
+        "files_changed": changed_files,
+        "needs_restart": needs_restart,
+        "remaining_stashes": _list_nebula_stashes(),
+        "message": (
+            f"Modifs récupérées depuis le stash « {target['label']} ». "
+            "Le stash est conservé dans la pile par sécurité (supprime-le "
+            "manuellement via `git stash drop` une fois que tout est vérifié)."
+            + (" Des fichiers Python ont changé : redémarre le dashboard."
+               if needs_restart else "")
+        ),
+    }
+
+
+def system_drop_stash(ref: str) -> tuple[int, dict]:
+    """Supprime un stash nebula-* de la pile (`git stash drop`).
+
+    Contexte (lot D-4 raffinement) : apres une recuperation reussie via
+    `system_recover_stash`, le stash est conserve par securite. Une fois ses
+    modifs verifiees, l'utilisateur peut l'oublier en 1-clic, sans CLI.
+
+    Securite : on ne droppe QUE des stash crees par l'auto-update Nebula
+    (labels nebula-autostash-* / nebula-pre-reset-*), jamais un stash
+    utilisateur arbitraire. La ref est revalidee contre la liste courante.
+    """
+    if not _is_git_repo():
+        return 400, {"ok": False, "error": "Pas un dépôt git"}
+    ref = (ref or "").strip()
+    if not ref:
+        return 400, {"ok": False, "error": "Référence de stash manquante."}
+
+    nebula = _list_nebula_stashes()
+    match = next((s for s in nebula if s["ref"] == ref), None)
+    if not match:
+        return 404, {
+            "ok": False,
+            "error": "Stash introuvable ou non géré par Nebula.",
+            "hint": "La référence a peut-être changé (un autre stash supprimé "
+                    "entre-temps). Rouvre la fenêtre de mise à jour.",
+            "stashes": nebula,
+        }
+
+    rc, _out, err = _git("stash", "drop", ref, timeout=GIT_TIMEOUT_QUICK)
+    if rc != 0:
+        return 500, {"ok": False, "error": "Échec de la suppression du stash.",
+                     "stderr": (err or "")[:300]}
+
+    log.info("Stash nebula supprimé : %s (%s)", ref, match["label"])
+    return 200, {
+        "ok": True,
+        "message": f"Stash « {match['label']} » supprimé.",
+        "remaining_stashes": _list_nebula_stashes(),
     }
 
 

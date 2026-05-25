@@ -30,7 +30,7 @@ from dashcore.helpers import (
     setup_logging, read_json, safe_id, load_env_local, port_free, find_port,
     set_env_var, delete_env_var, launch_script, open_target,
     is_encrypted_mode, enable_encryption, disable_encryption, env_health,
-    backup_claude_config, list_backups, read_journal, append_journal, clear_journal,
+    backup_claude_config, list_backups, restore_backup, read_journal, append_journal, clear_journal,
     all_stats, sanity_check, global_search, cleanup_orphan_bats,
 )
 from dashcore.api_workspaces import (
@@ -43,7 +43,7 @@ from dashcore.api_workspaces import (
     list_sessions_for_workspace, read_session_messages, read_session_tail,
     get_workspace_settings, save_workspace_settings, patch_workspace_settings,
     get_global_hooks, set_global_hooks, register_existing_workspace,
-    get_hooks_errors,
+    get_hooks_errors, get_hooks_backup, restore_hooks_backup,
 )
 from dashcore.api_files import (
     list_tree as fs_list_tree,
@@ -64,12 +64,15 @@ from dashcore.api_mcps import (
     list_mcp_recipes, ensure_local_recipes_file,
     add_or_update_local_recipe, delete_local_recipe, list_mcps_with_computed_status,
 )
-from dashcore.system_update import system_version_info, system_apply_update, system_reset_to_upstream
+from dashcore.system_update import (
+    system_version_info, system_apply_update, system_reset_to_upstream,
+    system_recover_stash, system_drop_stash, _list_nebula_stashes,
+)
 from dashcore.api_ui_state import get_ui_state, patch_ui_state
 from dashcore.api_reflexive import (
     stats as reflexive_stats,
     list_interactions, get_interaction,
-    list_proposals, get_proposal, apply_proposal, reject_proposal,
+    list_proposals, get_proposal, apply_proposal, reject_proposal, revert_proposal,
     enable_workspace as reflexive_enable_ws,
     disable_workspace as reflexive_disable_ws,
     run_diagnostician, list_measurement_plans,
@@ -354,6 +357,8 @@ def h_get_sanity(q, b):          return 200, sanity_check()
 def h_get_backups(q, b):         return 200, {"dir": str(BACKUPS_DIR), "items": list_backups()}
 def h_get_journal(q, b):         return 200, {"entries": read_journal()[-100:]}
 def h_get_hooks_global(q, b):    return 200, {"hooks": get_global_hooks()}
+def h_get_hooks_backup(q, b):            return get_hooks_backup(None)
+def h_get_ws_hooks_backup(q, b, ws):     return get_hooks_backup(ws)
 def h_get_search(q, b):
     return 200, global_search(q.get("q", [""])[0])
 def h_get_setup_scan(q, b):      return scan_claude_config()
@@ -368,6 +373,7 @@ def h_get_reflexive_proposal(q, b, pid):         return get_proposal(pid)
 def h_get_reflexive_measurement_plans(q, b):     return list_measurement_plans(q)
 def h_post_reflexive_apply(q, b, pid):           return apply_proposal(pid, b or {})
 def h_post_reflexive_reject(q, b, pid):          return reject_proposal(pid, b or {})
+def h_post_reflexive_revert(q, b, pid):          return revert_proposal(pid, b or {})
 def h_post_reflexive_ws_enable(q, b, ws):        return reflexive_enable_ws(ws, b or {})
 def h_post_reflexive_ws_disable(q, b, ws):       return reflexive_disable_ws(ws, b or {})
 def h_post_reflexive_diagnostician(q, b):        return run_diagnostician(b or {})
@@ -377,12 +383,16 @@ def h_get_system_version(q, b):
     return 200, system_version_info(check_remote=check)
 def h_post_system_update(q, b):  return system_apply_update()
 def h_post_system_reset(q, b):   return system_reset_to_upstream()
+def h_get_system_stashes(q, b):  return 200, {"stashes": _list_nebula_stashes()}
+def h_post_system_stash_recover(q, b): return system_recover_stash()
+def h_post_system_stash_drop(q, b): return system_drop_stash((b or {}).get("ref", ""))
 
 def h_post_set_env(q, b):        return set_env_var(b.get("key", ""), b.get("value", ""))
 def h_post_env_encrypt(q, b):    return enable_encryption()
 def h_post_env_decrypt(q, b):    return disable_encryption()
 def h_post_open(q, b):           return open_target(b.get("target", ""))
 def h_post_backup(q, b):         return backup_claude_config()
+def h_post_backup_restore(q, b): return restore_backup(b.get("name", ""))
 def h_post_cleanup_bats(q, b):   return 200, cleanup_orphan_bats()
 def h_post_journal(q, b):
     text = (b.get("text", "") or "").strip()
@@ -391,6 +401,8 @@ def h_post_journal(q, b):
     append_journal(text)
     return 200, {"ok": True}
 def h_post_hooks_global(q, b):   return set_global_hooks(b.get("hooks") or {})
+def h_post_hooks_restore(q, b):          return restore_hooks_backup(None)
+def h_post_ws_hooks_restore(q, b, ws):   return restore_hooks_backup(ws)
 
 def h_post_setup_import(q, b):
     """Import combiné MCPs + workspaces (depuis le wizard d'onboarding)."""
@@ -483,11 +495,14 @@ ROUTES_GET = [
     (re.compile(rf"^/api/backups$"),                                                        h_get_backups),
     (re.compile(rf"^/api/journal$"),                                                        h_get_journal),
     (re.compile(rf"^/api/hooks/global$"),                                                   h_get_hooks_global),
+    (re.compile(rf"^/api/hooks/backup$"),                                                   h_get_hooks_backup),
+    (re.compile(rf"^/api/workspaces/({_ID})/hooks/backup$"),                                h_get_ws_hooks_backup),
     (re.compile(rf"^/api/hooks/errors$"),                                                   h_get_hooks_errors),
     (re.compile(rf"^/api/search$"),                                                         h_get_search),
     (re.compile(rf"^/api/setup/scan$"),                                                     h_get_setup_scan),
     (re.compile(rf"^/api/ui-state$"),                                                       h_get_ui_state),
     (re.compile(rf"^/api/system/version$"),                                                 h_get_system_version),
+    (re.compile(rf"^/api/system/stashes$"),                                                 h_get_system_stashes),
     # Reflexive
     (re.compile(rf"^/api/reflexive/stats$"),                                                h_get_reflexive_stats),
     (re.compile(rf"^/api/reflexive/interactions$"),                                         h_get_reflexive_interactions),
@@ -552,16 +567,22 @@ ROUTES_POST = [
     (re.compile(rf"^/api/env/decrypt$"),                                                    h_post_env_decrypt),
     (re.compile(rf"^/api/open$"),                                                           h_post_open),
     (re.compile(rf"^/api/backup$"),                                                         h_post_backup),
+    (re.compile(rf"^/api/backups/restore$"),                                                h_post_backup_restore),
     (re.compile(rf"^/api/cleanup/orphan-bats$"),                                            h_post_cleanup_bats),
     (re.compile(rf"^/api/journal$"),                                                        h_post_journal),
     (re.compile(rf"^/api/hooks/global$"),                                                   h_post_hooks_global),
+    (re.compile(rf"^/api/hooks/restore$"),                                                  h_post_hooks_restore),
+    (re.compile(rf"^/api/workspaces/({_ID})/hooks/restore$"),                               h_post_ws_hooks_restore),
     (re.compile(rf"^/api/setup/import$"),                                                   h_post_setup_import),
     (re.compile(rf"^/api/ui-state$"),                                                       h_post_ui_state),
     (re.compile(rf"^/api/system/update$"),                                                  h_post_system_update),
     (re.compile(rf"^/api/system/reset$"),                                                   h_post_system_reset),
+    (re.compile(rf"^/api/system/stash-recover$"),                                           h_post_system_stash_recover),
+    (re.compile(rf"^/api/system/stash-drop$"),                                              h_post_system_stash_drop),
     # Reflexive
     (re.compile(rf"^/api/reflexive/proposals/(\d+)/apply$"),                                h_post_reflexive_apply),
     (re.compile(rf"^/api/reflexive/proposals/(\d+)/reject$"),                               h_post_reflexive_reject),
+    (re.compile(rf"^/api/reflexive/proposals/(\d+)/revert$"),                               h_post_reflexive_revert),
     (re.compile(rf"^/api/reflexive/workspace/({_ID})/enable$"),                             h_post_reflexive_ws_enable),
     (re.compile(rf"^/api/reflexive/workspace/({_ID})/disable$"),                            h_post_reflexive_ws_disable),
     (re.compile(rf"^/api/reflexive/diagnostician/run$"),                                    h_post_reflexive_diagnostician),

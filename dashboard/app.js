@@ -1623,6 +1623,65 @@ function renderUpdateBadge(info) {
   }
 }
 
+// Construit un encart « Récupérer mes modifs stashées » (lot D-4). Inséré
+// dans la modale MAJ système quand un `git stash pop` a échoué après un pull.
+// Appelle GET /api/system/stashes pour ne s'afficher que s'il reste des
+// stash nebula-* à récupérer, puis POST /api/system/stash-recover.
+async function mountStashRecover(host) {
+  if (!host) return;
+  let data;
+  try { data = await API.get('/api/system/stashes'); }
+  catch { return; }
+  const stashes = (data && data.stashes) || [];
+  if (!stashes.length) return;
+
+  const box = el('div', 'callout callout-warn');
+  box.style.cssText = 'margin-top:var(--sp-3)';
+  box.innerHTML = `
+    <div>
+      <strong>↩ ${stashes.length} sauvegarde${stashes.length > 1 ? 's' : ''} de modifs locales</strong>
+      <p style="margin:4px 0 0;font-size:11.5px">Tes modifs locales ont été stashées avant le pull mais n'ont pas pu être réappliquées automatiquement (conflit). Tu peux tenter la récupération ici, sans passer par la CLI.</p>
+      <ul class="help-list" style="margin-top:6px">${stashes.slice(0, 5).map(s => `<li class="mono" style="font-size:11px">${escapeHtml(s.label || s.ref)}</li>`).join('')}</ul>
+    </div>
+  `;
+  const recoverBtn = btn('Récupérer mes modifs stashées', 'btn-sm', I.refresh);
+  recoverBtn.style.marginTop = 'var(--sp-2)';
+  recoverBtn.addEventListener('click', () => withBusy(recoverBtn, async () => {
+    let res;
+    try { res = await API.post('/api/system/stash-recover', {}); }
+    catch (e) {
+      // API.post throw sur HTTP non-ok (conflit 409, etc.) en lisant `error`.
+      toastErr(e.message);
+      return;
+    }
+    toastOk(res.message || 'Modifs récupérées');
+    // Recharge la page si des .py ont changé (le serveur a besoin d'un restart
+    // de toute façon, mais un reload rafraîchit l'UI).
+    if (res.needs_restart) {
+      box.innerHTML = `<div><strong>Modifs récupérées.</strong> Des fichiers Python ont changé -- redémarre le dashboard pour les activer.</div>`;
+    } else {
+      box.innerHTML = `<div>${I.check} <strong>Modifs récupérées.</strong> ${escapeHtml(res.message || '')}</div>`;
+    }
+    // Le stash reste dans la pile par sécurité (apply, pas pop). Une fois les
+    // modifs vérifiées, on peut l'oublier en 1-clic (git stash drop) sans CLI.
+    if (res.applied_ref) {
+      const dropBtn = btn('Oublier ce stash', 'btn-sm btn-ghost', I.trash);
+      dropBtn.style.marginTop = 'var(--sp-2)';
+      dropBtn.title = 'Supprime le stash de la pile (git stash drop) une fois tes modifs vérifiées';
+      dropBtn.addEventListener('click', () => withBusy(dropBtn, async () => {
+        try {
+          const dr = await API.post('/api/system/stash-drop', { ref: res.applied_ref });
+          toastOk(dr.message || 'Stash supprimé');
+          dropBtn.remove();
+        } catch (e) { toastErr(e.message); }
+      }));
+      box.querySelector('div').appendChild(dropBtn);
+    }
+  }));
+  box.appendChild(recoverBtn);
+  host.appendChild(box);
+}
+
 async function modalSystemUpdate() {
   const body = el('div');
   body.innerHTML = `<div class="page-loader"><div class="spinner"></div><span>Vérification…</span></div>`;
@@ -1760,6 +1819,9 @@ async function modalSystemUpdate() {
         <span class="dim">Branche <code class="mono">${escapeHtml(info.upstream || 'origin')}</code></span>
       </div>
     `));
+    // Filet de sécurité : un stash résiduel d'un pull précédent doit rester
+    // récupérable même quand il n'y a plus de mise à jour à appliquer.
+    mountStashRecover(body);
     return;
   }
 
@@ -1831,9 +1893,12 @@ async function modalSystemUpdate() {
           ${r.stash_pop_warning ? `<p class="text-warn" style="margin:var(--sp-2) 0 0;font-size:11.5px">⚠ ${escapeHtml(r.stash_pop_warning)}</p>` : ''}
           ${(r.sensitive_in_stash || []).length ? `<p class="text-warn" style="margin:var(--sp-2) 0 0;font-size:11.5px">⚠ Fichiers sensibles dans le stash : ${r.sensitive_in_stash.map(escapeHtml).join(', ')} — vérifie avec <code class="mono">git stash list</code> si la restauration semble incomplète.</p>` : ''}
           ${r.stderr ? `<details style="margin-top:var(--sp-2)"><summary style="cursor:pointer;font-size:11px;color:var(--text-muted)">Détail technique</summary><pre class="mono" style="font-size:10.5px;background:var(--bg);padding:var(--sp-2);border-radius:4px;margin-top:6px;white-space:pre-wrap;max-height:160px;overflow:auto">${escapeHtml(r.stderr)}</pre></details>` : ''}
+          <div data-stash-recover></div>
         </div>
       `;
       body.appendChild(errPanel);
+      // Propose la récupération du stash si le pop a échoué.
+      if (r.stash_pop_warning) mountStashRecover(errPanel.querySelector('[data-stash-recover]'));
 
       if (r.can_reset_to_upstream) {
         const resetBox = el('div');
@@ -1878,6 +1943,7 @@ async function modalSystemUpdate() {
           ${r.stash_applied ? '<p class="dim" style="margin:var(--sp-2) 0 0;font-size:11.5px">ℹ Tes modifs locales ont été stashées puis re-appliquées automatiquement.</p>' : ''}
           ${r.stash_pop_warning ? `<p class="text-warn" style="margin:var(--sp-2) 0 0;font-size:11.5px">⚠ ${escapeHtml(r.stash_pop_warning)}</p>` : ''}
           ${(r.sensitive_in_stash || []).length ? `<p class="text-warn" style="margin:var(--sp-2) 0 0;font-size:11.5px">⚠ Fichiers sensibles dans le stash : ${r.sensitive_in_stash.map(escapeHtml).join(', ')} — vérifie avec <code class="mono">git stash list</code> si la restauration semble incomplète.</p>` : ''}
+          <div data-stash-recover></div>
         </div>
       </div>
       <div class="section-label" style="margin-top:var(--sp-4)"><span class="num">▾</span> ${(r.files_changed || []).length} fichier(s) modifié(s)</div>
@@ -1904,6 +1970,8 @@ async function modalSystemUpdate() {
     // coherence avec le reste du code).
     const reloadBtn = body.querySelector('[data-reload-page]');
     if (reloadBtn) reloadBtn.addEventListener('click', () => location.reload());
+    // Si le stash pop a échoué pendant l'update, propose la récupération 1-clic.
+    if (r.stash_pop_warning) mountStashRecover(body.querySelector('[data-stash-recover]'));
     // Rafraîchit le badge
     setTimeout(() => checkForUpdates({ force: true }).then(renderUpdateBadge), 500);
   });
@@ -2716,14 +2784,69 @@ function modalHooks(wsId) {
       <p class="muted" style="margin-top:0">JSON des hooks Claude Code. ${wsId ? 'Spécifique au workspace.' : 'Configuration globale.'}</p>
       <div class="field"><textarea class="textarea textarea-code" name="hooks" rows="14">${escapeHtml(JSON.stringify(current, null, 2))}</textarea></div>
     `;
+    // Zone de restauration depuis .bak (item D-2). Insérée sous l'éditeur,
+    // peuplée async une fois la modale ouverte (n'affiche rien si pas de .bak).
+    const restoreHost = el('div');
+    restoreHost.style.marginTop = 'var(--sp-2)';
+    body.appendChild(restoreHost);
+
     const cancel = btn('Annuler', 'btn-ghost');
     const save = btn('Enregistrer', 'btn-primary');
     // Garde anti-perte de saisie.
     const guard = makeDirtyGuard();
-    body.querySelector('[name=hooks]').addEventListener('input', guard.markDirty);
+    const textarea = body.querySelector('[name=hooks]');
+    textarea.addEventListener('input', guard.markDirty);
     const { close, requestClose } = openModal({ title: wsId ? `Hooks · ${wsId}` : 'Hooks globaux', body, footer: [cancel, save], wide: true, confirmClose: guard.confirmClose });
     guard.bind(close);
     cancel.addEventListener('click', requestClose);
+
+    // Charge l'existence d'une sauvegarde et propose la restauration.
+    const backupUrl = wsId ? `/api/workspaces/${wsId}/hooks/backup` : '/api/hooks/backup';
+    const restoreUrl = wsId ? `/api/workspaces/${wsId}/hooks/restore` : '/api/hooks/restore';
+    (async () => {
+      let bk;
+      try { bk = await API.get(backupUrl); }
+      catch (e) { console.warn('[hooks] lecture .bak échouée :', e.message); return; }
+      if (!bk || !bk.exists) return;
+
+      const box = el('div', 'callout callout-info');
+      box.style.cssText = 'margin-top:var(--sp-2)';
+      if (!bk.readable) {
+        box.innerHTML = `<div><strong>Sauvegarde présente mais illisible</strong> <span class="dim">(.bak corrompu)</span></div>`;
+        restoreHost.appendChild(box);
+        return;
+      }
+      const bakHooks = bk.hooks || {};
+      const when = bk.mtime ? fmtDate(bk.mtime) : 'date inconnue';
+      box.innerHTML = `
+        <div>
+          <strong>↩ Version précédente disponible</strong>
+          <span class="dim" style="font-size:11.5px">-- sauvegardée le ${escapeHtml(when)}</span>
+          <p style="margin:4px 0 0;font-size:11.5px" class="dim">Restaure le <code class="mono">settings.json</code> à son état d'avant la dernière sauvegarde. La version actuelle est conservée comme nouvelle sauvegarde (action réversible).</p>
+          <details style="margin-top:6px"><summary style="cursor:pointer;font-size:11.5px;color:var(--text-muted)">Aperçu des hooks de la sauvegarde</summary><pre class="mono" style="font-size:10.5px;background:var(--bg);padding:var(--sp-2);border-radius:4px;margin-top:6px;white-space:pre-wrap;max-height:160px;overflow:auto">${escapeHtml(JSON.stringify(bakHooks, null, 2))}</pre></details>
+        </div>
+      `;
+      const restoreBtn = btn('Restaurer la version précédente', 'btn-sm', I.refresh);
+      restoreBtn.style.marginTop = 'var(--sp-2)';
+      restoreBtn.addEventListener('click', () => {
+        confirmDialog(
+          'Restaurer la version précédente des hooks ?\n\nLe settings.json actuel sera remplacé par la sauvegarde. La version actuelle est conservée comme nouvelle sauvegarde -- tu pourras revenir en arrière.',
+          () => withBusy(restoreBtn, async () => {
+            try {
+              const resp = await API.post(restoreUrl, {});
+              const restored = (resp && resp.hooks) || {};
+              textarea.value = JSON.stringify(restored, null, 2);
+              guard.markSaved();
+              toastOk('Version précédente restaurée');
+              close();
+            } catch (e) { toastErr(e.message); }
+          }),
+          { danger: true }
+        );
+      });
+      box.appendChild(restoreBtn);
+      restoreHost.appendChild(box);
+    })();
     save.addEventListener('click', () => withBusy(save, async () => {
       let hooks;
       try { hooks = JSON.parse(body.querySelector('[name=hooks]').value); }

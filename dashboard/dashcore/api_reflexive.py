@@ -270,6 +270,38 @@ def reject_proposal(proposal_id: str, body: dict) -> tuple[int, dict]:
     return 200, {"ok": True, "id": pid, "status": "rejected"}
 
 
+def revert_proposal(proposal_id: str, body: dict) -> tuple[int, dict]:
+    """Annule une décision : repasse une proposition traitée/rejetée en `pending`.
+
+    Réversibilité du lot D : « Marquer comme traitée » (apply_proposal) et
+    « Rejeter » (reject_proposal) ne mutent AUCUN fichier -- ils n'enregistrent
+    qu'une décision en DB. L'annulation est donc un simple changement de
+    statut, sans I/O fichier à défaire. On efface aussi `applied_at` et
+    `rejection_reason` pour ne pas laisser de métadonnées de décision périmées.
+
+    Seuls `applied` et `rejected` sont annulables (statuts « décidés »). Une
+    proposition déjà `pending` n'a rien à annuler ; `reverted` non plus.
+    """
+    try:
+        pid = int(proposal_id)
+    except ValueError:
+        return 400, {"error": "id invalide"}
+    with connect() as c:
+        p = c.execute("SELECT status FROM proposals WHERE id = ?", (pid,)).fetchone()
+        if not p:
+            return 404, {"error": "proposition inconnue"}
+        if p["status"] not in ("applied", "rejected"):
+            return 409, {"error": f"non annulable au statut '{p['status']}'"}
+        c.execute(
+            "UPDATE proposals SET status = 'pending', applied_at = NULL, "
+            "rejection_reason = NULL WHERE id = ?",
+            (pid,),
+        )
+        c.commit()
+    log.info("Reflexive: proposition %s annulée (retour en attente)", pid)
+    return 200, {"ok": True, "id": pid, "status": "pending"}
+
+
 # ─── Workspace opt-in ──────────────────────────────────────────────────────
 
 def _toggle_workspace(ws_id: str, enabled: bool) -> tuple[int, dict]:
