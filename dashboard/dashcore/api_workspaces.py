@@ -38,11 +38,19 @@ from dashcore.helpers import (
 
 
 def list_templates() -> list[dict]:
+    # Import local pour eviter le cycle d'import api_overlays -> helpers ->
+    # api_workspaces. Les overlays sont des dossiers de `templates/`
+    # marques par `.nebula-overlay.json` -- on les filtre ici pour qu'ils
+    # n'apparaissent pas dans la liste des templates (ils ont leur propre
+    # route `/api/overlays`).
+    from dashcore.api_overlays import is_overlay_dir
     if not TEMPLATES_DIR.exists():
         return []
     out = []
     for d in sorted(TEMPLATES_DIR.iterdir()):
         if not d.is_dir():
+            continue
+        if is_overlay_dir(d):
             continue
         meta_path = d / ".template.json"
         meta = read_json(meta_path, {}) or {}
@@ -220,6 +228,11 @@ _PLACEHOLDER_RE = re.compile(r"\{\{(name|label|description|tools|emoji|date)\}\}
 # flagger les interpolations env shell ${HOME} (qui ne sont pas des
 # placeholders de template Nebula).
 _PLACEHOLDER_CANDIDATE_RE = re.compile(r"(?<!\$)\{\{?\s*(\w+)\s*\}?\}")
+# Placeholder "runtime" : `{{snake_case}}` syntaxiquement clean mais inconnu
+# de Nebula. Convention : c'est un slot que Claude remplira au moment de
+# rediger son rapport (ex. `{{cible}}`, `{{nb_critique}}` dans un template
+# audit). On les groupe en `info` au lieu d'inonder le linter de warn.
+_SNAKE_CASE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
@@ -232,7 +245,14 @@ def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
 
     suggestions: list[dict] = []
     placeholders_used: set[str] = set()
-    malformed_placeholders: dict[str, str] = {}  # texte fautif -> chemin fichier
+    # Mal-formes : 1 ligne `warn` par occurrence (texte litteral ne sera pas
+    # substitue). Cle = texte brut fautif, valeur = chemin du fichier.
+    malformed_placeholders: dict[str, str] = {}
+    # Runtime placeholders : `{{snake_case}}` clean mais inconnu de Nebula.
+    # On groupe par fichier pour eviter de cracher 80 lignes sur un seul
+    # template audit. Cle = chemin de fichier, valeur = liste ordonnee
+    # (deduplicee) des placeholders runtime trouves dans ce fichier.
+    runtime_placeholders_per_file: dict[str, list[str]] = {}
     has_claude_md = False
     has_gitignore = False
     has_readme = False
@@ -261,15 +281,30 @@ def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
             text = entry.read_text(encoding="utf-8", errors="ignore")
             for m in _PLACEHOLDER_RE.finditer(text):
                 placeholders_used.add(m.group(1))
-            # Détection des placeholders mal formés : tout candidat dont le
-            # texte exact n'est pas un placeholder valide ({{<known>}} sans
-            # espace). Couvre {{nam}} (nom inconnu), {label} (accolade simple),
-            # {{ name }} (espaces) - qui resteraient littéraux dans le workspace.
+            # Classification des candidats :
+            #   - exact `{{<known>}}` (sans espace) -> placeholder valide, ok.
+            #   - exact `{{<snake_case_inconnu>}}` -> placeholder "runtime"
+            #     (Claude le remplira au moment de generer son rapport),
+            #     niveau info groupe par fichier.
+            #   - tout le reste ({label}, {{ name }}, {{X-Y}}...) -> mal forme,
+            #     niveau warn 1 ligne par occurrence (resterait litteral).
+            seen_runtime_in_file: set[str] = set()
             for m in _PLACEHOLDER_CANDIDATE_RE.finditer(text):
                 raw = m.group(0)
                 word = m.group(1)
-                valid = (raw == "{{" + word + "}}" and word in _KNOWN_PLACEHOLDERS)
-                if not valid and raw not in malformed_placeholders:
+                is_exact_double = (raw == "{{" + word + "}}")
+                if is_exact_double and word in _KNOWN_PLACEHOLDERS:
+                    continue  # placeholder valide Nebula
+                if is_exact_double and _SNAKE_CASE_RE.match(word):
+                    # `{{snake_case}}` bien forme mais inconnu = placeholder
+                    # runtime. Groupe par fichier, dedup par word.
+                    if word not in seen_runtime_in_file:
+                        seen_runtime_in_file.add(word)
+                        runtime_placeholders_per_file.setdefault(rel, []).append(word)
+                    continue
+                # Sinon : vraiment mal forme (accolade simple, espaces,
+                # caracteres invalides). Warn 1 ligne par occurrence.
+                if raw not in malformed_placeholders:
                     malformed_placeholders[raw] = rel
         except OSError:
             continue
@@ -287,9 +322,23 @@ def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
     for raw, rel in sorted(malformed_placeholders.items()):
         suggestions.append({
             "level": "warn",
-            "msg": f"Placeholder inconnu/mal formé : « {raw} » ({rel}) - "
+            "msg": f"Placeholder mal formé : « {raw} » dans {rel} — "
                    f"ne sera pas substitué et restera littéral dans le workspace créé. "
                    f"Placeholders valides : {', '.join('{{' + p + '}}' for p in sorted(_KNOWN_PLACEHOLDERS))}.",
+        })
+    # Runtime placeholders : 1 ligne `info` par fichier (premiers 10 + queue
+    # ". . . et N autres"). Format compact pour ne pas saturer la modale
+    # Qualite d'un template audit qui en compte 90.
+    for rel in sorted(runtime_placeholders_per_file):
+        words = runtime_placeholders_per_file[rel]
+        shown = ", ".join("{{" + w + "}}" for w in words[:10])
+        tail = f" — et {len(words) - 10} autres" if len(words) > 10 else ""
+        n = len(words)
+        suggestions.append({
+            "level": "info",
+            "msg": f"{n} placeholder{'s' if n > 1 else ''} runtime détecté{'s' if n > 1 else ''} "
+                   f"dans {rel} (rempli{'s' if n > 1 else ''} par Claude au moment d'utiliser "
+                   f"le template) : {shown}{tail}.",
         })
 
     declared = {"name", "label", "description", "tools", "emoji", "date"}
@@ -1152,19 +1201,31 @@ def create_workspace(payload: dict) -> tuple[int, dict]:
     desc  = (payload.get("description") or "").strip()
     tools = (payload.get("tools") or "").strip()
     template = (payload.get("template") or "blank").strip()
+    # Overlays optionnels appliques apres le template de base. Liste d'ids
+    # validee individuellement -- un overlay inconnu ne casse pas la creation
+    # mais est trace dans la reponse pour information.
+    overlays_in = payload.get("overlays") or []
+    if not isinstance(overlays_in, list):
+        return 400, {"error": "overlays doit etre une liste d'ids"}
 
     if not safe_id(ws_id):
         return 400, {"error": "id invalide (a-z, 0-9, -, _)"}
     if not safe_id(template):
         return 400, {"error": "template invalide"}
 
-    ws_dir = WORKSPACES_DIR / ws_id
-    if ws_dir.exists():
-        return 409, {"error": f"Workspace déjà existant : {ws_id}"}
-
+    # Refuse explicitement qu'un overlay soit choisi comme template de base.
+    # Sinon la dualite template/overlay serait subtilement violee.
+    from dashcore.api_overlays import is_overlay_dir, apply_overlay
     tpl_dir = TEMPLATES_DIR / template
     if not tpl_dir.exists():
         return 400, {"error": f"Template introuvable : {template}"}
+    if is_overlay_dir(tpl_dir):
+        return 400, {"error": f"« {template} » est un overlay, pas un template de base "
+                              f"(à passer via le champ `overlays`, pas `template`)"}
+
+    ws_dir = WORKSPACES_DIR / ws_id
+    if ws_dir.exists():
+        return 409, {"error": f"Workspace déjà existant : {ws_id}"}
 
     ws_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1177,6 +1238,26 @@ def create_workspace(payload: dict) -> tuple[int, dict]:
         "emoji": emoji,
     }
     created = apply_template(tpl_dir, ws_dir, vars)
+
+    # Application des overlays dans l'ordre soumis. Chaque overlay est
+    # idempotent (ne reecrit jamais un fichier deja present), donc l'ordre
+    # n'affecte que les conflits inter-overlays (premier servi). On collecte
+    # un resume par overlay pour le retour API.
+    overlays_applied: list[dict] = []
+    for ov_id in overlays_in:
+        if not isinstance(ov_id, str) or not safe_id(ov_id):
+            overlays_applied.append({"id": ov_id, "ok": False, "error": "id invalide"})
+            continue
+        status, result = apply_overlay(ws_id, ov_id, vars)
+        if status == 200:
+            overlays_applied.append({
+                "id": ov_id, "ok": True,
+                "copied": result.get("copied", []),
+                "skipped": result.get("skipped", []),
+            })
+        else:
+            overlays_applied.append({"id": ov_id, "ok": False, "error": result.get("error")})
+
     write_launch_bat(ws_id, label, str(ws_dir))
 
     with _MUTATION_LOCK:
@@ -1190,7 +1271,10 @@ def create_workspace(payload: dict) -> tuple[int, dict]:
             "template": template,
         })
         write_json(WORKSPACES_JSON, data)
-    return 201, {"ok": True, "id": ws_id, "template": template, "files": created}
+    return 201, {
+        "ok": True, "id": ws_id, "template": template,
+        "files": created, "overlays": overlays_applied,
+    }
 
 
 def update_workspace(ws_id: str, payload: dict) -> tuple[int, dict]:

@@ -168,6 +168,17 @@ async function renderWorkspace(wsId) {
   }
   page.appendChild(cfgBar);
 
+  // ── Modules optionnels (overlays appliquables sur le workspace) ──
+  // Affiche un bouton « Activer » par overlay disponible. Idempotent :
+  // si l'overlay est deja applique (signature_file present), badge
+  // « Activé » + bouton « Ré-appliquer » qui ne copiera que les fichiers
+  // manquants (utile si l'utilisateur a perdu un fichier).
+  if ((STATE.overlays || []).length) {
+    const modulesHost = el('div');
+    page.appendChild(modulesHost);
+    renderWsOverlays(w.id, modulesHost);
+  }
+
   // ── Trio MCPs / Skills / Plugins (full width, 3 columns) ──
   page.appendChild(el('div', 'section-label', '<span class="num">C.</span> Extensions actives'));
   const trio = el('div', 'ws-trio');
@@ -220,6 +231,73 @@ async function renderWorkspace(wsId) {
   renderWsFileExplorer(w.id, fsHost);
 
   c.appendChild(page);
+}
+
+/* ================================================================
+   WORKSPACE OVERLAYS (Modules optionnels sur la page workspace detail)
+   ================================================================
+   Permet d'appliquer un overlay (paquet de fichiers, ex.
+   claude-self-improving) sur un workspace existant.
+   Idempotent cote backend : ne reecrit jamais un fichier deja present.
+   ================================================================ */
+async function renderWsOverlays(wsId, host) {
+  host.innerHTML = '';
+  host.appendChild(el('div', 'section-label', '<span class="num">B-bis.</span> Modules optionnels'));
+  const card = el('div', 'card');
+  const list = el('div', 'stack');
+  card.appendChild(list);
+  host.appendChild(card);
+
+  // Re-fetch l'etat actif/inactif pour ce workspace specifiquement (les
+  // STATE.overlays globaux ne portent pas l'info active=true|false).
+  let overlays;
+  try {
+    const r = await API.get(`/api/workspaces/${wsId}/overlays`);
+    overlays = r.overlays || [];
+  } catch (e) {
+    list.appendChild(el('div', 'muted', `Impossible de charger les modules : ${escapeHtml(e.message)}`));
+    return;
+  }
+  if (!overlays.length) {
+    list.appendChild(el('div', 'muted', 'Aucun module disponible.'));
+    return;
+  }
+
+  for (const ov of overlays) {
+    const row = el('div', 'list-row');
+    row.innerHTML = `
+      <div class="list-row-main">
+        <div class="list-row-name">
+          ${escapeHtml(ov.emoji || '🧩')} ${escapeHtml(ov.label || ov.id)}
+          ${ov.active ? '<span class="badge badge-ok" style="margin-left:8px">Activé</span>' : ''}
+        </div>
+        <div class="list-row-desc">${escapeHtml(ov.description || '')}</div>
+        <div class="muted" style="font-size:11px;margin-top:2px">${ov.file_count} fichier${ov.file_count > 1 ? 's' : ''} dans ce module</div>
+      </div>
+    `;
+    const actionLabel = ov.active ? 'Ré-appliquer (compléter les fichiers manquants)' : 'Activer';
+    const actionCls = ov.active ? 'btn-sm btn-ghost' : 'btn-sm btn-primary';
+    const actionIcon = ov.active ? I.refresh : I.plus;
+    const applyBtn = btn(actionLabel, actionCls, actionIcon);
+    applyBtn.title = ov.active
+      ? `Ré-applique l'overlay : ne copie que les fichiers absents, n'écrase rien.`
+      : `Copie ${ov.file_count} fichier(s) dans ce workspace (idempotent).`;
+    applyBtn.addEventListener('click', () => withBusy(applyBtn, async () => {
+      try {
+        const r = await API.post(`/api/workspaces/${wsId}/overlays/${ov.id}`, {});
+        const nc = (r.copied || []).length;
+        const ns = (r.skipped || []).length;
+        if (nc === 0 && ns > 0) {
+          toastOk(`Module déjà complet (${ns} fichier(s) déjà présent(s))`);
+        } else {
+          toastOk(`Module appliqué · ${nc} ajouté(s), ${ns} déjà présent(s)`);
+        }
+        renderWsOverlays(wsId, host);  // refresh badges
+      } catch (e) { toastErr(e.message); }
+    }));
+    row.appendChild(applyBtn);
+    list.appendChild(row);
+  }
 }
 
 /* ================================================================
@@ -2495,6 +2573,29 @@ function renderGlobalSkills(host) {
    ================================================================ */
 function modalNewWorkspace() {
   const body = el('div');
+  // Section "Modules optionnels" : checkboxes des overlays disponibles.
+  // L'overlay est applique APRES le template de base (idempotent, ne
+  // touche pas aux fichiers deja generes par le template).
+  const overlays = STATE.overlays || [];
+  const overlaysSection = overlays.length ? `
+    <div class="field">
+      <label class="field-label">Modules optionnels</label>
+      <div class="muted" style="font-size:12px;margin-bottom:6px">
+        Paquets de fichiers appliqués par-dessus le template choisi. N'écrasent jamais un fichier déjà présent.
+      </div>
+      <div class="stack" style="gap:6px" data-overlays-host>
+        ${overlays.map(o => `
+          <label class="checkbox-row" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
+            <input type="checkbox" name="overlay" value="${escapeHtml(o.id)}" style="margin-top:3px">
+            <div>
+              <div style="font-weight:500">${escapeHtml(o.emoji || '🧩')} ${escapeHtml(o.label || o.id)}</div>
+              <div class="muted" style="font-size:12px">${escapeHtml(o.description || '')}</div>
+            </div>
+          </label>
+        `).join('')}
+      </div>
+    </div>
+  ` : '';
   body.innerHTML = `
     <div class="field-row">
       <div class="field"><label class="field-label">ID *</label><input class="input mono" name="id" placeholder="mon-projet"></div>
@@ -2504,6 +2605,7 @@ function modalNewWorkspace() {
     <div class="field"><label class="field-label">Description</label><input class="input" name="description"></div>
     <div class="field"><label class="field-label">Outils / contexte</label><input class="input" name="tools" placeholder="Python, Docker, n8n..."></div>
     <div class="field"><label class="field-label">Template</label><select class="select" name="template">${STATE.templates.map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.emoji || '📦')} ${escapeHtml(t.label || t.id)}</option>`).join('') || '<option value="blank">Blank</option>'}</select></div>
+    ${overlaysSection}
   `;
   const cancel = btn('Annuler', 'btn-ghost');
   const create = btn('Créer', 'btn-primary', I.plus);
@@ -2511,9 +2613,30 @@ function modalNewWorkspace() {
   cancel.addEventListener('click', close);
   create.addEventListener('click', () => withBusy(create, async () => {
     const get = n => body.querySelector(`[name=${n}]`).value.trim();
-    const payload = { id: get('id'), emoji: get('emoji'), label: get('label'), description: get('description'), tools: get('tools'), template: get('template') || 'blank' };
+    const selectedOverlays = Array.from(body.querySelectorAll('input[name="overlay"]:checked')).map(el => el.value);
+    const payload = {
+      id: get('id'), emoji: get('emoji'), label: get('label'),
+      description: get('description'), tools: get('tools'),
+      template: get('template') || 'blank',
+      overlays: selectedOverlays,
+    };
     if (!payload.id) { toastErr('ID requis'); return; }
-    try { await API.post('/api/workspaces', payload); toastOk('Workspace créé'); close(); STATE.loading = true; location.hash = `#/workspace/${payload.id}`; }
+    try {
+      const r = await API.post('/api/workspaces', payload);
+      // Resume des overlays appliques (s'il y en a) : on ne fait pas
+      // d'echec bloquant si un overlay echoue, on remonte juste un toast
+      // d'info pour ne pas masquer la creation reussie du workspace.
+      const ovApplied = (r.overlays || []).filter(o => o.ok);
+      const ovFailed = (r.overlays || []).filter(o => !o.ok);
+      if (ovApplied.length) {
+        const n = ovApplied.reduce((s, o) => s + (o.copied || []).length, 0);
+        toastOk(`Workspace créé · ${ovApplied.length} module(s) appliqué(s), ${n} fichier(s) ajouté(s)`);
+      } else {
+        toastOk('Workspace créé');
+      }
+      for (const f of ovFailed) toastErr(`Overlay ${f.id} : ${f.error || 'échec'}`);
+      close(); STATE.loading = true; location.hash = `#/workspace/${payload.id}`;
+    }
     catch (e) { toastErr(e.message); }
   }));
 }

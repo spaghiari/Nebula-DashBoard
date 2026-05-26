@@ -47,6 +47,9 @@ from dashcore.api_workspaces import (
     get_global_hooks, set_global_hooks, register_existing_workspace,
     get_hooks_errors, get_hooks_backup, restore_hooks_backup,
 )
+from dashcore.api_overlays import (
+    list_overlays, apply_overlay, get_overlay, overlay_is_active,
+)
 from dashcore.api_files import (
     list_tree as fs_list_tree,
     read_file as fs_read_file,
@@ -276,6 +279,49 @@ def h_del_template_file(q, b, tid):
     rel = q.get("path", [""])[0]
     return delete_template_file(tid, rel)
 
+# -- Overlays ----------------------------------------------------------------
+# Un overlay est un paquet de fichiers applique PAR-DESSUS un template
+# (ex. claude-self-improving). Cf. dashcore/api_overlays.py pour le marker
+# `.nebula-overlay.json` et la logique d'idempotence.
+def h_get_overlays(q, b):
+    """Liste les overlays disponibles."""
+    return 200, {"overlays": list_overlays()}
+
+def h_get_ws_overlays(q, b, ws):
+    """Pour un workspace donne, indique pour chaque overlay s'il est deja
+    actif (heuristique via signature_file). Sert au front a savoir s'il
+    affiche un bouton « Activer » ou un badge « Active »."""
+    if not safe_id(ws):
+        return 400, {"error": "id invalide"}
+    from dashcore.helpers import resolve_ws_dir as _resolve
+    ws_dir = _resolve(ws)
+    if not ws_dir.exists():
+        return 404, {"error": "workspace absent sur disque"}
+    out = []
+    for ov in list_overlays():
+        out.append({**ov, "active": overlay_is_active(ws_dir, ov)})
+    return 200, {"overlays": out}
+
+def h_post_apply_overlay(q, b, ws, ov_id):
+    """Applique un overlay sur un workspace existant (idempotent)."""
+    if not safe_id(ws):
+        return 400, {"error": "id invalide"}
+    # On reutilise les memes vars que create_workspace pour que les
+    # placeholders ({{name}}, {{label}}, etc.) soient substitues coherament.
+    import datetime as _dt
+    ws_obj = next((x for x in list_workspaces() if x["id"] == ws), None)
+    if not ws_obj:
+        return 404, {"error": "workspace absent du registre"}
+    vars = {
+        "name": ws_obj["id"],
+        "label": ws_obj.get("label") or ws_obj["id"],
+        "description": ws_obj.get("description") or "(a completer)",
+        "tools": "(a completer)",
+        "date": _dt.date.today().isoformat(),
+        "emoji": ws_obj.get("emoji") or "📁",
+    }
+    return apply_overlay(ws, ov_id, vars)
+
 # ── Skills ──────────────────────────────────────────────────────────────────
 def h_get_skills(q, b):                     return 200, {"global": list_skills_global()}
 def h_get_skill_detail(q, b, scope, name):  return get_skill_detail(scope, name)
@@ -471,6 +517,10 @@ ROUTES_GET = [
     (re.compile(rf"^/api/templates/({_ID})/quality$"),                                      h_get_template_quality),
     (re.compile(rf"^/api/templates/({_ID})/preview$"),                                      h_get_template_preview),
     (re.compile(rf"^/api/templates/({_ID})$"),                                              h_get_template_detail),
+    # Overlays (paquets de fichiers appliques par-dessus un template, cf.
+    # dashcore/api_overlays.py)
+    (re.compile(rf"^/api/overlays$"),                                                       h_get_overlays),
+    (re.compile(rf"^/api/workspaces/({_ID})/overlays$"),                                    h_get_ws_overlays),
     # Skills
     (re.compile(rf"^/api/skills$"),                                                         h_get_skills),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/content$"),                              h_get_skill_content),
@@ -539,6 +589,8 @@ ROUTES_POST = [
     (re.compile(rf"^/api/templates$"),                                                      h_post_create_template),
     (re.compile(rf"^/api/templates/({_ID})/meta$"),                                         h_post_template_meta),
     (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_post_template_file),
+    # Overlays : application sur un workspace existant (idempotent)
+    (re.compile(rf"^/api/workspaces/({_ID})/overlays/({_ID})$"),                            h_post_apply_overlay),
     # Skills
     (re.compile(rf"^/api/skills$"),                                                         h_post_create_skill),
     (re.compile(rf"^/api/skills/copy$"),                                                    h_post_copy_skill),

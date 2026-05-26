@@ -1,0 +1,7 @@
+{
+  "id": "claude-self-improving",
+  "label": "Auto-amélioration de Claude",
+  "description": "Ajoute une mémoire structurée (.claude/memory), un pipeline d'auto-amélioration (improvements.md, ideas.md, backlog.md, roadmap.md), des digests hiérarchiques, agents, commands et hooks pré-commit. S'applique par-dessus un template existant — n'écrase aucun fichier déjà présent dans le workspace.",
+  "emoji": "🧠",
+  "signature_file": ".claude/improvements.md"
+}

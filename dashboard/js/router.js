@@ -22,11 +22,12 @@
 'use strict';
 
 async function loadAll() {
-  const [ws, mcps, env, tpls, plugins, skills, uiState, library, sessions] = await Promise.all([
+  const [ws, mcps, env, tpls, overlays, plugins, skills, uiState, library, sessions] = await Promise.all([
     safe('/api/workspaces', { workspaces: [] }),
     safe('/api/mcps',       { mcps: [] }),
     safe('/api/env',        { keys: [], file: null, exists: false }),
     safe('/api/templates',  { templates: [] }),
+    safe('/api/overlays',   { overlays: [] }),
     safe('/api/plugins',    { enabled: {}, count: 0 }),
     safe('/api/skills',     { global: [] }),
     safe('/api/ui-state',   { theme: 'nebula', onboarded: false }),
@@ -39,6 +40,7 @@ async function loadAll() {
   STATE.envFile = env.file;
   STATE.envExists = env.exists;
   STATE.templates = tpls.templates || [];
+  STATE.overlays = overlays.overlays || [];
   STATE.plugins = plugins;
   STATE.skills = skills.global || [];
   STATE.skillsLibrary = library.skills || [];

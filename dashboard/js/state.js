@@ -22,6 +22,7 @@ const STATE = {
   envFile: null,
   envExists: false,
   templates: [],
+  overlays: [],     // overlays Nebula (paquets de fichiers opt-in par-dessus un template)
   plugins: { enabled: {}, count: 0 },
   skills: [],
   skillsLibrary: [],

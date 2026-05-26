@@ -1,5 +1,0 @@
-{
-  "label": "Claude auto-amelioration",
-  "description": "Squelette complet pour piloter Claude Code avec memoire structuree, pipeline d'auto-amelioration 4 stages, et digests. 5 registres, 11 hubs memoire, 13 doctrines, hooks pre-commit.",
-  "emoji": "🧠"
-}
