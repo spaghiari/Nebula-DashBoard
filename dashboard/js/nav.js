@@ -19,7 +19,6 @@ const NAV_ITEMS = [
   { id: 'skills',    label: 'Skills',      route: '#/skills',    icon: I.sparkle, key: 'k' },
   { id: 'templates', label: 'Templates',   route: '#/templates', icon: I.layers,  key: 't' },
   { section: 'Système' },
-  { id: 'reflexive', label: 'Reflexive',   route: '#/reflexive', icon: I.brain,   key: 'r' },
   { id: 'tools',     label: 'Outils',      route: '#/tools',     icon: I.tools,   key: 'o' },
   { id: 'aide',      label: 'Aide',        route: '#/aide',      icon: I.book,    key: 'a' },
 ];
@@ -46,10 +45,10 @@ function renderSidebar() {
   updateActiveNav();
 }
 
-// Met à jour le badge compteur d'une entrée de nav (lot E item 3).
-// count <= 0 (ou non-fini) -> badge caché. Robuste si la sidebar n'est pas
-// encore rendue (appel précoce au boot).
-function setNavBadge(itemId, count) {
+// Met à jour le badge compteur d'une entrée de nav. count <= 0 (ou non-fini)
+// -> badge caché. Robuste si la sidebar n'est pas encore rendue (appel précoce
+// au boot). Helper générique, prêt à être recâblé sur un futur compteur.
+function setNavBadge(itemId, count, label) {
   const link = $(`.nav-link[data-id="${itemId}"]`, $('#sidebar'));
   if (!link) return;
   const badge = link.querySelector('[data-nav-badge]');
@@ -61,19 +60,8 @@ function setNavBadge(itemId, count) {
     return;
   }
   badge.textContent = n > 99 ? '99+' : String(n);
-  badge.title = `${n} proposition(s) Reflexive en attente`;
+  badge.title = label || `${n} en attente`;
   badge.hidden = false;
-}
-
-// Rafraîchit le badge « propositions en attente » de l'entrée Reflexive.
-// Source : GET /api/reflexive/stats (proposals_pending). Appelé au boot,
-// après une action sur une proposition, et au rendu de l'overview Reflexive.
-// Silencieux : un blip réseau ne doit pas casser la nav.
-async function refreshReflexiveBadge() {
-  try {
-    const stats = await API.get('/api/reflexive/stats?days=30');
-    setNavBadge('reflexive', stats && stats.proposals_pending);
-  } catch { /* silencieux */ }
 }
 
 function updateActiveNav() {

@@ -71,14 +71,6 @@ from dashcore.system_update import (
     system_recover_stash, system_drop_stash, _list_nebula_stashes,
 )
 from dashcore.api_ui_state import get_ui_state, patch_ui_state
-from dashcore.api_reflexive import (
-    stats as reflexive_stats,
-    list_interactions, get_interaction,
-    list_proposals, get_proposal, apply_proposal, reject_proposal, revert_proposal,
-    enable_workspace as reflexive_enable_ws,
-    disable_workspace as reflexive_disable_ws,
-    run_diagnostician, list_measurement_plans,
-)
 from dashcore.api_plugins import (
     list_plugins, list_marketplace_plugins, read_plugin_readme,
     list_installed_plugins, uninstall_plugin,
@@ -377,19 +369,6 @@ def h_get_search(q, b):
 def h_get_setup_scan(q, b):      return scan_claude_config()
 def h_get_ui_state(q, b):        return get_ui_state()
 def h_post_ui_state(q, b):       return patch_ui_state(b)
-# ── Reflexive ───────────────────────────────────────────────────────────────
-def h_get_reflexive_stats(q, b):                 return reflexive_stats(q)
-def h_get_reflexive_interactions(q, b):          return list_interactions(q)
-def h_get_reflexive_interaction(q, b, iid):      return get_interaction(iid)
-def h_get_reflexive_proposals(q, b):             return list_proposals(q)
-def h_get_reflexive_proposal(q, b, pid):         return get_proposal(pid)
-def h_get_reflexive_measurement_plans(q, b):     return list_measurement_plans(q)
-def h_post_reflexive_apply(q, b, pid):           return apply_proposal(pid, b or {})
-def h_post_reflexive_reject(q, b, pid):          return reject_proposal(pid, b or {})
-def h_post_reflexive_revert(q, b, pid):          return revert_proposal(pid, b or {})
-def h_post_reflexive_ws_enable(q, b, ws):        return reflexive_enable_ws(ws, b or {})
-def h_post_reflexive_ws_disable(q, b, ws):       return reflexive_disable_ws(ws, b or {})
-def h_post_reflexive_diagnostician(q, b):        return run_diagnostician(b or {})
 
 def h_get_system_version(q, b):
     check = (q.get("check", ["0"])[0] or "0") == "1"
@@ -531,13 +510,6 @@ ROUTES_GET = [
     (re.compile(rf"^/api/ui-state$"),                                                       h_get_ui_state),
     (re.compile(rf"^/api/system/version$"),                                                 h_get_system_version),
     (re.compile(rf"^/api/system/stashes$"),                                                 h_get_system_stashes),
-    # Reflexive
-    (re.compile(rf"^/api/reflexive/stats$"),                                                h_get_reflexive_stats),
-    (re.compile(rf"^/api/reflexive/interactions$"),                                         h_get_reflexive_interactions),
-    (re.compile(rf"^/api/reflexive/interactions/(\d+)$"),                                   h_get_reflexive_interaction),
-    (re.compile(rf"^/api/reflexive/proposals$"),                                            h_get_reflexive_proposals),
-    (re.compile(rf"^/api/reflexive/proposals/(\d+)$"),                                      h_get_reflexive_proposal),
-    (re.compile(rf"^/api/reflexive/measurement-plans$"),                                    h_get_reflexive_measurement_plans),
 ]
 
 ROUTES_POST = [
@@ -607,13 +579,6 @@ ROUTES_POST = [
     (re.compile(rf"^/api/system/reset$"),                                                   h_post_system_reset),
     (re.compile(rf"^/api/system/stash-recover$"),                                           h_post_system_stash_recover),
     (re.compile(rf"^/api/system/stash-drop$"),                                              h_post_system_stash_drop),
-    # Reflexive
-    (re.compile(rf"^/api/reflexive/proposals/(\d+)/apply$"),                                h_post_reflexive_apply),
-    (re.compile(rf"^/api/reflexive/proposals/(\d+)/reject$"),                               h_post_reflexive_reject),
-    (re.compile(rf"^/api/reflexive/proposals/(\d+)/revert$"),                               h_post_reflexive_revert),
-    (re.compile(rf"^/api/reflexive/workspace/({_ID})/enable$"),                             h_post_reflexive_ws_enable),
-    (re.compile(rf"^/api/reflexive/workspace/({_ID})/disable$"),                            h_post_reflexive_ws_disable),
-    (re.compile(rf"^/api/reflexive/diagnostician/run$"),                                    h_post_reflexive_diagnostician),
 ]
 
 ROUTES_DELETE = [
@@ -717,7 +682,7 @@ class Handler(BaseHTTPRequestHandler):
                          "/api/env/export-plain"}
     # Préfixes dont les mutations (POST/DELETE) exigent X-Nebula-XHR.
     # Les GET restent libres (lectures inoffensives).
-    _SENSITIVE_PREFIXES = ("/api/reflexive/",)
+    _SENSITIVE_PREFIXES: tuple[str, ...] = ()
 
     def _dispatch(self, method: str, body=None):
         parsed = urlparse(self.path)

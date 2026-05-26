@@ -6,7 +6,7 @@
    library, active sessions, per-ws MCPs).
    route : dispatcher hash-based vers renderHome / renderMCPs /
    renderPlugins / renderSkills / renderTemplates / renderTools /
-   renderHelp / renderReflexive / renderWorkspace.
+   renderHelp / renderWorkspace.
 
    RM-1 v1 "silent route" : sur refresh same-page post-action, pas de
    page-loader qui flash. La nouvelle DOM remplace l'ancienne d'un
@@ -88,7 +88,6 @@ async function route(opts) {
     if (hash === '#/templates') return await renderTemplates();
     if (hash === '#/tools') return await renderTools();
     if (hash === '#/aide' || hash.startsWith('#/aide/')) return await renderHelp();
-    if (hash === '#/reflexive' || hash.startsWith('#/reflexive/')) return await renderReflexive();
     const m = hash.match(/^#\/workspace\/([a-zA-Z0-9_-]+)$/);
     if (m) return await renderWorkspace(m[1]);
     location.hash = '#/';

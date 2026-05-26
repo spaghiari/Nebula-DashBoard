@@ -13,31 +13,71 @@ a { color: inherit; text-decoration: none; }
 img, svg { display: block; max-width: 100%; }
 [hidden] { display: none !important; }
 
+/* === FONTS (Geist, self-hosted offline) ========================= */
+/* Geist + Geist Mono (c) Vercel, sous licence SIL Open Font License 1.1.
+   woff2 servis localement depuis /assets/fonts/ -- aucun <link> CDN runtime
+   (l'app est 100% offline). font-display:swap : le texte s'affiche avec la
+   pile systeme de secours le temps du chargement, puis bascule sur Geist
+   sans bloquer le rendu. Si un fichier manque, la pile systeme de
+   --font-ui / --font-mono prend le relais (pas de FOIT). */
+@font-face {
+  font-family: "Geist"; font-style: normal; font-weight: 400;
+  font-display: swap; src: url("/assets/fonts/Geist-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist"; font-style: normal; font-weight: 500;
+  font-display: swap; src: url("/assets/fonts/Geist-Medium.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist"; font-style: normal; font-weight: 600;
+  font-display: swap; src: url("/assets/fonts/Geist-SemiBold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist"; font-style: normal; font-weight: 700;
+  font-display: swap; src: url("/assets/fonts/Geist-Bold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono"; font-style: normal; font-weight: 400;
+  font-display: swap; src: url("/assets/fonts/GeistMono-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Geist Mono"; font-style: normal; font-weight: 500;
+  font-display: swap; src: url("/assets/fonts/GeistMono-Medium.woff2") format("woff2");
+}
+
 /* === TOKENS ===================================================== */
 :root {
-  /* Surfaces */
-  --bg: #0a0a0f;
+  /* Surfaces -- profondeur "command center" (cf. prototype Nebula). */
+  --bg: #08080c;
   --bg-grid: rgba(255, 255, 255, 0.012);
-  --surface-1: #11111a;
-  --surface-2: #161620;
-  --surface-3: #1c1c28;
+  --surface-1: #101016;
+  --surface-2: #16161e;
+  --surface-3: #1d1d27;
   --hover: rgba(255, 255, 255, 0.04);
   --border: rgba(255, 255, 255, 0.07);
   --border-strong: rgba(255, 255, 255, 0.12);
 
   /* Text */
-  --text: #e7e7ef;
-  --text-muted: #8b8b9a;
+  --text: #edecf2;
+  --text-muted: #9897a6;
   /* --text-dim porte de l'info (.workspace-id, .session-meta, .mcp-cmd,
-     .kpi-label...) : remonte a >=4.5:1 sur surface-2. */
-  --text-dim: #7a7a88;
-  --text-on-accent: #0a0a0f;
+     .kpi-label...) : remonte a >=4.5:1 sur surface-2 (#828291 = 4.75:1). */
+  --text-dim: #828291;
+  --text-on-accent: #ffffff;
 
-  /* Accent */
-  --accent: #a78bfa;
-  --accent-2: #c4b5fd;
-  --accent-soft: rgba(167, 139, 250, 0.13);
-  --accent-glow: rgba(167, 139, 250, 0.35);
+  /* Accent -- iris premium + glow discret (cf. prototype). text-on-accent
+     passe a blanc : le fond accent est desormais assez sombre/sature pour
+     porter du texte blanc en AA (vs l'ancien violet clair sur noir). */
+  --accent: #7c74ff;
+  --accent-2: #a99fff;
+  --accent-soft: rgba(124, 116, 255, 0.13);
+  --accent-glow: rgba(124, 116, 255, 0.45);
+  /* --accent-strong : iris legerement assombri pour les SURFACES PLEINES qui
+     portent du texte blanc (.btn-primary, switch coche). Blanc/#675ef0 = 4.73:1
+     (AA texte normal) vs blanc/#7c74ff = 3.62 (echec). L'iris vif --accent
+     reste partout ou il est decoratif (halos, glow) ou en texte sur fond
+     sombre (--accent sur --bg = 5.5:1). */
+  --accent-strong: #675ef0;
 
   /* Editorial warm — used sparingly for index numbers, dividers */
   --warm: #f4a672;
@@ -53,18 +93,18 @@ img, svg { display: block; max-width: 100%; }
   --info: #60a5fa;
   --info-soft: rgba(96, 165, 250, 0.12);
 
-  /* Type */
-  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display",
+  /* Type -- Geist (self-hosted) en tete, pile systeme en secours offline. */
+  --font-ui: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display",
              "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono",
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono",
                "Fira Code", Consolas, "Roboto Mono", monospace;
 
   /* Spacing */
   --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
   --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px; --sp-12: 48px;
 
-  /* Radii */
-  --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-xl: 20px;
+  /* Radii -- echelle command-center (cf. prototype). */
+  --r-sm: 7px; --r-md: 10px; --r-lg: 14px; --r-xl: 20px;
 
   /* Shadows */
   --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.025) inset;
@@ -105,8 +145,8 @@ body {
 }
 
 :root {
-  --bg-glow-1: rgba(167, 139, 250, 0.08);
-  --bg-glow-2: rgba(244, 166, 114, 0.04);
+  --bg-glow-1: rgba(124, 116, 255, 0.10);
+  --bg-glow-2: rgba(58, 210, 159, 0.05);
 }
 
 /* === THEMES =================================================== */
@@ -128,6 +168,7 @@ body {
   --text-muted: #4a4658;
   --text-dim: #6b6878;
   --text-on-accent: #ffffff;
+  --accent-strong: var(--accent); /* #7c3aed : blanc dessus = 5.7:1 (AA OK) */
   --accent: #7c3aed;
   --accent-2: #6d28d9;
   --accent-soft: rgba(124, 58, 237, 0.1);
@@ -162,6 +203,22 @@ body {
 :root[data-theme="nebula-clair"] .input-search {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%234a4658' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><path d='m21 21-4.35-4.35'/></svg>");
 }
+/* Halos « nebuleuse » (--g1/--g2 poses par wsGradient) : HSL fixes en sat
+   78-82% qui jurent sur fond clair. On baisse drastiquement leur opacite
+   et celle des glows de gem en thème clair pour rester reposant. */
+:root[data-theme="nebula-clair"] .workspace-card::before,
+:root[data-theme="nebula-clair"] .featured-card::before,
+:root[data-theme="nebula-clair"] .ws-hero::before {
+  opacity: 0.08;
+}
+:root[data-theme="nebula-clair"] .workspace-card:hover::before { opacity: 0.16; }
+:root[data-theme="nebula-clair"] .featured-card:hover::before  { opacity: 0.18; }
+:root[data-theme="nebula-clair"] .featured-gem,
+:root[data-theme="nebula-clair"] .ws-row-gem,
+:root[data-theme="nebula-clair"] .ws-hero-gem {
+  /* glow accent attenue sur fond clair, sinon halo iris/jaune voyant */
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.06), 0 2px 10px rgba(0,0,0,0.08);
+}
 
 /* Marine : dark + bleu profond */
 :root[data-theme="marine"] {
@@ -178,6 +235,12 @@ body {
   --accent-2: #93c5fd;
   --accent-soft: rgba(96, 165, 250, 0.13);
   --accent-glow: rgba(96, 165, 250, 0.35);
+  /* Accent clair -> texte sombre sur fond accent (blanc echoue a 2.5:1).
+     --accent-strong = l'accent lui-meme (deja AA avec du texte sombre). */
+  --text-on-accent: #0a0a0f;
+  --accent-strong: var(--accent);
+  /* --text-dim releve : le defaut tombe a ~3:1 sur la surface bleue. */
+  --text-dim: #9a9aa6;
   --warm: #fbbf24;
   --warm-soft: rgba(251, 191, 36, 0.1);
 }
@@ -197,6 +260,10 @@ body {
   --accent-2: #5fc7be;
   --accent-soft: rgba(42, 161, 152, 0.14);
   --accent-glow: rgba(42, 161, 152, 0.35);
+  --text-on-accent: #0a0a0f;
+  --accent-strong: var(--accent);
+  /* --text-dim releve : le defaut tombe a ~2.7:1 sur la surface teal. */
+  --text-dim: #a8b3bb;
   --warm: #b58900;
   --warm-soft: rgba(181, 137, 0, 0.12);
 }
@@ -216,6 +283,10 @@ body {
   --accent-2: #f59e0b;
   --accent-soft: rgba(217, 119, 6, 0.14);
   --accent-glow: rgba(217, 119, 6, 0.35);
+  --text-on-accent: #0a0a0f;
+  --accent-strong: var(--accent);
+  /* --text-dim releve : le defaut tombe a ~3.1:1 sur la surface bronze. */
+  --text-dim: #9a9aa6;
   --warm: #fde68a;
   --warm-soft: rgba(253, 230, 138, 0.1);
 }
@@ -251,17 +322,19 @@ body {
   padding: 0 var(--sp-3);
   color: var(--text);
 }
+/* Logo Nebula : carre iris-degrade avec SVG icone (cercle + 4 rayons).
+   Match exact prototype command-center : gradient 140deg accent-2 -> accent
+   -> #5b4fe0, ombre premium (1px ring + glow iris). Inerte au clavier. */
 .brand-mark {
-  width: 22px; height: 22px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, var(--accent), var(--warm));
-  box-shadow: 0 0 18px var(--accent-glow), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
-  position: relative; flex-shrink: 0;
+  width: 26px; height: 26px;
+  border-radius: 8px;
+  display: grid; place-items: center;
+  color: #fff;
+  background: linear-gradient(140deg, var(--accent-2), var(--accent) 60%, #5b4fe0);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 4px 16px var(--accent-glow);
+  flex-shrink: 0;
 }
-.brand-mark::after {
-  content: ""; position: absolute; inset: 5px;
-  border-radius: 3px; background: var(--bg);
-}
+.brand-mark svg { width: 15px; height: 15px; }
 .brand-name {
   font-size: 15px; font-weight: 600; letter-spacing: -0.025em;
 }
@@ -320,7 +393,7 @@ body {
   border-radius: 3px;
   border: 1px solid var(--border);
 }
-/* Lot E item 3 : badge compteur (propositions Reflexive) sur l'entrée de nav.
+/* Badge compteur générique sur une entrée de nav (slot data-nav-badge).
    Tokenisé (--accent*) pour rester lisible dans les 5 thèmes. Placé avant le
    <kbd> : la marge auto du badge le pousse à droite, le kbd suit. */
 .nav-badge {
@@ -339,7 +412,7 @@ body {
 /* Quand le badge est visible, il prend le margin-left:auto ; le kbd revient
    à une marge fixe pour ne pas se télescoper avec le badge. */
 .nav-badge:not([hidden]) ~ kbd { margin-left: var(--sp-2); }
-/* Pastille sur un onglet (ex. Propositions Reflexive). */
+/* Pastille générique sur un onglet (compteur secondaire). */
 .tab-badge {
   margin-left: 6px;
   min-width: 16px; height: 16px;
@@ -385,11 +458,67 @@ body {
   border: 1px solid var(--border);
 }
 
-.sidebar-status {
+/* Carte profil en pied de sidebar (cf. prototype command-center) :
+   avatar gem + libelle + statut live + hote reel. */
+.sidebar-profile {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+.sidebar-profile-avatar {
+  width: 30px; height: 30px; flex-shrink: 0;
+  border-radius: 8px;
+  display: grid; place-items: center;
+  color: #fff;
+  /* Differenciation visuelle vs brand-mark (qui est iris pur) :
+     gradient vert -> iris pour signaler l'identite « personnelle ».
+     Match prototype command-center (avatar utilisateur). */
+  background: linear-gradient(135deg, var(--ok), var(--accent));
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 4px 16px var(--accent-glow);
+}
+.sidebar-profile-avatar svg { width: 15px; height: 15px; }
+.sidebar-profile-text { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sidebar-profile-name {
+  font-size: 13px; font-weight: 500; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sidebar-profile-status {
+  display: flex; align-items: center; gap: 5px;
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);
+}
+
+/* Bouton ⌘K / recherche dans la topbar (cf. prototype). Largeur fixe,
+   pousse les actions de page a droite via le justify-content du parent. */
+.cmdk {
   display: flex; align-items: center; gap: var(--sp-2);
-  padding: 0 var(--sp-3);
-  font-size: 11px;
+  margin-left: auto;
+  width: 280px; max-width: 38vw;
+  padding: 7px var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-1);
   color: var(--text-dim);
+  font-size: 13px;
+  transition: border-color var(--d-fast) var(--ease), background var(--d-fast) var(--ease), color var(--d-fast) var(--ease);
+}
+.cmdk:hover { border-color: var(--border-strong); background: var(--surface-2); color: var(--text-muted); }
+.cmdk:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cmdk svg { width: 14px; height: 14px; flex-shrink: 0; }
+.cmdk > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmdk kbd {
+  margin-left: auto; flex-shrink: 0;
+  font-family: var(--font-mono); font-size: 10px;
+  background: var(--bg);
+  padding: 1px 6px; border-radius: 3px;
+  border: 1px solid var(--border);
+}
+/* Sous ~720px la topbar manque de place : le bouton ⌘K se reduit a l'icone.
+   Le raccourci clavier '/' et Ctrl+K et le #open-palette sidebar restent. */
+@media (max-width: 720px) {
+  .cmdk { width: auto; }
+  .cmdk > span, .cmdk kbd { display: none; }
 }
 
 .main {
@@ -400,9 +529,11 @@ body {
 .topbar {
   position: sticky; top: 0; z-index: 20;
   height: var(--topbar-h);
-  background: rgba(10, 10, 15, 0.75);
-  backdrop-filter: blur(10px) saturate(140%);
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
+  /* Scrim translucide pose sur le fond : color-mix garde la teinte du
+     theme courant (--bg) tout en restant semi-transparent pour le blur. */
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
   border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 var(--sp-6);
@@ -455,10 +586,13 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .page-header-text { min-width: 0; flex: 1; }
+/* Eyebrow de page : mono majuscule espacee, ton neutre (--text-muted).
+   L'ancien --warm (ocre editorial) est remplace pour matcher l'esthetique
+   command-center du prototype (calme, pas d'accent decoratif chaud). */
 .page-eyebrow {
   font-family: var(--font-mono); font-size: 10.5px;
   letter-spacing: 0.18em; text-transform: uppercase;
-  color: var(--warm);
+  color: var(--text-muted);
   margin-bottom: var(--sp-2);
   display: flex; align-items: center; gap: var(--sp-2);
 }
@@ -486,7 +620,7 @@ body {
   margin: var(--sp-8) 0 var(--sp-4);
 }
 .section-label .num {
-  color: var(--warm); font-weight: 500;
+  color: var(--text-muted); font-weight: 500;
 }
 .section-label::after {
   content: ""; flex: 1; height: 1px;
@@ -584,12 +718,18 @@ body {
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .btn-primary {
-  background: var(--accent); color: var(--text-on-accent);
+  /* Fond plein --accent-strong (iris assombri) : garantit blanc/4.7:1 (AA)
+     SOUS le texte sur toute la surface. Le glow porte le cote "premium" du
+     prototype, pas un gradient (qui exposerait le texte a l'iris vif <4.5). */
+  background: var(--accent-strong);
+  color: var(--text-on-accent);
   border-color: transparent; font-weight: 600;
+  box-shadow: 0 2px 14px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 .btn-primary:hover {
-  background: var(--accent-2);
-  box-shadow: 0 0 0 4px var(--accent-soft);
+  background: var(--accent-strong);
+  box-shadow: 0 4px 22px color-mix(in srgb, var(--accent) 40%, transparent);
+  transform: translateY(-1px);
 }
 
 .btn-ghost {
@@ -730,7 +870,7 @@ body {
 .badge-warn  { background: var(--warn-soft);  color: var(--warn);  border-color: rgba(251,191,36,0.3); }
 .badge-err   { background: var(--err-soft);   color: var(--err);   border-color: rgba(248,113,113,0.3); }
 .badge-info  { background: var(--info-soft);  color: var(--info);  border-color: rgba(96,165,250,0.3); }
-.badge-accent{ background: var(--accent-soft); color: var(--accent); border-color: rgba(167,139,250,0.3); }
+.badge-accent{ background: var(--accent-soft); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 
 .chip {
   display: inline-flex; align-items: center; gap: 4px;
@@ -1074,7 +1214,7 @@ body {
 }
 .recipe-card.is-local {
   position: relative;
-  border-color: rgba(167, 139, 250, 0.25);
+  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 /* Éditeur GUI de recette : liste de paramètres dynamique */
@@ -1264,13 +1404,13 @@ body {
   letter-spacing: 0.05em;
   cursor: pointer;
   font-family: inherit;
-  box-shadow: 0 2px 8px rgba(167, 139, 250, 0.35);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent);
   transition: transform var(--d-fast) var(--ease), box-shadow var(--d-fast) var(--ease);
   animation: badge-glow 2s ease-in-out infinite;
 }
 .topbar-update-badge:hover {
   transform: translateY(-1px) scale(1.03);
-  box-shadow: 0 4px 12px rgba(167, 139, 250, 0.5);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 .topbar-update-dot {
   display: inline-block;
@@ -1280,8 +1420,8 @@ body {
   animation: pulse 1.5s ease-in-out infinite;
 }
 @keyframes badge-glow {
-  0%, 100% { box-shadow: 0 2px 8px rgba(167, 139, 250, 0.35); }
-  50%      { box-shadow: 0 2px 14px rgba(167, 139, 250, 0.6); }
+  0%, 100% { box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent); }
+  50%      { box-shadow: 0 2px 14px color-mix(in srgb, var(--accent) 60%, transparent); }
 }
 
 /* Diagnostic MCP : modal avec sections */
@@ -1381,7 +1521,7 @@ body {
 /* Bandeau "Mise en route" sur Home (apparaît tant que la checklist n'est pas à 6/6) */
 .home-quickstart {
   background: linear-gradient(135deg, var(--accent-soft) 0%, rgba(16, 185, 129, 0.06) 100%);
-  border: 1px solid rgba(167, 139, 250, 0.25);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   border-radius: 12px;
   padding: var(--sp-3) var(--sp-4);
   margin-bottom: var(--sp-4);
@@ -1469,7 +1609,7 @@ body {
 .ws-check-all {
   grid-column: 1 / -1;
   background: var(--accent-soft);
-  border-color: rgba(167, 139, 250, 0.3);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 /* === COMMAND PALETTE ========================================== */
@@ -1587,17 +1727,15 @@ body {
   padding: var(--sp-5);
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   overflow: hidden;
   box-shadow: var(--shadow-1);
+  transition: border-color var(--d-fast), transform var(--d-fast);
 }
-.kpi-card::before {
-  content: attr(data-index);
-  position: absolute;
-  top: var(--sp-4); right: var(--sp-5);
-  font-family: var(--font-mono); font-size: 10.5px;
-  letter-spacing: 0.18em; color: var(--warm); opacity: 0.85;
-}
+.kpi-card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
+/* Marqueur editorial "01./02./03." retire (n'existe pas dans le prototype
+   command-center). L'attribut data-index reste sur le markup (pas de risque
+   de regression JS) mais n'a plus de rendu. */
 .kpi-card::after {
   content: ""; position: absolute;
   inset: auto -20% -40% auto;
@@ -1622,6 +1760,16 @@ body {
   font-size: 12px; color: var(--text-muted);
   display: flex; align-items: center; gap: var(--sp-2);
 }
+/* Sparkline decoratif bas-droite (cf. prototype). Posé au-dessus du halo
+   radial ::after par ordre de peinture (les enfants reels passent devant
+   les pseudos). Inerte au clavier/souris -- decoratif uniquement. */
+.kpi-card .kpi-spark {
+  position: absolute;
+  right: 0; bottom: 0;
+  width: 90px; height: 38px;
+  opacity: 0.55;
+  pointer-events: none;
+}
 
 .home-grid {
   display: grid;
@@ -1644,30 +1792,44 @@ body {
   padding: var(--sp-5);
   background: var(--surface-1);
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
   text-align: left; width: 100%;
-  transition: all var(--d-norm) var(--ease);
+  transition: transform var(--d-norm) var(--ease), border-color var(--d-norm) var(--ease), box-shadow var(--d-norm) var(--ease);
   overflow: hidden;
   cursor: pointer;
 }
-.workspace-card::after {
+/* Halo "nebuleuse" derive du nom (--g1 pose par wsGradient). Discret au
+   repos, s'intensifie au survol. --g1 a un fallback sur l'accent pour les
+   cards sans gradient (defensif). */
+.workspace-card::before {
   content: "";
-  position: absolute; inset: 0;
-  background: linear-gradient(135deg, transparent 50%, var(--accent-soft));
-  opacity: 0; transition: opacity var(--d-norm) var(--ease);
+  position: absolute; right: -24px; top: -30px;
+  width: 120px; height: 120px; border-radius: 50%;
+  background: radial-gradient(circle, var(--g1, var(--accent)), transparent 66%);
+  opacity: 0.14; transition: opacity var(--d-norm) var(--ease);
   pointer-events: none;
 }
 .workspace-card:hover {
   border-color: var(--border-strong);
   transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  box-shadow: var(--shadow-2);
 }
-.workspace-card:hover::after { opacity: 1; }
+.workspace-card:hover::before { opacity: 0.3; }
 .workspace-card-header {
   display: flex; align-items: flex-start; justify-content: space-between;
   gap: var(--sp-3);
+  position: relative;
 }
-.workspace-emoji { font-size: 28px; line-height: 1; }
+/* Emoji du workspace presente comme "gem" a degrade nebuleuse. */
+.workspace-emoji {
+  font-size: 20px; line-height: 1;
+  width: 38px; height: 38px; flex-shrink: 0;
+  display: grid; place-items: center;
+  border-radius: var(--r-md);
+  background: linear-gradient(140deg, var(--g1, var(--accent)), var(--g2, var(--accent-2)));
+  box-shadow: 0 0 16px -5px var(--g1, var(--accent-glow));
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.35));
+}
 .workspace-name { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
 .workspace-id {
   font-family: var(--font-mono); font-size: 11px;
@@ -1744,6 +1906,186 @@ body {
 }
 .journal-text { white-space: pre-wrap; word-wrap: break-word; }
 
+/* --- Section « En cours » (workspaces avec session active) ----- */
+.featured-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-4);
+}
+.featured-card {
+  position: relative;
+  padding: var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  background: var(--surface-1);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform var(--d-norm) var(--ease), border-color var(--d-norm) var(--ease), box-shadow var(--d-norm) var(--ease);
+}
+.featured-card::before {
+  content: "";
+  position: absolute; left: -30px; top: -40px;
+  width: 160px; height: 160px; border-radius: 50%;
+  background: radial-gradient(circle, var(--g1, var(--accent)), transparent 68%);
+  opacity: 0.22; transition: opacity var(--d-norm) var(--ease);
+  pointer-events: none;
+}
+.featured-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-2);
+}
+.featured-card:hover::before { opacity: 0.34; }
+.featured-top { display: flex; align-items: center; gap: var(--sp-3); position: relative; }
+.featured-gem {
+  width: 46px; height: 46px; flex-shrink: 0;
+  border-radius: 13px;
+  display: grid; place-items: center;
+  font-size: 22px;
+  background: linear-gradient(140deg, var(--g1, var(--accent)), var(--g2, var(--accent-2)));
+  box-shadow: 0 0 22px -4px var(--g1, var(--accent-glow));
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
+}
+.featured-id-block { min-width: 0; }
+.featured-name {
+  font-size: 16px; font-weight: 600; letter-spacing: -0.01em;
+  display: flex; align-items: center; gap: var(--sp-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.featured-id { font-size: 11px; color: var(--text-dim); margin-top: 2px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.featured-live {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft);
+  color: var(--ok); animation: pulse-dot 2s infinite;
+}
+.featured-meta {
+  display: flex; flex-wrap: wrap; gap: var(--sp-4);
+  margin: var(--sp-4) 0;
+  font-size: 11.5px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  position: relative;
+}
+.featured-meta .u { color: var(--text-dim); }
+.featured-actions { display: flex; gap: var(--sp-2); position: relative; }
+
+/* --- Navigateur « Tous les workspaces » ----------------------- */
+.ws-browser-head { margin-top: var(--sp-6); flex-wrap: wrap; }
+.ws-tools {
+  margin-left: auto;
+  display: flex; align-items: center; gap: var(--sp-2);
+  text-transform: none; letter-spacing: normal;
+}
+.ws-search { position: relative; }
+.ws-search .input-search { width: 190px; height: 32px; padding-top: 0; padding-bottom: 0; }
+.ws-sort { width: auto; height: 32px; padding-top: 0; padding-bottom: 0; }
+.ws-view-toggle {
+  display: inline-flex; flex-shrink: 0;
+  border: 1px solid var(--border); border-radius: var(--r-sm);
+  overflow: hidden; background: var(--surface-1);
+}
+.ws-view-btn {
+  width: 32px; height: 32px;
+  display: grid; place-items: center;
+  color: var(--text-dim);
+  transition: background var(--d-fast) var(--ease), color var(--d-fast) var(--ease);
+}
+.ws-view-btn svg { width: 15px; height: 15px; }
+.ws-view-btn:hover { color: var(--text-muted); background: var(--hover); }
+.ws-view-btn.is-active { color: var(--text); background: var(--surface-3); }
+.ws-view-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ws-browser-empty {
+  grid-column: 1 / -1;
+  padding: var(--sp-8); text-align: center; font-size: 13px;
+  border: 1px dashed var(--border); border-radius: var(--r-md);
+}
+
+/* Grille nebuleuse : meme moteur que .workspace-grid, simple alias
+   semantique (le halo vient de .workspace-card::before). */
+.nebula-grid { /* herite de .workspace-grid */ }
+
+/* --- Liste dense (toggle) ------------------------------------- */
+.ws-list {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--surface-1);
+}
+.ws-list-head, .ws-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) 70px 90px 110px 64px;
+  gap: var(--sp-3);
+  align-items: center;
+  padding: 0 var(--sp-4);
+}
+.ws-list-head {
+  height: 38px;
+  font-family: var(--font-mono); font-size: 10.5px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.ws-list-head span:not(:first-child),
+.ws-row .ws-row-cell, .ws-row .ws-row-pill { text-align: right; justify-self: end; }
+.ws-row {
+  height: 50px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--d-fast) var(--ease);
+}
+.ws-row:last-child { border-bottom: 0; }
+.ws-row:hover { background: var(--hover); }
+.ws-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ws-row-name { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.ws-row-gem {
+  width: 28px; height: 28px; flex-shrink: 0;
+  border-radius: 8px; display: grid; place-items: center;
+  font-size: 14px;
+  background: linear-gradient(140deg, var(--g1, var(--accent)), var(--g2, var(--accent-2)));
+  box-shadow: 0 0 12px -5px var(--g1, var(--accent-glow));
+}
+.ws-row-text { min-width: 0; display: flex; flex-direction: column; }
+.ws-row-label {
+  font-size: 13px; font-weight: 500;
+  display: flex; align-items: center; gap: 6px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ws-row-live {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  background: var(--ok); color: var(--ok); animation: pulse-dot 2s infinite;
+}
+.ws-row-id { font-size: 10.5px; color: var(--text-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ws-row-cell { font-size: 13px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ws-row-cell.dim { color: var(--text-dim); }
+.ws-row-pill {
+  font-size: 11px; padding: 2px 9px; border-radius: 999px;
+  color: var(--text-dim); background: var(--surface-3);
+}
+.ws-row-pill.is-on { color: var(--accent-2); background: var(--accent-soft); }
+
+/* Sanity + Journal en pied de home : deux colonnes egales, full width. */
+.home-grid-bottom {
+  grid-template-columns: 1fr 1fr;
+  margin-top: var(--sp-4);
+}
+@media (max-width: 900px) { .home-grid-bottom { grid-template-columns: 1fr; } }
+
+/* Responsive ws-browser : la barre d'outils passe sous le titre, la
+   recherche s'etire, et la liste dense degage les colonnes accessoires
+   (activite, sessions) pour rester lisible sur mobile. */
+@media (max-width: 680px) {
+  .ws-tools { width: 100%; margin-left: 0; margin-top: var(--sp-2); }
+  .ws-search { flex: 1; }
+  .ws-search .input-search { width: 100%; }
+  /* 3 colonnes : workspace + MCPs + sessions. Activite masquee sur mobile. */
+  .ws-list-head, .ws-row { grid-template-columns: minmax(0, 1fr) 56px 64px; }
+  .ws-list-head > span:nth-child(4),
+  .ws-row > :nth-child(4) { display: none; }
+}
+
 /* === PAGE: WORKSPACE DETAIL =================================== */
 .ws-header {
   display: flex; flex-direction: column; gap: var(--sp-3);
@@ -1764,15 +2106,50 @@ body {
   flex-shrink: 0;
 }
 .ws-title-block { flex: 1; min-width: 0; }
-.ws-title { font-size: 24px; font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+.ws-title {
+  font-size: 24px; font-weight: 600; letter-spacing: -0.02em; margin: 0;
+  display: flex; align-items: center; gap: var(--sp-3);
+}
+.ws-title-live {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft);
+  color: var(--ok); animation: pulse-dot 2s infinite;
+}
 .ws-path {
   font-family: var(--font-mono); font-size: 12px;
   color: var(--text-muted); margin-top: 4px;
   word-break: break-all;
 }
-.ws-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.ws-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; position: relative; z-index: 1; }
 
 .ws-header { margin-bottom: var(--sp-6); padding-bottom: var(--sp-5); border-bottom: 1px solid var(--border); }
+
+/* Variante "hero" command-center (cf. prototype .ws-hero) : surface
+   encadree + halo radial accent + gem a degrade nebuleuse (--g1/--g2 poses
+   par wsGradient sur le header). Conserve la structure .ws-header. */
+.ws-hero {
+  position: relative;
+  padding: var(--sp-5);
+  border: 1px solid var(--border);
+  border-bottom: 1px solid var(--border); /* annule le border-bottom seul de .ws-header */
+  border-radius: var(--r-xl);
+  background: linear-gradient(135deg, var(--surface-1), var(--bg));
+  overflow: hidden;
+}
+.ws-hero::after {
+  content: ""; position: absolute; right: -40px; top: -40px;
+  width: 200px; height: 200px; border-radius: 50%;
+  background: radial-gradient(circle, var(--g1, var(--accent-glow)), transparent 70%);
+  opacity: 0.22; pointer-events: none;
+}
+.ws-hero .ws-header-top, .ws-hero .ws-actions { position: relative; z-index: 1; }
+.ws-gem {
+  font-size: 30px;
+  border: 0;
+  color: #fff;
+  background: linear-gradient(140deg, var(--g1, var(--accent)), var(--g2, var(--accent-2)));
+  box-shadow: 0 0 24px -4px var(--g1, var(--accent-glow));
+}
 
 /* Trio MCPs / Skills / Plugins — 3 colonnes équilibrées, repli responsive */
 .ws-trio {
@@ -2198,7 +2575,7 @@ body {
   padding: 8px 12px;
   margin-bottom: var(--sp-2);
   background: linear-gradient(135deg, var(--accent-soft), transparent 90%);
-  border: 1px solid rgba(167, 139, 250, 0.3);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
   border-radius: var(--r-sm);
   font-size: 12px;
   font-weight: 500;
@@ -2471,7 +2848,7 @@ body {
   display: inline-flex;
   padding: var(--sp-3);
   background: var(--accent-soft);
-  border: 1px solid rgba(167, 139, 250, 0.25);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   border-radius: var(--r-md);
   margin-bottom: var(--sp-4);
 }
@@ -2532,7 +2909,7 @@ body {
 .firstrun-checklist {
   padding: var(--sp-4) var(--sp-5);
   background: linear-gradient(135deg, var(--accent-soft), transparent 70%);
-  border: 1px solid rgba(167, 139, 250, 0.2);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
   border-radius: var(--r-md);
 }
 .firstrun-checklist-title {
@@ -2855,7 +3232,7 @@ body {
   background: var(--accent-soft);
   padding: 6px;
   border-radius: var(--r-sm);
-  border: 1px solid rgba(167, 139, 250, 0.2);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
   box-sizing: content-box;
 }
 .help-content h3 {
@@ -2973,7 +3350,7 @@ body {
   gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4);
   background: var(--accent-soft);
-  border: 1px solid rgba(167, 139, 250, 0.25);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   border-left: 3px solid var(--accent);
   border-radius: var(--r-sm);
   font-size: 13px;
@@ -3066,7 +3443,7 @@ body {
 /* === HELP CARD (collapsible note) ============================ */
 .help-card {
   background: linear-gradient(135deg, var(--accent-soft), transparent 60%);
-  border: 1px solid rgba(167, 139, 250, 0.2);
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
   border-radius: var(--r-md);
   margin-bottom: var(--sp-6);
   overflow: hidden;
@@ -3140,7 +3517,7 @@ body {
   width: 36px; height: 36px;
   display: flex; align-items: center; justify-content: center;
   background: var(--accent-soft);
-  border: 1px solid rgba(167, 139, 250, 0.25);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   border-radius: var(--r-sm);
   color: var(--accent);
   flex-shrink: 0;
@@ -3426,7 +3803,7 @@ body {
 .wizard-intro {
   padding: var(--sp-3);
   background: var(--accent-soft);
-  border: 1px solid rgba(167, 139, 250, 0.25);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
   border-radius: var(--r-sm);
   margin-bottom: var(--sp-4);
   font-size: 13px;
@@ -3528,40 +3905,7 @@ body {
   .kpi-row { grid-template-columns: 1fr; }
   .page-header { flex-direction: column; align-items: flex-start; }
   .page-header-actions { width: 100%; justify-content: flex-start; }
-  .refx-kpi-row { grid-template-columns: 1fr; }
-  .refx-proposal-head { flex-direction: column; align-items: stretch; }
 }
-
-/* Chip Reflexive sur la card workspace — état visible + toggle direct */
-.workspace-card { position: relative; }
-.workspace-refx-chip {
-  position: absolute;
-  top: var(--sp-3); right: var(--sp-3);
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 3px 8px 3px 7px;
-  border-radius: 999px;
-  font-size: 10.5px; font-weight: 600;
-  letter-spacing: 0.04em; text-transform: uppercase;
-  background: var(--surface-3); color: var(--text-dim);
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: all var(--d-fast) var(--ease);
-}
-.workspace-refx-chip svg { width: 12px; height: 12px; }
-.workspace-refx-chip:hover {
-  background: var(--hover);
-  color: var(--text-muted);
-}
-.workspace-refx-chip.is-on {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: var(--accent-soft);
-}
-.workspace-refx-chip.is-on:hover {
-  background: var(--accent-soft);
-  color: var(--accent-2);
-}
-.workspace-refx-chip:disabled { opacity: 0.5; cursor: wait; }
 
 /* Indicateur "session active" sur workspace-card : petite pastille
    verte pulsante en haut à gauche pour distinguer immédiatement
@@ -3670,134 +4014,6 @@ body {
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
 }
 
-/* === REFLEXIVE ================================================== */
-.refx-body { display: flex; flex-direction: column; gap: var(--sp-4); }
-
-.refx-kpi-row {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--sp-3);
-}
-.refx-kpi {
-  display: flex; flex-direction: column; gap: var(--sp-1);
-  padding: var(--sp-4);
-}
-.refx-kpi-label {
-  font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--text-muted);
-}
-.refx-kpi-value {
-  font-size: 28px; font-weight: 600; line-height: 1.1;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-}
-.refx-kpi-sub { font-size: 12px; color: var(--text-muted); }
-
-.refx-trend { font-weight: 600; font-variant-numeric: tabular-nums; }
-.refx-trend-up   { color: var(--ok); }
-.refx-trend-down { color: var(--err); }
-.refx-trend-flat { color: var(--text-muted); }
-
-.refx-spark {
-  width: 100%; height: 140px;
-  margin-top: var(--sp-2);
-  display: block;
-}
-.refx-spark-empty {
-  padding: var(--sp-6) 0;
-  text-align: center;
-  color: var(--text-muted);
-  font-size: 13px;
-}
-
-.refx-dims { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); }
-.refx-dim {
-  display: grid;
-  grid-template-columns: 110px 1fr 60px;
-  align-items: center;
-  gap: var(--sp-3);
-}
-.refx-dim-label { font-size: 12.5px; color: var(--text-muted); }
-.refx-dim-track {
-  position: relative;
-  height: 8px;
-  background: var(--surface-3);
-  border-radius: 4px;
-  overflow: hidden;
-}
-.refx-dim-fill {
-  position: absolute; inset: 0 auto 0 0;
-  background: var(--accent);
-  border-radius: 4px;
-  transition: width var(--d-norm) var(--ease);
-}
-.refx-dim-val { font-size: 12px; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
-
-.refx-ws-card {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: var(--sp-4);
-}
-.refx-ws-count { font-size: 22px; font-weight: 600; color: var(--text); margin-top: 4px; }
-
-.refx-row { cursor: pointer; }
-.refx-row:hover { background: var(--hover); }
-.refx-summary {
-  max-width: 380px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.refx-meta { margin-top: var(--sp-2); font-size: 12px; }
-
-.refx-outcome {
-  display: inline-block; padding: 2px 8px;
-  border-radius: var(--r-sm);
-  font-size: 11.5px; font-weight: 500;
-  background: var(--surface-3); color: var(--text-muted);
-}
-.refx-outcome-success { background: var(--ok-soft); color: var(--ok); }
-.refx-outcome-partial { background: var(--warn-soft); color: var(--warn); }
-.refx-outcome-failure { background: var(--err-soft); color: var(--err); }
-.refx-outcome-unknown { background: var(--surface-3); color: var(--text-muted); }
-
-.refx-proposal { display: flex; flex-direction: column; gap: var(--sp-3); }
-.refx-proposal-head {
-  display: flex; align-items: flex-start; justify-content: space-between;
-  gap: var(--sp-4);
-}
-.refx-proposal-title {
-  font-size: 16px; font-weight: 600; margin: 4px 0 6px;
-  color: var(--text);
-}
-.refx-proposal-actions {
-  display: flex; gap: var(--sp-2); flex-shrink: 0;
-}
-
-.refx-plan { display: flex; flex-direction: column; gap: 6px; }
-
-.refx-detail-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--sp-3);
-  margin-bottom: var(--sp-4);
-  padding-bottom: var(--sp-4);
-  border-bottom: 1px solid var(--border);
-}
-.refx-detail-grid .dim { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
-.refx-section-h {
-  font-size: 13px; font-weight: 600;
-  margin: var(--sp-4) 0 var(--sp-2);
-  color: var(--text);
-}
-.refx-chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); }
-.refx-files {
-  max-height: 200px; overflow: auto;
-  background: var(--surface-2); padding: var(--sp-2);
-  border-radius: var(--r-sm);
-  font-size: 12px;
-}
-.refx-files > div { padding: 2px 0; }
-
 /* === WORKSPACE FILE EXPLORER (Section E sur workspace detail) ========= */
 .ws-fs-section { margin-top: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
 .ws-fs-header { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); }
@@ -3846,7 +4062,7 @@ body {
 }
 .ws-fs-tree-row:hover { background: var(--hover); }
 .ws-fs-tree-row.is-open {
-  background: var(--accent-soft, rgba(167,139,250,0.15));
+  background: var(--accent-soft, color-mix(in srgb, var(--accent) 15%, transparent));
   color: var(--text);
 }
 .ws-fs-tree-row.is-excluded { color: var(--text-dim); opacity: 0.5; cursor: not-allowed; }
@@ -3961,6 +4177,7 @@ body {
    non-btn (cards, lignes, onglets, segments). Les .btn et 2 textareas
    ont deja leur propre regle ; ceci comble le reste. */
 .nav-link:focus-visible, .card.hoverable:focus-visible, .workspace-card:focus-visible,
+.featured-card:focus-visible,
 .mcp-card:focus-visible, .recipe-card:focus-visible, .session-row:focus-visible,
 .list-row:focus-visible, .palette-item:focus-visible, .theme-card:focus-visible,
 .config-btn:focus-visible, .quick-btn:focus-visible, .tab:focus-visible,

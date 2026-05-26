@@ -782,22 +782,22 @@ def _lint_hooks_structure(hooks: dict, project_dir: Path | None = None) -> tuple
 
 
 def get_hooks_errors(tail_lines: int = 200) -> tuple[int, dict]:
-    """Lit les dernières lignes du log d'erreurs des hooks réflexifs.
+    """Lit les dernières lignes du log d'erreurs des hooks Claude Code.
 
-    Couvre seulement les hooks réflexifs aujourd'hui (les autres hooks
-    .sh ne loggent pas à disque par défaut — leur sortie va dans le
-    transcript Claude Code et n'est pas accessible depuis Nebula).
-    Pour étendre la couverture : ajouter `>> dashboard/data/hook-events.log`
-    dans le hook concerné.
+    Couvre les hooks qui écrivent vers `dashboard/data/hook_errors.log`.
+    Les hooks .sh classiques n'écrivent pas dans un log dédié — leur
+    stderr va dans le transcript Claude Code et n'est pas accessible
+    depuis Nebula. Pour étendre la couverture : ajouter
+    `>> dashboard/data/hook_errors.log` dans le hook concerné.
     """
-    log_path = ROOT / "dashboard" / "data" / "reflexive_hook_errors.log"
+    log_path = ROOT / "dashboard" / "data" / "hook_errors.log"
     if not log_path.exists():
         return 200, {
             "exists": False,
             "lines": [],
             "path": str(log_path),
-            "note": "Aucun log d'erreur hook réflexif (le fichier n'a jamais été créé). "
-                    "Les hooks .sh des autres types n'écrivent pas dans un log dédié "
+            "note": "Aucun log d'erreur hook (le fichier n'a jamais été créé). "
+                    "Les hooks .sh n'écrivent pas dans un log dédié par défaut "
                     "(leur stderr va dans le transcript Claude Code).",
         }
     try:

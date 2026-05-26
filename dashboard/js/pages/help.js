@@ -405,38 +405,6 @@ function _helpSections() {
       </div>
 
 `,
-'reflexive': `
-      <h2>${I.brain}<span>Reflexive — boucle d'amélioration</span></h2>
-      <p>Reflexive observe les sessions Claude Code et mesure leur qualité sur 4 dimensions, pour faire émerger des propositions d'amélioration concrètes. <strong>Optionnel</strong> et <strong>opt-in par workspace</strong> : aucun workspace n'est observé tant que tu n'as pas activé le toggle.</p>
-      <h3>À quoi ça sert</h3>
-      <p>Au fil des sessions, le score moyen et les <em>flags</em> récurrents (ex. <code class="mono">missing-claude-md-read</code>, <code class="mono">redundant-grep</code>) révèlent des patterns que tu peux corriger via un skill, une convention dans <code class="mono">CLAUDE.md</code> ou un hook.</p>
-      <div class="callout callout-warn">
-        <strong>En cours de déploiement :</strong> la collecte et le scoring des interactions fonctionnent. En revanche le <em>diagnostic automatique</em> (génération de propositions à partir des évaluations) et la <em>génération de plans de mesure</em> ne sont pas encore actifs. Pour l'instant, à toi de lire les stats et d'en tirer les corrections.
-      </div>
-      <h3>Activer Reflexive sur un workspace</h3>
-      <ol class="help-list">
-        <li>Page <strong>Accueil</strong> → menu d'une card workspace → <em>Modifier</em>.</li>
-        <li>Active le switch <strong>Observer cet espace</strong>.</li>
-        <li>Les hooks (<code class="mono">SessionStart</code>, <code class="mono">PostToolUse</code>, <code class="mono">Stop</code>) sont ajoutés au <code class="mono">.claude/settings.json</code> du workspace (avec backup <code class="mono">.bak</code>, sans toucher aux hooks tiers).</li>
-      </ol>
-      <h3>Lire les stats</h3>
-      <ul class="help-list">
-        <li><strong>Vue d'ensemble</strong> (<kbd>g</kbd> <kbd>r</kbd>) : score moyen + tendance, courbe 30 jours, barres par dimension (la plus basse est le meilleur axe d'attaque).</li>
-        <li><strong>Interactions</strong> : table cliquable → modale avec full transcript / tools / files / éval.</li>
-        <li><strong>Propositions</strong> : cards avec <em>Marquer comme traitée</em> / <em>Rejeter</em>. « Marquer comme traitée » enregistre seulement ta décision : aucun fichier n'est modifié automatiquement (l'application reste manuelle). Le rejet capture une raison. Un bouton <em>Annuler</em> sur les propositions traitées ou rejetées les remet <strong>en attente</strong> (là encore, aucun fichier n'est touché), pratique si tu changes d'avis. <span class="dim">(Les propositions seront générées automatiquement une fois le diagnostic automatique déployé.)</span></li>
-        <li><strong>Mesures en cours</strong> : emplacement des plans de mesure. La génération automatique de plans n'est pas encore active.</li>
-      </ul>
-      <h3>Dépannage</h3>
-      <ul class="help-list">
-        <li><strong>Un hook plante</strong> : l'erreur est loggée dans <code class="mono">dashboard/data/reflexive_hook_errors.log</code>. Les hooks Reflexive ne font <em>jamais</em> échouer une session Claude Code (toute exception est ravalée).</li>
-        <li><strong>Désactiver proprement</strong> : repasser le toggle en off retire les hooks Reflexive du <code class="mono">settings.json</code> sans toucher aux autres entrées.</li>
-        <li><strong>Réinitialiser la DB</strong> : arrêter le dashboard puis supprimer <code class="mono">dashboard/data/reflexive.db*</code>. La DB sera recréée vide au prochain démarrage.</li>
-      </ul>
-      <div class="callout callout-info">
-        <strong>Sobriété :</strong> Reflexive ne signale rien tant qu'un pattern n'a pas été observé sur ≥5 interactions cohérentes. Mieux vaut zéro proposition qu'une proposition faible.
-      </div>
-
-`,
 'shortcuts': `
       <h2>${I.zap}<span>Raccourcis clavier</span></h2>
       <table class="help-shortcuts">
@@ -548,7 +516,6 @@ const HELP_TOPICS = [
   { id: 'templates',      emoji: '📋', title: 'Templates',             summary: 'Modèles réutilisables pour démarrer un workspace rapidement.',    sections: ['templates'], keywords: 'modèle starter placeholder qualité aperçu standard python node docker' },
   { id: 'secrets',        emoji: '🔐', title: 'Secrets & sécurité',    summary: 'Stockage centralisé de tes tokens et clés d\'API, chiffrement.',  sections: ['env'], keywords: 'secret token clé api mot de passe env.local chiffrement chiffrer variable environnement dpapi' },
   { id: 'outils',         emoji: '🛠️', title: 'Outils & maintenance',  summary: 'Hooks, sauvegardes, mises à jour automatiques.',                  sections: ['tools', 'update'], keywords: 'hook sauvegarde backup mise à jour update git pull stash restore apparence thème conflits orphelins' },
-  { id: 'reflexive',      emoji: '🧠', title: 'Reflexive',              summary: 'Boucle d\'observation et d\'amélioration mesurable de Claude.',    sections: ['reflexive'], keywords: 'observer score proposition interaction mesure boucle amélioration diagnostic flag dimension' },
   { id: 'reference',      emoji: '⌨️', title: 'Référence & dépannage', summary: 'Raccourcis clavier et solutions aux problèmes courants.',         sections: ['shortcuts', 'troubleshoot'], keywords: 'raccourci clavier shortcut dépannage troubleshoot sanity check serveur hors ligne erreur problème' },
 ];
 
@@ -584,7 +551,6 @@ const HELP_TOPIC_CTAS = {
   'templates':      [{ label: 'Ouvrir les Templates', route: '#/templates' }],
   'secrets':        [{ label: 'Ouvrir les Outils', route: '#/tools' }],
   'outils':         [{ label: 'Ouvrir les Outils', route: '#/tools' }],
-  'reflexive':      [{ label: 'Ouvrir Reflexive', route: '#/reflexive' }],
 };
 
 /* ================================================================

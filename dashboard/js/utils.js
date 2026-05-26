@@ -46,6 +46,31 @@ const debounce = (fn, ms) => {
   let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
 };
 
+// Hash deterministe d'une chaine -> teinte HSL [0,360). Meme nom = meme
+// couleur a chaque rendu (pas de Math.random). Sert aux degrades
+// "nebuleuse" uniques par workspace (cf. prototype command-center).
+function nameHue(s) {
+  let h = 7;
+  for (const c of String(s ?? '')) h = (h * 33 + c.charCodeAt(0)) % 360;
+  return h;
+}
+
+// Applique un degrade "nebuleuse" derive du nom sur un element : pose les
+// custom properties --g1/--g2 (deux teintes HSL voisines) que le CSS
+// consomme pour le halo radial + le gem. C'est la SEULE couleur "en dur"
+// autorisee par le brief (generee, pas codee). Retourne la teinte de base
+// pour reutilisation (ex. accent d'un sparkline si on en ajoute un).
+function wsGradient(el, name) {
+  const h = nameHue(name);
+  if (el) {
+    el.style.setProperty('--g1', `hsl(${h} 82% 64%)`);
+    el.style.setProperty('--g2', `hsl(${(h + 48) % 360} 78% 58%)`);
+  }
+  return h;
+}
+window.nameHue = nameHue;
+window.wsGradient = wsGradient;
+
 // Factory bouton standardise : icone optionnelle (SVG trust) + label escape via escapeHtml.
 function btn(label, cls = 'btn', icon = null) {
   const b = document.createElement('button');

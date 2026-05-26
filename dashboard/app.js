@@ -84,13 +84,16 @@ async function renderWorkspace(wsId) {
   const page = el('div', 'page');
 
   // ── Header (full width) ──
-  const header = el('div', 'ws-header');
+  // Hero "command center" : gem a degrade nebuleuse derive du nom + halo
+  // radial (cf. prototype .ws-hero), dot live si session active.
+  const header = el('div', 'ws-header ws-hero');
+  wsGradient(header, w.label || w.id);
   header.innerHTML = `
     <div class="ws-header-top">
-      <div class="ws-emoji">${escapeHtml(w.emoji || '📁')}</div>
+      <div class="ws-emoji ws-gem">${escapeHtml(w.emoji || '📁')}</div>
       <div class="ws-title-block">
         <div class="page-eyebrow"><span class="index">WS</span><span>${escapeHtml(w.id)}</span></div>
-        <h1 class="ws-title">${escapeHtml(w.label || w.id)}</h1>
+        <h1 class="ws-title">${escapeHtml(w.label || w.id)}${isActiveDetail ? '<span class="ws-title-live" title="Session Claude Code active"></span>' : ''}</h1>
         <div class="ws-path">${escapeHtml(w.path || '')}</div>
         ${w.description ? `<p class="muted" style="margin-top:8px;font-size:13.5px">${escapeHtml(w.description)}</p>` : ''}
       </div>
@@ -2447,10 +2450,6 @@ function buildOnboardingChecklist() {
   return card;
 }
 
-/* ================================================================
-   PAGE: REFLEXIVE — boucle observation / scoring / propositions
-   ================================================================ */
-
 /* Page Tools (renderTools, loadEnvVars, loadBackups) extraite en
    js/pages/tools.js. renderGlobalSkills appartient a la page Skills
    (extraction prochaine). */
@@ -2529,41 +2528,6 @@ function modalEditWorkspace(w) {
     <div class="field"><label class="field-label">Description</label><input class="input" name="description" value="${escapeHtml(w.description || '')}"></div>
     <div class="field"><label class="field-label">Path</label><input class="input mono" name="path" value="${escapeHtml(w.path || '')}"></div>
   `;
-
-  // Toggle Reflexive observation — appel API immédiat, indépendant du Save
-  const refxRow = el('div', 'field');
-  refxRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);margin-top:var(--sp-2);padding-top:var(--sp-3);border-top:1px solid var(--border)';
-  const refxLeft = el('div');
-  const refxLabel = el('div'); refxLabel.style.cssText = 'font-size:13px;font-weight:500';
-  refxLabel.textContent = 'Reflexive — observer cet espace';
-  const refxHint = el('div', 'dim'); refxHint.style.cssText = 'font-size:11.5px;margin-top:2px';
-  refxHint.textContent = "Installe les hooks d'observation dans .claude/settings.json (avec backup .bak). Désactiver les retire proprement.";
-  refxLeft.appendChild(refxLabel); refxLeft.appendChild(refxHint);
-  const sw = el('label', 'switch');
-  const cb = document.createElement('input');
-  cb.type = 'checkbox';
-  cb.checked = !!w.reflexive_enabled;
-  cb.setAttribute('aria-label', `Activer l'observation Reflexive pour ${w.label || w.id}`);
-  const slider = el('span', 'switch-slider');
-  sw.appendChild(cb); sw.appendChild(slider);
-  refxRow.appendChild(refxLeft); refxRow.appendChild(sw);
-  body.appendChild(refxRow);
-
-  cb.addEventListener('change', async () => {
-    const wanted = cb.checked;
-    cb.disabled = true;
-    try {
-      const endpoint = wanted ? 'enable' : 'disable';
-      await API.post(`/api/reflexive/workspace/${w.id}/${endpoint}`);
-      w.reflexive_enabled = wanted;
-      toastOk(wanted ? 'Reflexive activé — hooks installés' : 'Reflexive désactivé — hooks retirés');
-    } catch (e) {
-      cb.checked = !wanted;
-      toastErr(e.message);
-    } finally {
-      cb.disabled = false;
-    }
-  });
 
   const cancel = btn('Annuler', 'btn-ghost');
   const save = btn('Enregistrer', 'btn-primary');
@@ -2738,10 +2702,10 @@ function modalPermissions(wsId) {
   })();
 }
 
-// Viewer minimaliste pour le log d'erreurs des hooks reflexifs. Limite v1 :
-// ne couvre que les hooks reflexifs (ceux qui ecrivent dans
-// dashboard/data/reflexive_hook_errors.log). Les autres hooks .sh ne
-// loggent pas a disque par defaut.
+// Viewer minimaliste pour le log d'erreurs des hooks Claude Code (lit
+// dashboard/data/hook_errors.log). Les hooks .sh n'ecrivent pas a disque
+// par defaut -- ce viewer affiche surtout les erreurs des hooks qui
+// redirigent explicitement vers ce log.
 function modalHooksErrorsViewer() {
   const body = el('div');
   body.innerHTML = '<div class="page-loader"><div class="spinner"></div><span>Chargement…</span></div>';
@@ -3239,7 +3203,7 @@ document.addEventListener('keydown', (e) => {
   // 'g' chord -> next key navigates
   if (e.key === 'g') { lastKey = 'g'; lastKeyAt = Date.now(); return; }
   if (lastKey === 'g' && Date.now() - lastKeyAt < 1000) {
-    const map = { h: '#/', m: '#/mcps', p: '#/plugins', k: '#/skills', t: '#/templates', r: '#/reflexive', o: '#/tools', a: '#/aide' };
+    const map = { h: '#/', m: '#/mcps', p: '#/plugins', k: '#/skills', t: '#/templates', o: '#/tools', a: '#/aide' };
     if (map[e.key]) { location.hash = map[e.key]; lastKey = null; e.preventDefault(); return; }
     lastKey = null;
   }
@@ -3284,12 +3248,6 @@ const TOURS = {
       body: `<p>Les <strong>skills</strong> sont des compétences réutilisables (prompts longs structurés) que Claude active dynamiquement.</p>
         <p>Le modèle "magasin" : tu maintiens une bibliothèque, et tu <strong>distribues</strong> chaque skill vers Global et/ou des workspaces spécifiques. Une seule édition, plusieurs cibles.</p>`,
       target: '.page', navigate: '#/skills',
-    },
-    {
-      title: '🧪 Reflexive — Claude qui s\'améliore',
-      body: `<p>Optionnel : <strong>Reflexive</strong> observe les sessions Claude d'un workspace, les score sur 4 dimensions et fait émerger des propositions concrètes. Activable par workspace (<kbd>g</kbd> <kbd>r</kbd> pour voir la page).</p>
-        <p class="dim" style="font-size:12px">Tu peux ignorer ça pour l'instant et y revenir quand tu auras accumulé quelques sessions.</p>`,
-      target: '.page', navigate: '#/reflexive',
     },
     {
       title: '📦 Templates — moules de workspaces',
@@ -3464,6 +3422,13 @@ function _tourResizeHandler() {
 function init() {
   renderSidebar();
   $('#open-palette').addEventListener('click', openPalette);
+  // Declencheur ⌘K dans la topbar (cf. prototype command-center). Meme
+  // palette que #open-palette / le raccourci clavier '/' et Ctrl+K.
+  const topbarSearch = $('#topbar-search');
+  if (topbarSearch) topbarSearch.addEventListener('click', openPalette);
+  // Hote reel (carte profil sidebar) : source de verite = location.host.
+  const hostEl = $('#sidebar-host');
+  if (hostEl && location.host) hostEl.textContent = location.host;
   $('#sidebar-toggle').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
   document.addEventListener('click', (e) => {
     if (window.innerWidth <= 900 && !e.target.closest('#sidebar') && !e.target.closest('#sidebar-toggle')) {
@@ -3484,11 +3449,6 @@ function init() {
     if (uiState && !uiState.onboarded) {
       setTimeout(() => startFirstRunWizard(), 400);
     }
-
-    // Badge compteur « propositions Reflexive en attente » sur la sidebar
-    // (lot E item 3). Fetch léger au boot ; rafraîchi ensuite après chaque
-    // action sur une proposition + au rendu de l'overview Reflexive.
-    refreshReflexiveBadge();
 
     // Vérification de mise à jour en arrière-plan (non-bloquante)
     setTimeout(() => {

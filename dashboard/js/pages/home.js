@@ -4,7 +4,7 @@
    renderHome : KPI row + bandeau quickstart + grid (workspaces, sanity, journal).
    buildHomeQuickstart : bandeau d'onboarding affiche tant que la
    checklist 6/6 n'est pas complete.
-   workspaceCard : card d'un workspace (chip Reflexive, dot live, actions Lancer/Stop/Detail).
+   workspaceCard : card d'un workspace (dot live, actions Lancer/Stop/Detail).
    loadSanity : panneau de sanity check (registre vs .mcp.json par workspace).
    loadJournal : 8 dernieres entrees du journal.
 
@@ -143,32 +143,50 @@ async function renderHome() {
   const pluginCount = STATE.plugins.count || Object.keys(STATE.plugins.enabled || {}).length;
   const totalSessions = Object.values(stats).reduce((s, x) => s + (x.sessions || 0), 0);
 
+  // Sparklines en bas-droite des KPIs : decoratifs (pas de serie temporelle
+  // honnete cote backend), polylignes statiques reprises tel quel du prototype
+  // valide. SVG en preserveAspectRatio=none pour s'etirer dans 90x38 px.
   const kpis = el('div', 'kpi-row');
   kpis['innerHTML'] = `
     <div class="kpi-card" data-index="01.">
       <div class="kpi-label">Workspaces</div>
       <div class="kpi-value tabular">${wsCount}</div>
       <div class="kpi-detail"><span class="dot dot-ok"></span>${totalSessions} session${totalSessions > 1 ? 's' : ''} cumulées</div>
+      <svg class="kpi-spark" viewBox="0 0 90 38" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,30 15,28 30,24 45,25 60,18 75,14 90,8" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="kpi-card" data-index="02.">
       <div class="kpi-label">MCPs actifs</div>
       <div class="kpi-value tabular">${mcpCount}</div>
       <div class="kpi-detail">${STATE.mcps.length} dans le registre</div>
+      <svg class="kpi-spark" viewBox="0 0 90 38" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,20 15,22 30,18 45,20 60,16 75,18 90,12" fill="none" stroke="var(--ok)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="kpi-card" data-index="03.">
       <div class="kpi-label">Plugins</div>
       <div class="kpi-value tabular">${pluginCount}</div>
       <div class="kpi-detail">${STATE.skills.length} skill${STATE.skills.length > 1 ? 's' : ''} global</div>
+      <svg class="kpi-spark" viewBox="0 0 90 38" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,32 15,26 30,28 45,20 60,22 75,12 90,10" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
   `;
   page.appendChild(kpis);
 
-  const grid = el('div', 'home-grid');
-  const left = el('div');
-  const right = el('div', 'stack');
+  // --- Section « En cours » (workspaces avec session Claude Code active) ---
+  // Source de verite : STATE.activeSessions (sessions lancees depuis Nebula).
+  // Affichee uniquement s'il y a au moins une session vivante -- sinon la home
+  // reste epuree. Grandes cards a halo + gem + metriques reelles.
+  const activeIds = Object.keys(STATE.activeSessions || {});
+  const liveWs = STATE.workspaces.filter(w => activeIds.includes(w.id));
+  if (liveWs.length) {
+    page.appendChild(el('div', 'section-label',
+      '<span class="num">A.</span> En cours <span class="right">' + liveWs.length + ' session' + (liveWs.length > 1 ? 's' : '') + ' active' + (liveWs.length > 1 ? 's' : '') + '</span>'));
+    const featGrid = el('div', 'featured-grid');
+    for (const w of liveWs) featGrid.appendChild(featuredCard(w));
+    page.appendChild(featGrid);
+  }
 
-  left.appendChild(el('div', 'section-label', '<span class="num">A.</span> Workspaces <span class="right">' + wsCount + ' total</span>'));
+  // --- Section « Tous les workspaces » : grille nebuleuse <-> liste dense ---
+  const allLabelNum = liveWs.length ? 'B.' : 'A.';
   if (wsCount === 0) {
+    page.appendChild(el('div', 'section-label', `<span class="num">${allLabelNum}</span> Workspaces`));
     const empty = el('div', 'empty');
     empty['innerHTML'] = `
       <div class="empty-title">Pas encore de workspace dans Nebula</div>
@@ -184,14 +202,17 @@ async function renderHome() {
     b3.addEventListener('click', () => modalNewWorkspace());
     ea.append(b1, b2, b3);
     empty.appendChild(ea);
-    left.appendChild(empty);
+    page.appendChild(empty);
   } else {
-    const wsGrid = el('div', 'workspace-grid');
-    for (const w of STATE.workspaces) wsGrid.appendChild(workspaceCard(w));
-    left.appendChild(wsGrid);
+    page.appendChild(buildWorkspacesBrowser(allLabelNum));
   }
 
-  right.appendChild(el('div', 'section-label', '<span class="num">B.</span> Sanity check'));
+  // --- Sanity check + Journal cote a cote (pleine largeur sous la grille) ---
+  const grid = el('div', 'home-grid home-grid-bottom');
+  const right = el('div', 'stack');
+  const right2 = el('div', 'stack');
+
+  right.appendChild(el('div', 'section-label', '<span class="num">C.</span> Sanity check'));
   const sanityCard = el('div', 'card sanity-card');
   sanityCard['innerHTML'] = `<div class="card-header"><h3 class="card-title">${I.shield} Sanity check</h3><button class="icon-btn" data-refresh aria-label="Rafraîchir">${I.refresh}</button></div>`;
   const sanityBody = el('div');
@@ -200,7 +221,7 @@ async function renderHome() {
   loadSanity(sanityBody);
   sanityCard.querySelector('[data-refresh]').addEventListener('click', () => loadSanity(sanityBody));
 
-  right.appendChild(el('div', 'section-label', '<span class="num">C.</span> Journal'));
+  right2.appendChild(el('div', 'section-label', '<span class="num">D.</span> Journal'));
   const journalCard = el('div', 'card');
   journalCard['innerHTML'] = `<div class="card-header"><h3 class="card-title">${I.book} Journal</h3><button class="icon-btn btn-danger" data-clear aria-label="Tout effacer">${I.trash}</button></div>`;
   const jForm = el('form', 'journal-form');
@@ -224,7 +245,7 @@ async function renderHome() {
   journalCard.appendChild(jForm);
   const jList = el('div', 'journal-list');
   journalCard.appendChild(jList);
-  right.appendChild(journalCard);
+  right2.appendChild(journalCard);
   loadJournal(jList);
   journalCard.querySelector('[data-clear]').addEventListener('click', () => {
     confirmDialog('Effacer toutes les entrées du journal ?', async () => {
@@ -233,10 +254,255 @@ async function renderHome() {
     }, { danger: true });
   });
 
-  grid.appendChild(left);
   grid.appendChild(right);
+  grid.appendChild(right2);
   page.appendChild(grid);
   c.appendChild(page);
+}
+
+// ================================================================
+// « En cours » : grande card d'un workspace avec session active.
+// Halo "nebuleuse" derive du nom + gem + dot live + metriques REELLES
+// (MCPs scopes, sessions, derniere activite) + bouton Reprendre + Stop.
+// Pas de sparkline : aucune serie temporelle honnete n'est disponible
+// cote stats (cf. workspace_stats), donc on n'invente rien -- on montre
+// des chiffres reels a la place (contrainte du brief).
+// ================================================================
+function featuredCard(w) {
+  const card = el('div', 'featured-card');
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.setAttribute('aria-label', `Ouvrir le workspace ${w.label || w.id}`);
+  wsGradient(card, w.label || w.id);
+  const stats = STATE.stats[w.id] || {};
+  const mcpsInfo = STATE.wsMcps[w.id] || { active: [] };
+  const last = stats.last ? fmtDate(stats.last) : 'jamais';
+  const sess = stats.sessions || 0;
+  const msgs = stats.messages || 0;
+
+  // Parité avec workspaceCard (lot E) : mêmes badges d'état surfaces depuis
+  // /api/sanity-check (désync) et path_exists (chemin KO). Une session
+  // « En cours » peut quand même afficher un signal critique (path déplacé
+  // pendant la session, registre désync) -- on le remonte au lieu de
+  // cacher le problème dans la grille « Tous » plus bas.
+  const stateBadges = [];
+  if (w.path_exists === false) {
+    stateBadges.push(`<span class="badge badge-err ws-badge-pathko" role="button" tabindex="0" title="Le dossier de ce workspace est introuvable sur le disque : ${escapeHtml(w.path || '(chemin inconnu)')}. Clique pour ouvrir le détail.">⛔ chemin KO</span>`);
+  }
+  if ((STATE.sanityDesync instanceof Set) && STATE.sanityDesync.has(w.id)) {
+    stateBadges.push(`<span class="badge badge-warn ws-badge-desync" role="button" tabindex="0" title="Le registre MCP et le .mcp.json de ce workspace divergent. Clique pour ouvrir le détail et synchroniser.">⚠ désync</span>`);
+  }
+  const stateBadgesRow = stateBadges.length
+    ? `<div class="workspace-state-badges">${stateBadges.join('')}</div>`
+    : '';
+
+  card['innerHTML'] = `
+    <div class="featured-top">
+      <span class="featured-gem">${escapeHtml(w.emoji || '📁')}</span>
+      <div class="featured-id-block">
+        <div class="featured-name">${escapeHtml(w.label || w.id)}<span class="featured-live" title="Session Claude Code active"></span></div>
+        <div class="featured-id mono">${escapeHtml(w.id)}</div>
+      </div>
+    </div>
+    ${stateBadgesRow}
+    <div class="featured-meta mono">
+      <span>${mcpsInfo.active.length} <span class="u">MCP${mcpsInfo.active.length > 1 ? 's' : ''}</span></span>
+      <span>${sess} <span class="u">sess.</span></span>
+      <span>${fmtNum(msgs)} <span class="u">msg</span></span>
+      <span>${escapeHtml(last)}</span>
+    </div>
+    <div class="featured-actions"></div>
+  `;
+
+  // Navigation clavier sur les badges d'état (parité workspaceCard).
+  for (const b of card.querySelectorAll('.workspace-state-badges [role=button]')) {
+    b.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault(); e.stopPropagation();
+        location.hash = `#/workspace/${w.id}`;
+      }
+    });
+  }
+
+  const actions = card.querySelector('.featured-actions');
+  const resume = btn('Reprendre', 'btn-primary btn-sm', I.play);
+  resume.addEventListener('click', (e) => {
+    e.stopPropagation();
+    withBusy(resume, async () => {
+      try { const r = await API.post(`/api/launch-resume/${w.id}`, {}); toastOk(r.message || 'Reprise…'); STATE.loading = true; setTimeout(route, 400); }
+      catch (err) { toastErr(err.message); }
+    }, { keepBusyOnSuccess: true });
+  });
+  const stopBtn = btn('Stop', 'btn-sm btn-danger-outline', I.x);
+  stopBtn.title = 'Arrêter la session Claude Code en cours';
+  stopBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    confirmDialog(`Arrêter la session Claude Code de « ${w.label || w.id} » ?`, async () => {
+      try {
+        const r = await API.post(`/api/workspaces/${w.id}/stop`, {});
+        if (r.ok) {
+          toastOk(r.message || 'Session arrêtée');
+          if (STATE.activeSessions) delete STATE.activeSessions[w.id];
+          route({ silent: true });
+        } else { toastErr(r.message || 'Échec'); }
+      } catch (err) { toastErr(err.message); }
+    }, { danger: true });
+  });
+  actions.append(resume, stopBtn);
+
+  card.addEventListener('click', () => { location.hash = `#/workspace/${w.id}`; });
+  card.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); location.hash = `#/workspace/${w.id}`; }
+  });
+  return card;
+}
+
+// ================================================================
+// Navigateur « Tous les workspaces » : barre d'outils (recherche / tri /
+// bascule grille<->liste) + grille nebuleuse + liste dense. La grille
+// reutilise workspaceCard() (badges lot E, dot live, Lancer/Stop) ;
+// la liste dense est une vue compacte read-through.
+// Le choix grille/liste est persiste en localStorage (cle nebula-ws-view).
+// ================================================================
+function buildWorkspacesBrowser(labelNum) {
+  const wrap = el('div', 'ws-browser');
+
+  // En-tete de section avec barre d'outils a droite.
+  const head = el('div', 'section-label ws-browser-head');
+  head['innerHTML'] = `<span class="num">${labelNum}</span> Tous les workspaces <span class="right" data-ws-count></span>`;
+  const tools = el('div', 'ws-tools');
+
+  const searchWrap = el('div', 'ws-search');
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.className = 'input input-search';
+  search.placeholder = 'Filtrer les workspaces…';
+  search.setAttribute('aria-label', 'Filtrer les workspaces');
+  searchWrap.appendChild(search);
+
+  const sort = document.createElement('select');
+  sort.className = 'select ws-sort';
+  sort.setAttribute('aria-label', 'Trier les workspaces');
+  sort['innerHTML'] = `
+    <option value="recent">Récents</option>
+    <option value="name">Nom</option>
+    <option value="sessions">Sessions</option>
+  `;
+
+  // Bascule grille / liste (deux boutons aria-pressed).
+  const toggle = el('div', 'ws-view-toggle');
+  toggle.setAttribute('role', 'group');
+  toggle.setAttribute('aria-label', 'Affichage');
+  const gridBtn = document.createElement('button');
+  gridBtn.type = 'button'; gridBtn.className = 'ws-view-btn'; gridBtn.dataset.view = 'grid';
+  gridBtn.title = 'Grille'; gridBtn.setAttribute('aria-label', 'Affichage grille');
+  gridBtn['innerHTML'] = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`;
+  const listBtn = document.createElement('button');
+  listBtn.type = 'button'; listBtn.className = 'ws-view-btn'; listBtn.dataset.view = 'list';
+  listBtn.title = 'Liste dense'; listBtn.setAttribute('aria-label', 'Affichage liste dense');
+  listBtn['innerHTML'] = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>`;
+  toggle.append(gridBtn, listBtn);
+
+  tools.append(searchWrap, sort, toggle);
+  head.appendChild(tools);
+  wrap.appendChild(head);
+
+  // Conteneurs des deux vues.
+  const gridView = el('div', 'workspace-grid nebula-grid');
+  const listView = el('div', 'ws-list');
+  listView.hidden = true;
+  listView['innerHTML'] = `<div class="ws-list-head">
+      <span>Workspace</span><span>MCPs</span><span>Sessions</span><span>Activité</span>
+    </div>`;
+  wrap.append(gridView, listView);
+
+  // Etat courant (lu depuis localStorage pour la vue).
+  let currentView = 'grid';
+  try { const v = localStorage.getItem('nebula-ws-view'); if (v === 'list' || v === 'grid') currentView = v; } catch {}
+
+  const apply = () => {
+    const q = search.value.trim().toLowerCase();
+    const sortBy = sort.value;
+    let list = STATE.workspaces.slice();
+    if (q) list = list.filter(w => (`${w.label || ''} ${w.id} ${w.description || ''}`).toLowerCase().includes(q));
+    list.sort((a, b) => {
+      const sa = STATE.stats[a.id] || {}, sb = STATE.stats[b.id] || {};
+      if (sortBy === 'name') return (a.label || a.id).localeCompare(b.label || b.id, 'fr');
+      if (sortBy === 'sessions') return (sb.sessions || 0) - (sa.sessions || 0);
+      // recent : derniere activite descendante (jamais = tout en bas)
+      const ta = sa.last ? Date.parse(sa.last) : 0;
+      const tb = sb.last ? Date.parse(sb.last) : 0;
+      return tb - ta;
+    });
+
+    gridView['innerHTML'] = '';
+    // Vide la liste en conservant l'en-tete.
+    Array.from(listView.querySelectorAll('.ws-row')).forEach(r => r.remove());
+
+    if (!list.length) {
+      const none = el('div', 'ws-browser-empty muted');
+      none.textContent = q ? 'Aucun workspace ne correspond à ce filtre.' : 'Aucun workspace.';
+      gridView.appendChild(none);
+    } else {
+      for (const w of list) {
+        gridView.appendChild(workspaceCard(w));
+        listView.appendChild(workspaceRow(w));
+      }
+    }
+    head.querySelector('[data-ws-count]').textContent = `${list.length}${q ? ' / ' + STATE.workspaces.length : ''} workspace${list.length > 1 ? 's' : ''}`;
+  };
+
+  const setView = (v) => {
+    currentView = v;
+    gridView.hidden = (v !== 'grid');
+    listView.hidden = (v !== 'list');
+    gridBtn.classList.toggle('is-active', v === 'grid');
+    listBtn.classList.toggle('is-active', v === 'list');
+    gridBtn.setAttribute('aria-pressed', String(v === 'grid'));
+    listBtn.setAttribute('aria-pressed', String(v === 'list'));
+    try { localStorage.setItem('nebula-ws-view', v); } catch {}
+  };
+
+  search.addEventListener('input', debounce(apply, 120));
+  sort.addEventListener('change', apply);
+  gridBtn.addEventListener('click', () => setView('grid'));
+  listBtn.addEventListener('click', () => setView('list'));
+
+  setView(currentView);
+  apply();
+  return wrap;
+}
+
+// Rangee dense d'un workspace (vue liste). Clic -> detail. Gem a degrade
+// nebuleuse, metriques reelles.
+function workspaceRow(w) {
+  const stats = STATE.stats[w.id] || {};
+  const mcpsInfo = STATE.wsMcps[w.id] || { active: [] };
+  const last = stats.last ? fmtDate(stats.last) : 'jamais';
+  const isActive = !!(STATE.activeSessions || {})[w.id];
+  const row = el('div', 'ws-row');
+  row.tabIndex = 0;
+  row.setAttribute('role', 'button');
+  row.setAttribute('aria-label', `Ouvrir le workspace ${w.label || w.id}`);
+  row['innerHTML'] = `
+    <span class="ws-row-name">
+      <span class="ws-row-gem">${escapeHtml(w.emoji || '📁')}</span>
+      <span class="ws-row-text">
+        <span class="ws-row-label">${escapeHtml(w.label || w.id)}${isActive ? '<span class="ws-row-live" title="Session active"></span>' : ''}</span>
+        <span class="ws-row-id mono">${escapeHtml(w.id)}</span>
+      </span>
+    </span>
+    <span class="ws-row-cell mono">${mcpsInfo.active.length}</span>
+    <span class="ws-row-cell mono">${stats.sessions || 0}</span>
+    <span class="ws-row-cell mono dim">${escapeHtml(last)}</span>
+  `;
+  const gem = row.querySelector('.ws-row-gem');
+  wsGradient(gem, w.label || w.id);
+  row.addEventListener('click', () => { location.hash = `#/workspace/${w.id}`; });
+  row.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); location.hash = `#/workspace/${w.id}`; }
+  });
+  return row;
 }
 
 function workspaceCard(w) {
@@ -244,6 +510,9 @@ function workspaceCard(w) {
   card.tabIndex = 0;
   card.setAttribute('role', 'button');
   card.setAttribute('aria-label', `Ouvrir le workspace ${w.label || w.id}`);
+  // Degrade "nebuleuse" unique derive du nom (halo radial + accent du gem,
+  // cf. CSS .workspace-card). Seule couleur generee autorisee par le brief.
+  wsGradient(card, w.label || w.id);
   const stats = STATE.stats[w.id] || {};
   const mcpsInfo = STATE.wsMcps[w.id] || { active: [] };
   const last = stats.last ? fmtDate(stats.last) : 'jamais';
@@ -293,37 +562,6 @@ function workspaceCard(w) {
       }
     });
   }
-
-  // Chip Reflexive en coin haut-droit, click toggle direct.
-  const refxChip = document.createElement('button');
-  refxChip.type = 'button';
-  refxChip.className = 'workspace-refx-chip' + (w.reflexive_enabled ? ' is-on' : '');
-  refxChip.title = w.reflexive_enabled
-    ? 'Reflexive observe ce workspace. Clic pour désactiver.'
-    : "Reflexive inactif. Clic pour activer l'observation (installe les hooks).";
-  const refxLabel = el('span'); refxLabel.textContent = w.reflexive_enabled ? 'on' : 'off';
-  refxChip['innerHTML'] = I.brain;
-  refxChip.appendChild(refxLabel);
-  refxChip.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    const wanted = !w.reflexive_enabled;
-    refxChip.disabled = true;
-    try {
-      const ep = wanted ? 'enable' : 'disable';
-      await API.post('/api/reflexive/workspace/' + w.id + '/' + ep);
-      w.reflexive_enabled = wanted;
-      refxChip.classList.toggle('is-on', wanted);
-      refxLabel.textContent = wanted ? 'on' : 'off';
-      refxChip.title = wanted
-        ? 'Reflexive observe ce workspace. Clic pour désactiver.'
-        : "Reflexive inactif. Clic pour activer l'observation (installe les hooks).";
-      toastOk(wanted
-        ? "Reflexive activé -- hooks installés (relance la session Claude pour qu'ils prennent)"
-        : 'Reflexive désactivé -- hooks retirés');
-    } catch (err) { toastErr(err.message); }
-    refxChip.disabled = false;
-  });
-  card.appendChild(refxChip);
 
   const isActive = !!(STATE.activeSessions || {})[w.id];
   if (isActive) {
