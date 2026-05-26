@@ -1,0 +1,6 @@
+{
+  "_comment": "Configuration locale per-user. CE FICHIER EST GITIGNORED. Ne contient que des préférences locales qui ne s'appliquent qu'à l'utilisateur courant.",
+
+  "_comment_mode": "Mode équipe / solo. Détermine si le hook improvements-validate.sh exige le champ `par <author>` sur les items de registres. En mode solo (mainteneur unique), passer à false. Cf. memory/overview.md § Mode projet.",
+  "validate_author": true
+}

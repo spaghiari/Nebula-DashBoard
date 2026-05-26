@@ -1,0 +1,13 @@
+# Local-only configuration
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Os
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
