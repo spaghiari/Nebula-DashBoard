@@ -26,7 +26,7 @@ from dashcore.config import (
     BACKUPS_DIR, JOURNAL_FILE, TEMPLATES_DIR, DASHBOARD_DIR, WORKSPACES_DIR,
     SCRIPTS_DIR, SNIPPETS_DIR, WORKSPACES_JSON, MCP_REGISTRY, ENV_FILE, LOGS_DIR,
     TEXT_EXTENSIONS, SAFE_ID, SAFE_PLUGIN_SPEC, ENV_VAR_PATTERN, BAT_UNSAFE,
-    PATH_UNSAFE, STATIC_TYPES, ENV_KEY_RE, _MUTATION_LOCK, log,
+    PATH_UNSAFE, STATIC_TYPES, ENV_KEY_RE, ALLOWED_TRANSPORTS, _MUTATION_LOCK, log,
 )
 
 
@@ -1416,6 +1416,366 @@ def write_workspace_file(ws_id: str, filename: str, content: str) -> tuple[int, 
             tmp.replace(target)
     log.info("workspace file written: %s / %s", ws_id, filename)
     return 200, {"ok": True, "path": str(target)}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Adoption d'un workspace existant -- inspection puis adoption sans toucher
+# au contenu du dossier. Distinct de `register_existing_workspace` (utilise
+# par le wizard d'onboarding qui auto-suffixe les ids et accepte les chemins
+# inexistants pour rejouer un soft-delete). Ici on est plus strict :
+#  - garde-fous de securite (refus sous ~/.claude/ ou egal a ROOT) ;
+#  - pas d'auto-suffix sur l'id ;
+#  - import optionnel des MCPs declares dans le .mcp.json du dossier.
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _is_path_under_claude_home(path: Path) -> bool:
+    """True si `path` est sous ~/.claude/ (resolu) -- refus d'adoption.
+
+    On compare en `resolve()` pour eviter qu'un dossier symlink-e detourne le
+    garde-fou. CLAUDE_HOME lui-meme est aussi interdit.
+    """
+    try:
+        rp = path.resolve()
+        rh = CLAUDE_HOME.resolve()
+    except OSError:
+        return False
+    try:
+        rp.relative_to(rh)
+        return True
+    except ValueError:
+        return rp == rh
+
+
+def _is_path_root(path: Path) -> bool:
+    """True si `path` est ROOT (installation Nebula elle-meme) -- refus."""
+    try:
+        return path.resolve() == ROOT.resolve()
+    except OSError:
+        return False
+
+
+def _parse_mcp_json_entries(mcp_json_path: Path) -> list[dict]:
+    """Extrait les entrees MCP d'un .mcp.json (format Claude Code standard).
+
+    Format attendu : {"mcpServers": {"<name>": {transport?, command|url, ...}}}
+    Tolere une absence totale ou une structure cassee : renvoie [] sans lever.
+    """
+    try:
+        data = read_json(mcp_json_path, {}) or {}
+    except (OSError, json.JSONDecodeError):
+        return []
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    if not isinstance(servers, dict):
+        return []
+    out: list[dict] = []
+    for name, cfg in servers.items():
+        if not isinstance(cfg, dict):
+            continue
+        transport = (cfg.get("transport") or cfg.get("type")
+                     or ("http" if cfg.get("url") else "stdio"))
+        out.append({
+            "name": str(name),
+            "transport": str(transport),
+            "command": cfg.get("command") or "",
+            "url": cfg.get("url") or "",
+            "args": cfg.get("args") or [],
+            "env": cfg.get("env") or {},
+            "headers": cfg.get("headers") or {},
+        })
+    return out
+
+
+def _count_subdirs_with_marker(dir_path: Path, marker_name: str) -> int:
+    """Compte les sous-dossiers de `dir_path` qui contiennent `marker_name`.
+
+    Utilise pour les skills : `.claude/skills/<nom>/SKILL.md`. Renvoie 0 si le
+    dossier parent n'existe pas (lecture silencieuse, ne leve jamais).
+    """
+    if not dir_path.exists() or not dir_path.is_dir():
+        return 0
+    n = 0
+    try:
+        for sub in dir_path.iterdir():
+            if sub.is_dir() and (sub / marker_name).exists():
+                n += 1
+    except OSError:
+        return 0
+    return n
+
+
+def _count_files_with_ext(dir_path: Path, ext: str) -> int:
+    """Compte les fichiers `*.ext` directement dans `dir_path` (non-recursif).
+
+    Utilise pour agents et commands : `.claude/agents/*.md`,
+    `.claude/commands/*.md`. Renvoie 0 si le dossier n'existe pas.
+    """
+    if not dir_path.exists() or not dir_path.is_dir():
+        return 0
+    try:
+        return sum(1 for f in dir_path.glob(f"*{ext}") if f.is_file())
+    except OSError:
+        return 0
+
+
+def inspect_workspace_path(payload: dict) -> tuple[int, dict]:
+    """Inspecte un dossier candidat a l'adoption (read-only).
+
+    Detecte signaux Claude (CLAUDE.md, .mcp.json, skills/agents/commands,
+    hooks dans settings.json) et applique les garde-fous (chemin sous
+    ~/.claude/, egal a ROOT, doublon dans workspaces.json). Aucun effet
+    de bord sur le filesystem.
+    """
+    raw_path = (payload.get("path") or "").strip()
+    ok, err = validate_ws_path(raw_path)
+    if not ok:
+        return 400, {"error": err}
+
+    p = Path(raw_path)
+    warnings: list[str] = []
+
+    # Garde-fous critiques (bloquants) : on n'inspecte meme pas.
+    if _is_path_under_claude_home(p):
+        return 403, {"error": "Chemin interdit : sous ~/.claude/ (config Claude Code)"}
+    if _is_path_root(p):
+        return 403, {"error": "Chemin interdit : ROOT de Nebula (installation elle-meme)"}
+
+    exists = p.exists()
+    is_dir = exists and p.is_dir()
+
+    if not exists:
+        return 200, {
+            "path": str(p),
+            "exists": False, "is_dir": False,
+            "has_claude_md": False, "has_mcp_json": False, "has_claude_dir": False,
+            "skills_count": 0, "agents_count": 0, "commands_count": 0,
+            "hooks_settings": None, "mcps": [], "claude_md_size": 0,
+            "warnings": ["le dossier n'existe pas sur disque"],
+            "already_adopted": False,
+        }
+    if not is_dir:
+        return 400, {"error": "Le chemin existe mais n'est pas un dossier"}
+
+    # Doublon dans le registre (chemin deja adopte).
+    path_norm = str(Path(raw_path)).rstrip("\\/").lower()
+    already_adopted = False
+    try:
+        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        for w in data.get("workspaces", []):
+            if (w.get("path") or "").rstrip("\\/").lower() == path_norm:
+                already_adopted = True
+                warnings.append(f"déjà adopté sous l'id « {w.get('id')} »")
+                break
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    # Detection des signaux Claude.
+    claude_md = p / "CLAUDE.md"
+    mcp_json = p / ".mcp.json"
+    claude_dir = p / ".claude"
+    settings_json = claude_dir / "settings.json"
+
+    has_claude_md = claude_md.is_file()
+    has_mcp_json = mcp_json.is_file()
+    has_claude_dir = claude_dir.is_dir()
+
+    claude_md_size = 0
+    if has_claude_md:
+        try:
+            claude_md_size = claude_md.stat().st_size
+        except OSError:
+            claude_md_size = 0
+
+    skills_count = _count_subdirs_with_marker(claude_dir / "skills", "SKILL.md")
+    agents_count = _count_files_with_ext(claude_dir / "agents", ".md")
+    commands_count = _count_files_with_ext(claude_dir / "commands", ".md")
+
+    # Section hooks du settings.json (uniquement, pas le reste -- on respecte
+    # le perimetre minimal demande).
+    hooks_settings = None
+    if settings_json.is_file():
+        try:
+            raw = settings_json.read_text(encoding="utf-8")
+            parsed = json.loads(raw) if raw.strip() else {}
+            if isinstance(parsed, dict) and isinstance(parsed.get("hooks"), dict):
+                hooks_settings = parsed["hooks"]
+        except (OSError, json.JSONDecodeError):
+            hooks_settings = None
+
+    mcps = _parse_mcp_json_entries(mcp_json) if has_mcp_json else []
+
+    has_any_signal = (
+        has_claude_md or has_mcp_json or has_claude_dir
+        or skills_count or agents_count or commands_count
+    )
+    if not has_any_signal:
+        warnings.append("aucun signal Claude détecté dans ce dossier")
+
+    return 200, {
+        "path": str(p),
+        "exists": True,
+        "is_dir": True,
+        "has_claude_md": has_claude_md,
+        "has_mcp_json": has_mcp_json,
+        "has_claude_dir": has_claude_dir,
+        "skills_count": skills_count,
+        "agents_count": agents_count,
+        "commands_count": commands_count,
+        "hooks_settings": hooks_settings,
+        "mcps": mcps,
+        "claude_md_size": claude_md_size,
+        "warnings": warnings,
+        "already_adopted": already_adopted,
+    }
+
+
+def adopt_workspace(payload: dict) -> tuple[int, dict]:
+    """Adopte un dossier existant comme workspace Nebula.
+
+    Distinct de `register_existing_workspace` : pas d'auto-suffix sur l'id
+    (erreur 409 explicite si conflit), garde-fous de securite renforces,
+    import optionnel des MCPs declares dans le .mcp.json (strategie merge
+    non destructif : un MCP existant dans le registre n'est jamais ecrase).
+    Ne touche AUCUN fichier du dossier adopte (pas de creation, pas de copie).
+    """
+    raw_path = (payload.get("path") or "").strip()
+    ws_id = (payload.get("id") or "").strip()
+    label = sanitize_bat((payload.get("label") or ws_id).strip()) or ws_id
+    emoji = (payload.get("emoji") or "📁").strip()
+    description = (payload.get("description") or "").strip()
+    import_mcps = bool(payload.get("import_mcps"))
+
+    if not safe_id(ws_id):
+        return 400, {"error": "id invalide (a-z, 0-9, _, -, max 40)"}
+
+    ok, err = validate_ws_path(raw_path)
+    if not ok:
+        return 400, {"error": err}
+
+    p = Path(raw_path)
+
+    # Re-verification des garde-fous (l'inspection peut avoir ete sautee).
+    if _is_path_under_claude_home(p):
+        return 403, {"error": "Chemin interdit : sous ~/.claude/ (config Claude Code)"}
+    if _is_path_root(p):
+        return 403, {"error": "Chemin interdit : ROOT de Nebula (installation elle-meme)"}
+    if not p.exists():
+        return 404, {"error": f"Dossier introuvable : {raw_path}"}
+    if not p.is_dir():
+        return 400, {"error": "Le chemin existe mais n'est pas un dossier"}
+
+    path_norm = str(Path(raw_path)).rstrip("\\/")
+
+    # Detection des signaux pour la reponse (avant ecriture du registre, pour
+    # ne pas re-lire le disque deux fois).
+    claude_dir = p / ".claude"
+    skills_n = _count_subdirs_with_marker(claude_dir / "skills", "SKILL.md")
+    agents_n = _count_files_with_ext(claude_dir / "agents", ".md")
+    commands_n = _count_files_with_ext(claude_dir / "commands", ".md")
+    settings_json = claude_dir / "settings.json"
+    hooks_present = False
+    if settings_json.is_file():
+        try:
+            parsed = json.loads(settings_json.read_text(encoding="utf-8") or "{}")
+            hooks_present = isinstance(parsed, dict) and bool(parsed.get("hooks"))
+        except (OSError, json.JSONDecodeError):
+            hooks_present = False
+    mcp_entries = _parse_mcp_json_entries(p / ".mcp.json")
+
+    warnings: list[str] = []
+
+    # Verrou + ecriture du registre. Garde-fous doublons sous lock pour eviter
+    # une course entre 2 adoptions simultanees.
+    with _MUTATION_LOCK:
+        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        ws_list = data.setdefault("workspaces", [])
+
+        if any(w.get("id") == ws_id for w in ws_list):
+            return 409, {"error": f"Id déjà pris : « {ws_id} »"}
+        if any((w.get("path") or "").rstrip("\\/").lower() == path_norm.lower()
+               for w in ws_list):
+            return 409, {"error": f"Chemin déjà adopté : {path_norm}"}
+
+        ws_list.append({
+            "id": ws_id,
+            "label": label,
+            "emoji": emoji,
+            "description": description,
+            "path": path_norm,
+            "template": "adopted",
+        })
+        write_json(WORKSPACES_JSON, data)
+
+    # Bat de lancement, best-effort (un echec ici n'invalide pas l'adoption).
+    try:
+        write_launch_bat(ws_id, label, path_norm)
+    except Exception as e:
+        log.warning("write_launch_bat failed for adopted %s : %s", ws_id, e)
+        warnings.append("script de lancement non genere (.bat)")
+
+    # Import optionnel des MCPs : strategie merge non destructif.
+    mcps_added: list[str] = []
+    mcps_skipped: list[dict] = []
+    if import_mcps and mcp_entries:
+        # Lecture du registre actuel (hors lock : add_or_update_mcp prend son
+        # propre verrou, et on accepte que la liste evolue entre les iterations
+        # -- la verification finale dans add_or_update_mcp est la source de
+        # verite. On filtre ici juste pour eviter d'appeler add_or_update pour
+        # rien sur les ids deja connus, et tracer le skip cote UI).
+        from dashcore.api_mcps import add_or_update_mcp
+        try:
+            registry = read_json(MCP_REGISTRY, {"version": "1.0", "mcps": []})
+            existing_ids = {m.get("id") for m in registry.get("mcps", [])}
+        except (OSError, json.JSONDecodeError):
+            existing_ids = set()
+
+        for entry in mcp_entries:
+            name = entry["name"]
+            if not safe_id(name):
+                mcps_skipped.append({"id": name, "reason": "id invalide"})
+                continue
+            if name in existing_ids:
+                mcps_skipped.append({"id": name, "reason": "déjà présent dans le registre"})
+                continue
+            mcp_payload = {
+                "id": name,
+                "name": name,
+                "transport": entry["transport"] if entry["transport"] in ALLOWED_TRANSPORTS else "stdio",
+                "command": entry["command"],
+                "args": entry["args"],
+                "env": entry["env"],
+                "url": entry["url"],
+                "headers": entry["headers"],
+                "status": "disponible",
+            }
+            status, result = add_or_update_mcp(mcp_payload)
+            if status < 400:
+                mcps_added.append(name)
+                existing_ids.add(name)
+            else:
+                mcps_skipped.append({"id": name, "reason": result.get("error", "echec")})
+
+    log.info(
+        "workspace adopted: %s -> %s (skills=%d agents=%d commands=%d hooks=%s mcps_in_file=%d)",
+        ws_id, path_norm, skills_n, agents_n, commands_n, hooks_present, len(mcp_entries),
+    )
+    return 201, {
+        "ok": True,
+        "id": ws_id,
+        "path": path_norm,
+        "detected": {
+            "skills": skills_n,
+            "agents": agents_n,
+            "commands": commands_n,
+            "hooks": hooks_present,
+            "mcps_in_file": len(mcp_entries),
+        },
+        "imported": {
+            "mcps_added": mcps_added,
+            "mcps_skipped": mcps_skipped,
+        },
+        "warnings": warnings,
+    }
 
 
 def register_existing_workspace(payload: dict) -> tuple[int, dict]:

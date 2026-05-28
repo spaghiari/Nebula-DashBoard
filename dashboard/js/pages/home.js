@@ -97,8 +97,8 @@ async function renderHome() {
   const importBtn = btn('Importer config', 'btn', I.download);
   importBtn.title = 'Importer MCPs et workspaces depuis ~/.claude/';
   importBtn.addEventListener('click', () => modalSetupWizard());
-  const registerBtn = btn('+ Dossier', 'btn-ghost btn-sm', I.folder);
-  registerBtn.title = 'Enregistrer un dossier existant comme workspace';
+  const registerBtn = btn('Adopter un workspace existant', 'btn', I.folder);
+  registerBtn.title = 'Adopter un dossier Claude Code existant -- inspection puis enregistrement, sans toucher au contenu';
   registerBtn.addEventListener('click', () => modalRegisterExisting());
   const syncAllBtn = btn('Sync tous', 'btn', I.refresh);
   syncAllBtn.addEventListener('click', async () => {
