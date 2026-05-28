@@ -318,7 +318,17 @@ def h_get_ws_overlays(q, b, ws):
     return 200, {"overlays": out}
 
 def h_post_apply_overlay(q, b, ws, ov_id):
-    """Applique un overlay sur un workspace existant (idempotent)."""
+    """Applique un overlay sur un workspace existant (idempotent).
+
+    Le corps POST porte les choix de bootstrap (cf. modale front) :
+      { "mode": "solo|equipe|equipe-hierarchique",
+        "depth": "minimal|complete",
+        "language": "fr|en|...",
+        "author": "<identifiant>" }
+    Tous optionnels : apply_overlay normalise/defaute (cf.
+    _normalize_options). Le mode-gating et la profondeur sont ensuite
+    appliques cote api_overlays a partir du marker .nebula-overlay.json.
+    """
     if not safe_id(ws):
         return 400, {"error": "id invalide"}
     # On reutilise les memes vars que create_workspace pour que les
@@ -335,7 +345,14 @@ def h_post_apply_overlay(q, b, ws, ov_id):
         "date": _dt.date.today().isoformat(),
         "emoji": ws_obj.get("emoji") or "📁",
     }
-    return apply_overlay(ws, ov_id, vars)
+    b = b or {}
+    options = {
+        "mode": b.get("mode"),
+        "depth": b.get("depth"),
+        "language": b.get("language"),
+        "author": b.get("author"),
+    }
+    return apply_overlay(ws, ov_id, vars, options)
 
 # ── Skills ──────────────────────────────────────────────────────────────────
 def h_get_skills(q, b):                     return 200, {"global": list_skills_global()}

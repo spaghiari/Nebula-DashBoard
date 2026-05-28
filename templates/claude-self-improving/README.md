@@ -56,9 +56,10 @@ détaillés dans un sous-dossier homonyme quand le contenu grossit.
 - 7+ slash commands génériques : `/pipeline`, `/brainstorm`,
   `/self-review`, `/diff-review`, `/feature-start`, `/readme-sync`,
   `/check-all`, `/digest-week`
-- 6 hooks pre/post-commit et stop : em-dash, co-authored-by,
+- 6 hooks pre/post-commit et stop, **en Python stdlib** (portables
+  Windows/Unix, aucun bash requis) : em-dash, co-authored-by,
   improvements-validate, protect-local-files, remind-check-all,
-  statusline
+  statusline. Câblés via `python "${CLAUDE_PROJECT_DIR}/.claude/hooks/X.py"`.
 
 ### Attribution d'auteur
 
@@ -107,9 +108,14 @@ présence du champ au commit.
      initiales, etc.)
    - Cocher la **langue projet**
 
-5. **Si mode solo** : créer `.claude/settings.local.json` avec
-   `{"validate_author": false}` pour désactiver la validation
-   d'auteur au commit.
+5. **Mode projet** : si l'overlay est appliqué via Nebula (bouton
+   « Activer »), le mode choisi dans la modale écrit automatiquement
+   `.claude/settings.local.json` (`validate_author: false` en solo),
+   pré-coche le mode + la langue dans `overview.md`, filtre les
+   fichiers mode-gated (digests/digest-week/digest-compiler =
+   équipe-hiérarchique uniquement) et seed les exemples en profondeur
+   complète. En bootstrap manuel : créer `.claude/settings.local.json`
+   avec `{"validate_author": false}` pour le mode solo.
 
 6. **Compléter les hubs mémoire** au fil du travail :
    `domain.md`, `architecture.md`, etc. selon les besoins.
@@ -124,8 +130,10 @@ présence du champ au commit.
    - `memory/conventions/hooks.md`
 
 8. **Ajouter les hooks projet-spécifiques** (lint syntaxique selon
-   stack) dans `.claude/hooks/` et les câbler dans
-   `.claude/settings.json`.
+   stack) dans `.claude/hooks/` (en Python stdlib, comme les 6 hooks
+   fournis) et les câbler dans `.claude/settings.json` via
+   `python "${CLAUDE_PROJECT_DIR}/.claude/hooks/X.py"`. Prérequis
+   runtime : `python` dans le PATH (cf. `.claude/hooks/README.md`).
 
 9. **Commit initial** :
    ```bash

@@ -22,7 +22,7 @@
       "Bash(rm -rf:*)"
     ]
   },
-  "_comment_hooks": "Hooks fournis par le template. À étendre avec les hooks projet-spécifiques (lint syntaxique selon stack, etc.).",
+  "_comment_hooks": "Hooks fournis par l'overlay, réécrits en Python stdlib (portables Windows/Unix, aucun bash requis). Chemins via ${CLAUDE_PROJECT_DIR} (jamais relatifs : le shell dérive sur cd et casserait les hooks). À étendre avec les hooks projet-spécifiques (lint syntaxique selon stack, etc.).",
   "hooks": {
     "PreToolUse": [
       {
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/protect-local-files.sh",
+            "command": "python \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect-local-files.py\"",
             "timeout": 5
           }
         ]
@@ -40,17 +40,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/em-dash-precommit.sh",
+            "command": "python \"${CLAUDE_PROJECT_DIR}/.claude/hooks/em-dash-precommit.py\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/improvements-validate.sh",
+            "command": "python \"${CLAUDE_PROJECT_DIR}/.claude/hooks/improvements-validate.py\"",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "bash .claude/hooks/co-authored-by-precommit.sh",
+            "command": "python \"${CLAUDE_PROJECT_DIR}/.claude/hooks/co-authored-by-precommit.py\"",
             "timeout": 10
           }
         ]
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash .claude/hooks/remind-check-all.sh",
+            "command": "python \"${CLAUDE_PROJECT_DIR}/.claude/hooks/remind-check-all.py\"",
             "timeout": 5
           }
         ]
@@ -70,6 +70,6 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "bash .claude/hooks/statusline.sh"
+    "command": "python \"${CLAUDE_PROJECT_DIR}/.claude/hooks/statusline.py\""
   }
 }

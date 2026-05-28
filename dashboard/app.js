@@ -282,22 +282,109 @@ async function renderWsOverlays(wsId, host) {
     applyBtn.title = ov.active
       ? `Ré-applique l'overlay : ne copie que les fichiers absents, n'écrase rien.`
       : `Copie ${ov.file_count} fichier(s) dans ce workspace (idempotent).`;
-    applyBtn.addEventListener('click', () => withBusy(applyBtn, async () => {
-      try {
-        const r = await API.post(`/api/workspaces/${wsId}/overlays/${ov.id}`, {});
-        const nc = (r.copied || []).length;
-        const ns = (r.skipped || []).length;
-        if (nc === 0 && ns > 0) {
-          toastOk(`Module déjà complet (${ns} fichier(s) déjà présent(s))`);
-        } else {
-          toastOk(`Module appliqué · ${nc} ajouté(s), ${ns} déjà présent(s)`);
-        }
-        renderWsOverlays(wsId, host);  // refresh badges
-      } catch (e) { toastErr(e.message); }
-    }));
+    // Le clic ouvre une modale de bootstrap qui collecte mode / langue /
+    // auteur / profondeur AVANT d'appliquer (cf. P3). Le POST porte ces
+    // choix ; le backend filtre les fichiers (mode-gating + profondeur),
+    // ecrit settings.local.json (validate_author) et pre-coche overview.md.
+    applyBtn.addEventListener('click', () => modalApplyOverlay(wsId, ov, host));
     row.appendChild(applyBtn);
     list.appendChild(row);
   }
+}
+
+// Modale de bootstrap d'un overlay : mode projet, langue, convention
+// auteur (si equipe), profondeur d'install. Pre-remplit les defauts
+// suggeres (solo -> minimale ; equipe -> complete) et applique au submit.
+function modalApplyOverlay(wsId, ov, host) {
+  const body = el('div');
+  body.innerHTML = `
+    <div class="muted" style="font-size:12px;margin-bottom:10px">
+      ${escapeHtml(ov.emoji || '🧩')} <strong>${escapeHtml(ov.label || ov.id)}</strong> —
+      ${escapeHtml(ov.description || '')}
+    </div>
+    <div class="field">
+      <label class="field-label">Mode projet</label>
+      <select class="select" name="mode">
+        <option value="solo">Solo (un seul mainteneur)</option>
+        <option value="equipe">Équipe (sans hiérarchie)</option>
+        <option value="equipe-hierarchique">Équipe avec hiérarchie (digests actifs)</option>
+      </select>
+      <div class="muted" style="font-size:11px;margin-top:4px">
+        Solo : pas d'attribution d'auteur obligatoire (validate_author=false).
+        Équipe : auteur obligatoire sur les items de registres.
+        Hiérarchique : ajoute digests/, /digest-week et l'agent digest-compiler.
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label class="field-label">Langue</label>
+        <select class="select" name="language">
+          <option value="fr">Français</option>
+          <option value="en">Anglais</option>
+          <option value="autre">Autre</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="field-label">Profondeur d'install</label>
+        <select class="select" name="depth">
+          <option value="minimal">Minimale (overview + improvements)</option>
+          <option value="complete">Complète (tout + exemples)</option>
+        </select>
+      </div>
+    </div>
+    <div class="field" data-author-field style="display:none">
+      <label class="field-label">Convention auteur</label>
+      <input class="input mono" name="author" placeholder="ex. antoine.b, ab, @slug">
+      <div class="muted" style="font-size:11px;margin-top:4px">
+        Identifiant utilisé dans les champs <code>par &lt;author&gt;</code> des registres.
+      </div>
+    </div>
+  `;
+  const modeSel = body.querySelector('[name=mode]');
+  const depthSel = body.querySelector('[name=depth]');
+  const authorField = body.querySelector('[data-author-field]');
+  // Defauts suggeres + champ auteur conditionnel au mode equipe.
+  const syncMode = () => {
+    const m = modeSel.value;
+    const team = (m === 'equipe' || m === 'equipe-hierarchique');
+    authorField.style.display = team ? '' : 'none';
+    // Defaut de profondeur suggere selon le mode (modifiable ensuite).
+    depthSel.value = (m === 'solo') ? 'minimal' : 'complete';
+  };
+  modeSel.addEventListener('change', syncMode);
+  syncMode();
+
+  const cancel = btn('Annuler', 'btn-ghost');
+  const apply = btn(ov.active ? 'Ré-appliquer' : 'Activer', 'btn-primary', ov.active ? I.refresh : I.plus);
+  const { close } = openModal({ title: `Module : ${ov.label || ov.id}`, body, footer: [cancel, apply] });
+  cancel.addEventListener('click', close);
+  apply.addEventListener('click', () => withBusy(apply, async () => {
+    const payload = {
+      mode: modeSel.value,
+      language: body.querySelector('[name=language]').value,
+      depth: depthSel.value,
+      author: body.querySelector('[name=author]').value.trim(),
+    };
+    try {
+      const r = await API.post(`/api/workspaces/${wsId}/overlays/${ov.id}`, payload);
+      const nc = (r.copied || []).length;
+      const na = (r.appended || []).length;
+      const nseed = (r.seeded || []).length;
+      const ns = (r.skipped || []).length;
+      const parts = [];
+      if (nc) parts.push(`${nc} ajouté(s)`);
+      if (na) parts.push(`${na} fragment(s) CLAUDE.md`);
+      if (nseed) parts.push(`${nseed} exemple(s)`);
+      if (ns) parts.push(`${ns} ignoré(s)`);
+      if (!nc && !na && !nseed) {
+        toastOk(`Module déjà complet (${ns} fichier(s) déjà présent(s))`);
+      } else {
+        toastOk(`Module appliqué · ${parts.join(', ')}`);
+      }
+      close();
+      renderWsOverlays(wsId, host);  // refresh badges
+    } catch (e) { toastErr(e.message); }
+  }));
 }
 
 /* ================================================================

@@ -3,5 +3,42 @@
   "label": "Auto-amélioration de Claude",
   "description": "Ajoute une mémoire structurée (.claude/memory), un pipeline d'auto-amélioration (improvements.md, ideas.md, backlog.md, roadmap.md), des digests hiérarchiques, agents, commands et hooks pré-commit. S'applique par-dessus un template existant — n'écrase aucun fichier déjà présent dans le workspace.",
   "emoji": "🧠",
-  "signature_file": ".claude/improvements.md"
+  "signature_file": ".claude/improvements.md",
+
+  "_comment_claude_md": "CLAUDE.md est traité spécialement par apply_overlay (cf. dashcore/api_overlays.py) : si l'hôte n'a pas de CLAUDE.md -> écrire le complet rendu ; s'il en a un sans le marqueur -> appender le fragment CLAUDE.self-improving.md (borné par les marqueurs ci-dessous) ; si le marqueur est déjà présent -> skip (idempotent). Le fragment source n'est jamais copié tel quel dans le workspace.",
+  "claude_md": {
+    "full_file": "CLAUDE.md",
+    "fragment_file": "CLAUDE.self-improving.md",
+    "begin_marker": "<!-- BEGIN claude-self-improving -->",
+    "end_marker": "<!-- END claude-self-improving -->"
+  },
+
+  "_comment_mode_gated": "Chemins (relatifs à la racine de l'overlay) conditionnés au mode projet. Une entrée est copiée seulement si le mode choisi au bootstrap est dans sa liste `modes`. Les chemins non listés ici sont copiés dans tous les modes (sous réserve de la profondeur d'install). Modes possibles : solo, equipe, equipe-hierarchique.",
+  "mode_gated": [
+    { "path": ".claude/digests/README.md", "modes": ["equipe-hierarchique"] },
+    { "path": ".claude/commands/digest-week.md", "modes": ["equipe-hierarchique"] },
+    { "path": ".claude/agents/slug-digest-compiler.md", "modes": ["equipe-hierarchique"] }
+  ],
+
+  "_comment_depth": "Profondeur d'install. minimale = squelette nu (overview + improvements + outillage), pas d'exemples seed ; complète = tout + un exemple travaillé appendé dans chaque registre. Défaut suggéré côté UI : solo -> minimale, équipe -> complète.",
+  "depth": {
+    "minimal_keep": [
+      "CLAUDE.md",
+      "CLAUDE.self-improving.md",
+      "README.md",
+      ".gitignore",
+      ".claude/improvements.md",
+      ".claude/settings.json",
+      ".claude/settings.local.json.example",
+      ".claude/memory/overview.md"
+    ]
+  },
+
+  "_comment_seeds": "Exemples travaillés (profondeur complète uniquement). Chaque seed est un fragment markdown appendé à la fin du registre cible APRÈS sa copie (donc seulement au premier apply, idempotent). Le seed n'est jamais copié comme fichier autonome. seed_dir relatif à la racine de l'overlay. mode (optionnel) restreint le seed au mode projet.",
+  "seeds": [
+    { "seed": ".claude/seeds/ideas.example.md", "target": ".claude/ideas.md" },
+    { "seed": ".claude/seeds/backlog.example.md", "target": ".claude/backlog.md" },
+    { "seed": ".claude/seeds/improvements.example.md", "target": ".claude/improvements.md" },
+    { "seed": ".claude/seeds/roadmap.example.md", "target": ".claude/roadmap.md" }
+  ]
 }

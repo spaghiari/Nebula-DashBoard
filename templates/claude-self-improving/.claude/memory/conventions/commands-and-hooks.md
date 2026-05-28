@@ -35,9 +35,9 @@ section « Pour ajouter une nouvelle slash command ».
 
 | Signal | Action |
 |---|---|
-| Nouveau fichier user-local sensible | Étendre `protect-local-files.sh` |
-| Nouveau format de message à interdire (en plus de l'em-dash) | Étendre `em-dash-precommit.sh` ou créer un nouveau hook précommit |
-| Nouveau registre versionné à valider en format | Étendre `improvements-validate.sh` ou créer un hook dédié |
+| Nouveau fichier user-local sensible | Étendre `protect-local-files.py` |
+| Nouveau format de message à interdire (en plus de l'em-dash) | Étendre `em-dash-precommit.py` ou créer un nouveau hook précommit |
+| Nouveau registre versionné à valider en format | Étendre `improvements-validate.py` ou créer un hook dédié |
 | Lint automatique manquant sur un nouveau type de fichier | Étendre ou créer un hook postedit |
 | Hook qui plante sur un environnement spécifique | Rendre best-effort (exit 0 si conditions non remplies) |
 | Hook qui bloque trop souvent | Rendre plus permissif ou plus précis |
@@ -53,7 +53,7 @@ les commands/hooks sont à inscrire au registre :
 À documenter dans
 [`.claude/improvements.md`](../../improvements.md) au fur et à mesure
 des audits, avec priorisation P0/P1/P2 et pointeur vers le fichier
-cible (`.claude/commands/<cmd>.md` ou `.claude/hooks/<hook>.sh`).
+cible (`.claude/commands/<cmd>.md` ou `.claude/hooks/<hook>.py`).
 
 ## Anti-patterns
 

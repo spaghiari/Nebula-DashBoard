@@ -1,28 +1,49 @@
 # CLAUDE.md
 
-Mémoire projet **always-on** pour `{{label}}`. Le détail thématique
-vit dans `.claude/memory/` (sommaire en bas).
+Mémoire projet **always-on** pour `{{label}}`.
 
-> **Ce fichier est issu d'un template.** À l'instanciation, remplacer
-> `{{label}}` par le nom du projet, `{{name}}-` par le préfixe court
-> retenu pour les agents et identifiants (par exemple `am-` pour le
-> projet AstreinteManager d'origine). Voir `.claude/memory/overview.md`
-> pour les autres décisions de bootstrap.
+> **Ce fichier est issu d'un overlay (`claude-self-improving`).** À
+> l'instanciation, remplacer `{{label}}` par le nom du projet et
+> `{{name}}` par le préfixe court retenu pour les agents et
+> identifiants (par exemple `am` pour le projet AstreinteManager
+> d'origine). Voir `.claude/memory/overview.md` pour les autres
+> décisions de bootstrap.
+>
+> Le bloc always-on ci-dessous (entre les marqueurs
+> `claude-self-improving`) est **la même source** que le fragment
+> `CLAUDE.self-improving.md` appendé sur les hôtes qui ont déjà un
+> `CLAUDE.md`. Ne pas le dupliquer : si l'hôte a son propre
+> `CLAUDE.md`, c'est ce bloc seul qui y est appendé.
 
-## Règles ALWAYS-ON (à appliquer sans relecture)
+<!-- BEGIN claude-self-improving -->
+<!--
+  Bloc always-on injecté par l'overlay « Auto-amélioration de Claude »
+  (Nebula). Ne pas éditer manuellement entre les marqueurs BEGIN/END :
+  le ré-apply de l'overlay détecte ce bloc pour rester idempotent.
+  Pour personnaliser durablement, déplacer le contenu hors des marqueurs
+  ou retirer les marqueurs.
+-->
 
-### Communication
+## Auto-amélioration de Claude (always-on)
 
-- **Langue projet** : à déclarer dans `memory/overview.md`. Tous les
-  artefacts rédigés dans cette langue : commentaires de code, doc
-  inline, READMEs, CHANGELOG, ce fichier ET messages de commit git.
+Mémoire projet structurée et pipeline d'auto-amélioration pour
+`{{label}}`. Le détail thématique vit dans `.claude/memory/` (sommaire
+en bas de ce bloc).
+
+### Règles ALWAYS-ON (à appliquer sans relecture)
+
+#### Communication
+
+- **Langue projet** : à déclarer dans `.claude/memory/overview.md`.
+  Tous les artefacts rédigés dans cette langue : commentaires de code,
+  doc inline, READMEs, CHANGELOG, ce bloc ET messages de commit git.
 - **Cite `file:line`** pour toute référence de code - ne paraphrase
   jamais une ligne importante.
 - **Conventions typographiques** (em-dash, caractères accentués,
-  encodage) déclarées dans `memory/conventions/` et enforced par
-  hooks de pre-commit (`.claude/hooks/`).
+  encodage) déclarées dans `.claude/memory/conventions/` et enforced
+  par hooks de pre-commit (`.claude/hooks/`).
 
-### Édition
+#### Édition
 
 - **Ne crée jamais de `.md` ad-hoc** à la racine (plan, analyse,
   notes temporaires) sans demande explicite. Travaille depuis le
@@ -32,7 +53,7 @@ vit dans `.claude/memory/` (sommaire en bas).
   `.claude/digests/**/*.md`.
 - **Ne touche jamais** à `CLAUDE.local.md`, `.claude/settings.local.json`
   ni à la mémoire user-locale `~/.claude/projects/.../memory/` (gérée
-  par Claude Code, refus du hook `protect-local-files.sh`).
+  par Claude Code, refus du hook `protect-local-files.py`).
 - **Délégation à `{{name}}-expert` par défaut pour les tâches
   conséquentes** (feature M+ / 10-20 fichiers, bug fix multi-fichiers
   3+, refactor à effets de bord, design non-trivial). Ne pas
@@ -48,7 +69,7 @@ vit dans `.claude/memory/` (sommaire en bas).
   de comportement Claude sur le projet -> `.claude/memory/` versionné.
   **La mémoire projet s'auto-suffit.**
 
-### Pipeline d'auto-amélioration (5 registres versionnés)
+#### Pipeline d'auto-amélioration
 
 Quand un signal d'amélioration émerge, **proposer** son ajout au
 registre correspondant à l'utilisateur **avant la fin du turn** -
@@ -63,6 +84,13 @@ jamais d'ajout silencieux :
 | Synthèse hebdomadaire à pousser au N+1 ou reçue d'un N-1 | [`digests/`](.claude/digests/) | [`conventions/digests.md`](.claude/memory/conventions/digests.md) |
 | Pattern qui se cristallise (bug post-mortem, convention, sous-système) | mémoire `.claude/memory/<thème>.md` | [`conventions/memory-enrichment.md`](.claude/memory/conventions/memory-enrichment.md) |
 
+> **Note mode** : les registres `ideas`, `backlog`, `roadmap`,
+> `improvements` sont posés dans tous les modes ; le registre
+> `digests/`, la commande `/digest-week` et l'agent
+> `{{name}}-digest-compiler` ne sont posés qu'en **mode
+> équipe-hiérarchique**. Le mode actif est déclaré dans
+> `.claude/memory/overview.md § Mode projet`.
+
 Pipeline unifié 4 stages (IDEAS / VALIDATED / IN PROGRESS / DONE) :
 [`conventions/pipeline.md`](.claude/memory/conventions/pipeline.md).
 Cycle de vie des items DONE (cristallisation patterns + archivage) :
@@ -70,53 +98,46 @@ Cycle de vie des items DONE (cristallisation patterns + archivage) :
 Mesure de l'effort des features (XXS-XXL + humain vs IA) :
 [`conventions/effort-sizing.md`](.claude/memory/conventions/effort-sizing.md).
 
-### Attribution d'auteur (équipe)
+#### Attribution d'auteur
 
-**Pour les projets en mode équipe** (cf. `memory/overview.md § Mode
-projet`), **tout item ajouté à un registre** (`ideas`, `backlog`,
-`roadmap`, `improvements`, `digests`) **doit comporter le champ
-`par <author>`** :
+L'attribution d'auteur (`par <author>`) sur les items de registres est
+**obligatoire en mode équipe et équipe-hiérarchique**, **optionnelle en
+mode solo**. Le mode actif et la convention d'identifiant sont déclarés
+dans `.claude/memory/overview.md § Mode projet` et `§ Identité auteur`.
 
 ```
 - **[STATUT] <titre>** (Pn, ajouté YYYY-MM-DD par <author>)
 ```
 
-Pour les items DONE livrés par un autre que l'auteur initial,
-ajouter aussi `livré par <author>` dans le bloc DONE.
+Pour les items DONE livrés par un autre que l'auteur initial, ajouter
+aussi `livré par <author>` dans le bloc DONE. Le hook
+`improvements-validate.py` valide la présence du champ quand
+`validate_author` n'est pas `false` dans `.claude/settings.local.json`
+(posé à `false` automatiquement par l'overlay en mode solo).
 
-L'identifiant `<author>` suit la convention déclarée dans
-`memory/overview.md § Identité auteur` (par défaut : `git config
-user.name` court, par exemple `antoine.b`). Le hook
-`improvements-validate.sh` valide la présence du champ au commit
-quand le mode équipe est actif.
-
-Pour les projets en **mode solo**, l'auteur est implicite (le
-mainteneur unique) et peut être omis - mais l'inclure
-systématiquement n'est jamais une erreur.
-
-### Git
+#### Git
 
 - **Pas de commit/push sans demande explicite**. Présenter un diff
   propre, attendre validation, puis commiter au format `type(scope):
   message` avec `type ∈ {feature, fix, update, push, doc}`.
 - **Pas de trailer `Co-Authored-By: Claude`** dans aucun commit
-  (convention configurable - cf. `.claude/hooks/co-authored-by-precommit.sh`).
+  (convention configurable - cf. `.claude/hooks/co-authored-by-precommit.py`).
 - **Convention de mention de version dans le code** : voir
   `conventions/git.md` une fois ce fichier produit pour le projet.
 
-### Pièges silencieux à toujours garder en tête
+#### Pièges silencieux à toujours garder en tête
 
 (À compléter par le projet en fonction de sa stack. Voir
 [`pitfalls.md`](.claude/memory/pitfalls.md) et ses spokes
 `pitfalls/<catégorie>.md`.)
 
-## Outillage Claude (slash commands, agents, hooks)
+### Outillage Claude (slash commands, agents, hooks)
 
 Slash commands, sous-agents, hooks et settings documentés dans
 [`claude-tooling.md`](.claude/memory/claude-tooling.md). Slash commands
-génériques fournis par le template :
+génériques fournis par l'overlay :
 
-- `/pipeline` — vue synthétique des 5 registres.
+- `/pipeline` — vue synthétique des registres.
 - `/brainstorm <topic>` — production proactive d'idées (mode
   audit-driven pour topics code-rattachés).
 - `/self-review` — audit READ-ONLY des outils Claude eux-mêmes
@@ -126,14 +147,16 @@ génériques fournis par le template :
 - `/readme-sync` — cohérence READMEs sous-dossiers.
 - `/check-all` — orchestration des linters/audits projet (à
   instancier selon stack).
-- `/digest-week` — production du digest hebdomadaire (cf.
-  `conventions/digests.md`).
+- `/digest-week` — production du digest hebdomadaire (mode
+  équipe-hiérarchique uniquement, cf. `conventions/digests.md`).
 
-Sous-agents génériques : `{{name}}-expert` (feature M+), 
+Sous-agents génériques : `{{name}}-expert` (feature M+),
 `{{name}}-impl-validator` (validation 5 axes), `{{name}}-pitfall-auditor`
-(audit pitfalls profond). À instancier pour le projet.
+(audit pitfalls profond). En mode équipe-hiérarchique :
+`{{name}}-digest-compiler` (compilation des digests). À instancier pour
+le projet.
 
-## Mémoire détaillée - sommaire `.claude/memory/`
+### Mémoire détaillée - sommaire `.claude/memory/`
 
 Le projet utilise un modèle hub-and-spoke : un fichier hub thématique
 au niveau racine de `memory/`, et un dossier `<thème>/` avec des
@@ -153,3 +176,4 @@ spokes détaillés quand le contenu grossit. Lire le hub pertinent
 | [`pitfalls.md`](.claude/memory/pitfalls.md) | **Avant tout edit non-trivial** : registre des pièges silencieux par catégorie (hub avec spokes) |
 | [`diagnostics.md`](.claude/memory/diagnostics.md) | Troubleshooting incident, paths logs, outils diagnostic |
 | [`claude-tooling.md`](.claude/memory/claude-tooling.md) | Slash commands, agents, hooks, settings (vue d'ensemble) |
+<!-- END claude-self-improving -->

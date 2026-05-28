@@ -24,10 +24,12 @@ détaillée. Génériques fournis par le template : `/pipeline`,
 
 ## Hooks installés
 
-Voir `conventions/hooks.md` (à créer pour le projet). Génériques :
-`em-dash-precommit.sh`, `co-authored-by-precommit.sh`,
-`improvements-validate.sh`, `protect-local-files.sh`,
-`remind-check-all.sh`, `statusline.sh`.
+Voir `conventions/hooks.md` (à créer pour le projet). Génériques, en
+Python stdlib (portables, câblés via
+`python "${CLAUDE_PROJECT_DIR}/.claude/hooks/X.py"`) :
+`em-dash-precommit.py`, `co-authored-by-precommit.py`,
+`improvements-validate.py`, `protect-local-files.py`,
+`remind-check-all.py`, `statusline.py`.
 
 ## Settings
 
