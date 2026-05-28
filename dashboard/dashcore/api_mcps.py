@@ -123,6 +123,42 @@ def _stdio_executable(mcp: dict) -> str:
     return parts[0] if parts else cmd
 
 
+def _mask_url(url: str) -> str:
+    """Masque les parties sensibles d'une URL pour les réponses API (F3.2).
+
+    - userinfo (`user:pass@`) -> retiré.
+    - query string (`?token=...`) -> remplacée par `?…` si présente.
+    On conserve schéma + host + path : assez pour IDENTIFIER l'endpoint, jamais
+    de credential en clair. Si l'URL contient un ${VAR} non résolu (cas registre),
+    elle est déjà sans secret -> renvoyée telle quelle.
+    """
+    url = (url or "").strip()
+    if not url:
+        return ""
+    # Une URL avec ${VAR} ne porte pas de secret en clair : on la garde lisible.
+    if "${" in url:
+        return url
+    try:
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(url)
+        netloc = parts.hostname or ""
+        if parts.port:
+            netloc += f":{parts.port}"
+        # userinfo (parts.username/password) volontairement omis.
+        query = "…" if parts.query else ""
+        return urlunsplit((parts.scheme, netloc, parts.path, query, ""))
+    except ValueError:
+        # URL non parsable : on ne renvoie pas la valeur brute (prudence).
+        return "(url masquée)"
+
+
+def _mask_env_keys(d: dict | None) -> list[str]:
+    """Ne renvoie que les NOMS de clés d'un dict env/headers (jamais les valeurs)."""
+    if not isinstance(d, dict):
+        return []
+    return sorted(str(k) for k in d.keys())
+
+
 def diagnose_mcp(mcp_id: str) -> tuple[int, dict]:
     """Diagnostic actionnable d'un MCP : agrège des checks structurés.
 
@@ -201,6 +237,7 @@ def diagnose_mcp(mcp_id: str) -> tuple[int, dict]:
         })
 
     # ── 1c. Commande disponible (stdio) ──────────────────────────────────────
+    cmd_resoluble = False
     if transport == "stdio":
         exe = _stdio_executable(mcp)
         if not exe:
@@ -211,6 +248,7 @@ def diagnose_mcp(mcp_id: str) -> tuple[int, dict]:
                 "fix": "Renseigne le champ Command (ex. npx, uvx, node, python).",
             })
         elif shutil.which(exe):
+            cmd_resoluble = True
             checks.append({
                 "label": "Commande exécutable",
                 "status": "ok",
@@ -226,6 +264,48 @@ def diagnose_mcp(mcp_id: str) -> tuple[int, dict]:
                 "fix": f"Installe « {exe} » ou vérifie qu'il est dans le PATH "
                        "(ex. Node.js pour npx, uv pour uvx).",
             })
+
+    # ── 1c-bis. Working directory (stdio, cwd renseigné) ─────────────────────
+    # F1.3 : si un cwd est défini et entièrement résolu (pas de ${VAR} restant),
+    # on vérifie qu'il pointe sur un dossier réel -- sinon le process MCP plantera
+    # au démarrage (Claude affiche « cannot find path » / OSError opaque).
+    if transport == "stdio" and (mcp.get("cwd") or "").strip():
+        cwd_resolved, cwd_miss = substitute_env((mcp.get("cwd") or "").strip(), env_local)
+        if cwd_miss:
+            # 1a a déjà signalé la (les) variable(s) manquante(s) ; on évite un
+            # double signalement err et on ne teste pas un chemin avec ${VAR}.
+            checks.append({
+                "label": "Working directory",
+                "status": "warn",
+                "detail": "Working directory non vérifié : il contient des ${VAR} non résolues "
+                          + "(" + ", ".join(cwd_miss) + ").",
+                "fix": "Définis les variables manquantes puis relance le diagnostic.",
+            })
+        elif Path(cwd_resolved).is_dir():
+            checks.append({
+                "label": "Working directory",
+                "status": "ok",
+                "detail": f"Le working directory « {cwd_resolved} » existe.",
+                "fix": "",
+            })
+        else:
+            checks.append({
+                "label": "Working directory",
+                "status": "err",
+                "detail": f"Le working directory « {cwd_resolved} » n'est pas un dossier existant. "
+                          "Le process MCP ne démarrera pas (cwd introuvable).",
+                "fix": "Corrige le champ Working directory (cwd) pour pointer sur un dossier réel.",
+            })
+
+    # ── 1c-ter. Sonde de démarrage (stdio) ───────────────────────────────────
+    # F1.1/F1.2 : `shutil.which` valide que l'INTERPRÉTEUR existe (npx, uvx,
+    # node...), pas que le PACKAGE servi soit installable/présent. On lance donc
+    # réellement le process et on tente une poignée de main JSON-RPC `initialize`.
+    # Best-effort, UNIQUEMENT sur action Diagnostiquer explicite (jamais en
+    # liste/poll). Réserve : npx/uvx peuvent télécharger le package au 1er run,
+    # ce qui fait dépasser le timeout court -> verdict `warn`, pas `err`.
+    if transport == "stdio" and cmd_resoluble and not missing_vars:
+        checks.append(_probe_stdio(mcp, env_local))
 
     # ── 1d. Sonde HTTP (http/sse) ────────────────────────────────────────────
     if transport in ("http", "sse"):
@@ -379,6 +459,204 @@ def _probe_http(url: str, headers: dict) -> dict:
         }
 
 
+# Marqueurs stderr indiquant que l'INTERPRÉTEUR a démarré mais que le PACKAGE
+# servi est introuvable / non installable (la cause racine que shutil.which ne
+# peut pas voir). Insensible à la casse.
+_PKG_MISSING_MARKERS = (
+    "could not determine executable",
+    "404 not found",
+    "e404",
+    "not found in the npm registry",
+    "no matching version found",
+    "is not recognized",
+    "command not found",
+    "modulenotfounderror",
+    "no module named",
+    "cannot find module",
+    "npm error",
+    "npm err!",
+)
+
+# Timeout court de la sonde stdio (s). Volontairement bas : on cherche juste à
+# savoir si le serveur DÉMARRE et parle JSON-RPC, pas à dérouler une session.
+_STDIO_PROBE_TIMEOUT = 6
+
+
+def _probe_stdio(mcp: dict, env_local: dict) -> dict:
+    """Sonde de démarrage d'un serveur MCP stdio (stdlib only, best-effort).
+
+    Lance réellement le process avec la command/args/cwd/env résolus (mêmes
+    valeurs que celles écrites dans le .mcp.json via build_mcp_server_entry),
+    écrit une requête JSON-RPC `initialize` minimale sur stdin, puis lit stdout
+    dans un thread avec timeout court (proc.kill() au-delà).
+
+    Mapping :
+      - réponse JSON-RPC avec `result`           -> ok  (le serveur démarre)
+      - exit rapide non-zéro + stderr « package introuvable » -> err
+      - pas de réponse JSON-RPC dans le délai     -> warn (peut être lent /
+        télécharge au 1er run pour npx/uvx)
+
+    PÉRIMÈTRE : aucun secret renvoyé (on ne renvoie ni l'env résolu ni le stdout
+    brut ; uniquement un verdict + un extrait stderr tronqué et neutre).
+    """
+    label = "Sonde de démarrage (stdio)"
+
+    # Réutilise la résolution officielle (command/args/cwd/env) -> cohérent avec
+    # ce que Nebula écrit dans le .mcp.json. miss est déjà couvert par le check
+    # 1a (on n'appelle cette sonde que si missing_vars est vide).
+    entry, _miss = build_mcp_server_entry(mcp, env_local)
+    command = entry.get("command") or ""
+    args = entry.get("args") or []
+    cwd = entry.get("cwd") or None
+    env_resolved = entry.get("env") or {}
+
+    if not command:
+        return {
+            "label": label,
+            "status": "warn",
+            "detail": "Sonde non lancée : aucune commande résolue.",
+            "fix": "",
+        }
+    # Windows : npx/uvx/node sont des `.cmd`/`.exe`. Pop([command]) sans shell ne
+    # résout PAS l'extension -> FileNotFoundError trompeur. On lance le chemin
+    # absolu trouvé par shutil.which (qui a déjà servi au check 1c, donc présent).
+    resolved = shutil.which(command)
+    if resolved:
+        command = resolved
+    # Si un cwd est renseigné mais inexistant, 1c-bis l'a déjà signalé en err ;
+    # on évite de planter Popen sur un cwd absent.
+    if cwd and not Path(cwd).is_dir():
+        return {
+            "label": label,
+            "status": "warn",
+            "detail": "Sonde non lancée : le working directory n'existe pas (voir le check dédié).",
+            "fix": "",
+        }
+
+    # Env du process : on hérite de l'environnement courant + les vars résolues
+    # du MCP (sinon le serveur ne verrait pas ses propres ${VAR}).
+    proc_env = {**os.environ, **{k: str(v) for k, v in env_resolved.items()}}
+
+    # Requête JSON-RPC `initialize` minimale conforme au protocole MCP.
+    init_req = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "nebula-diagnostic", "version": "1.0"},
+        },
+    }) + "\n"
+
+    try:
+        proc = subprocess.Popen(
+            [command, *args],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=cwd, env=proc_env, text=True, encoding="utf-8", errors="replace",
+            bufsize=1,
+        )
+    except (OSError, ValueError) as e:
+        return {
+            "label": label,
+            "status": "err",
+            "detail": f"Le process n'a pas pu être lancé : {type(e).__name__}.",
+            "fix": "Vérifie la commande, ses arguments et le working directory.",
+        }
+
+    result: dict = {}
+
+    def _pump():
+        try:
+            out, err = proc.communicate(input=init_req, timeout=_STDIO_PROBE_TIMEOUT)
+            result["out"] = out or ""
+            result["err"] = err or ""
+            result["rc"] = proc.returncode
+        except subprocess.TimeoutExpired:
+            result["timeout"] = True
+        except Exception as e:  # noqa: BLE001 -- robustesse de la sonde
+            result["exc"] = type(e).__name__
+
+    t = threading.Thread(target=_pump, daemon=True)
+    t.start()
+    t.join(_STDIO_PROBE_TIMEOUT + 1)
+
+    # Garantit qu'aucun process zombie ne survit à la sonde.
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        result.setdefault("timeout", True)
+
+    if result.get("exc"):
+        return {
+            "label": label,
+            "status": "warn",
+            "detail": f"Sonde de démarrage impossible : {result['exc']}.",
+            "fix": "Relance le diagnostic ; teste la commande manuellement si ça persiste.",
+        }
+
+    out = result.get("out", "") or ""
+    err = result.get("err", "") or ""
+    rc = result.get("rc")
+    err_low = err.lower()
+
+    # 1) Réponse JSON-RPC valide avec `result` -> le serveur démarre.
+    for line in out.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "result" in obj:
+            return {
+                "label": label,
+                "status": "ok",
+                "detail": "Le serveur démarre et répond à l'initialisation MCP (JSON-RPC initialize).",
+                "fix": "",
+            }
+        if isinstance(obj, dict) and "error" in obj:
+            return {
+                "label": label,
+                "status": "warn",
+                "detail": "Le serveur démarre mais renvoie une erreur JSON-RPC à l'initialisation.",
+                "fix": "Vérifie la configuration du serveur (env/arguments attendus).",
+            }
+
+    # 2) Exit non-zéro + stderr « package introuvable » -> err actionnable.
+    if any(mk in err_low for mk in _PKG_MISSING_MARKERS):
+        return {
+            "label": label,
+            "status": "err",
+            "detail": "Le serveur ne démarre pas : le package/module servi semble introuvable "
+                      "(l'interpréteur existe, mais pas le paquet). "
+                      "shutil.which ne valide que l'interpréteur, pas le package.",
+            "fix": "Vérifie le nom/version du package dans args (npx -y <pkg>, uvx <pkg>) "
+                   "ou installe-le.",
+        }
+
+    if rc is not None and rc != 0:
+        return {
+            "label": label,
+            "status": "warn",
+            "detail": f"Le process s'est terminé avec le code {rc} sans répondre à l'initialisation MCP.",
+            "fix": "Lance le serveur manuellement pour lire son message d'erreur complet.",
+        }
+
+    # 3) Pas de réponse dans le délai -> warn (peut être lent / 1er téléchargement).
+    return {
+        "label": label,
+        "status": "warn",
+        "detail": f"Le serveur n'a pas répondu à l'initialisation MCP en {_STDIO_PROBE_TIMEOUT}s. "
+                  "Ce n'est pas forcément cassé : npx/uvx peut télécharger le package au 1er "
+                  "lancement, et certains serveurs sont lents à démarrer.",
+        "fix": "Relance le diagnostic après un 1er lancement réussi, ou teste la commande manuellement.",
+    }
+
+
 def _diagnose_sync(mcp: dict) -> dict | None:
     """Compare le registre aux .mcp.json des workspaces ciblés (réutilise la
     logique de sanity_check). Signale les workspaces désync (warn).
@@ -523,6 +801,61 @@ def list_mcps_with_computed_status() -> dict:
     return data
 
 
+def export_mcps_claude_format() -> tuple[int, dict]:
+    """Génère À LA DEMANDE un objet `{mcpServers: {...}}` au format Claude
+    depuis le registre Nebula (F5.1).
+
+    Remplace le fichier figé `mcp/import-mcps.json` qui était maintenu à la
+    main : une 2e source éditable pouvait diverger du registre et réinjecter
+    une donnée fausse via « Importer JSON ». Le registre est désormais la
+    SEULE source -- l'export est dérivé, jamais édité.
+
+    SÉCURITÉ (aligné F3.2) : on n'effectue AUCUNE substitution de ${VAR}. Les
+    valeurs d'env/headers/url restent telles qu'écrites dans le registre (avec
+    leurs ${VAR} littéraux). Aucun secret résolu n'est donc émis : l'export est
+    collable tel quel et reste cohérent avec la résolution faite au sync.
+    Les MCPs « désactivé » sont exclus (cohérent avec sync_workspace_mcps).
+    """
+    registry = read_json(MCP_REGISTRY, {"mcps": []}).get("mcps", [])
+    servers: dict = {}
+    referenced_vars: set[str] = set()
+    for m in registry:
+        if m.get("status") == "désactivé":
+            continue
+        transport = m.get("transport", "stdio")
+        entry: dict = {"type": transport}
+        if transport in ("http", "sse"):
+            if not (m.get("url") or "").strip():
+                continue
+            entry["url"] = m.get("url", "")
+            if m.get("headers"):
+                entry["headers"] = dict(m["headers"])
+        else:
+            if not (m.get("command") or "").strip():
+                continue
+            entry["command"] = m.get("command", "")
+            if m.get("args"):
+                entry["args"] = list(m["args"])
+            if (m.get("cwd") or "").strip():
+                entry["cwd"] = m["cwd"]
+        if m.get("env"):
+            entry["env"] = dict(m["env"])
+        servers[m["id"]] = entry
+        # Collecte les ${VAR} référencées pour aider l'utilisateur à pré-remplir
+        # son .env.local (noms uniquement, jamais de valeurs).
+        for s in _mcp_interpolable_strings(m):
+            referenced_vars.update(_VAR_RE.findall(s))
+
+    payload = {
+        "_note": "Généré depuis le registre Nebula (MCPs -> Exporter). "
+                 "À coller dans MCPs -> Importer JSON sur un autre poste. "
+                 "Renseigne d'abord les variables ci-dessous dans .env.local.",
+        "_required_env_vars": sorted(referenced_vars),
+        "mcpServers": servers,
+    }
+    return 200, payload
+
+
 def add_or_update_mcp(payload: dict) -> tuple[int, dict]:
     clean, err = clean_mcp_payload(payload)
     if err:
@@ -658,48 +991,60 @@ def sync_workspace_mcps(ws_id: str) -> tuple[int, dict]:
     if not ws_dir.exists():
         return 404, {"error": "workspace absent sur disque"}
 
-    env_local = load_env_local()
-    registry = read_json(MCP_REGISTRY, {"mcps": []})
-    mcp_servers = {}
-    missing = {}
-    applied = []
+    # F2.3 : section critique sérialisée. Sans verrou, deux syncs concurrents
+    # (ex. _auto_sync déclenché par add/delete + un sync-all manuel, ou deux
+    # requêtes parallèles du ThreadingHTTPServer) entrelaçaient lecture registre,
+    # write .mcp.json et read/write mcp_sync_state.json -> .mcp.json corrompu ou
+    # hash de référence désynchronisé (faux positif « édité à la main »).
+    # _MUTATION_LOCK est un RLock (config.py) : add_or_update_mcp/delete_mcp le
+    # prennent déjà puis appellent _auto_sync -> sync_workspace_mcps, qui le
+    # re-prend dans le MÊME thread. La réentrance du RLock évite le deadlock que
+    # provoquerait un Lock simple ici. Choix RLock plutôt qu'extraction d'une
+    # variante sans-lock : 1 seul verrou en place, et protège aussi les appels
+    # DIRECTS (route /sync-mcps, sync_all_workspaces) jusque-là non sérialisés.
+    with _MUTATION_LOCK:
+        env_local = load_env_local()
+        registry = read_json(MCP_REGISTRY, {"mcps": []})
+        mcp_servers = {}
+        missing = {}
+        applied = []
 
-    for m in registry.get("mcps", []):
-        if not mcp_applies_to(m, ws_id):
-            continue
-        if m.get("status") == "désactivé":
-            continue
-        entry, miss = build_mcp_server_entry(m, env_local)
-        mcp_servers[m["id"]] = entry
-        applied.append(m["id"])
-        if miss:
-            missing[m["id"]] = miss
+        for m in registry.get("mcps", []):
+            if not mcp_applies_to(m, ws_id):
+                continue
+            if m.get("status") == "désactivé":
+                continue
+            entry, miss = build_mcp_server_entry(m, env_local)
+            mcp_servers[m["id"]] = entry
+            applied.append(m["id"])
+            if miss:
+                missing[m["id"]] = miss
 
-    out_path = ws_dir / ".mcp.json"
+        out_path = ws_dir / ".mcp.json"
 
-    # Détection AVANT écrasement : le fichier sur disque diverge-t-il du dernier
-    # rendu Nebula connu ? On ne signale que si on a une empreinte de référence
-    # (sinon = première sync ou état perdu : pas d'alerte, on (re)synchronise).
-    prev_hash = _read_mcp_sync_state().get(ws_id)
-    cur_hash = _mcp_file_hash(out_path)
-    hand_edited = bool(prev_hash and cur_hash and cur_hash != prev_hash)
+        # Détection AVANT écrasement : le fichier sur disque diverge-t-il du dernier
+        # rendu Nebula connu ? On ne signale que si on a une empreinte de référence
+        # (sinon = première sync ou état perdu : pas d'alerte, on (re)synchronise).
+        prev_hash = _read_mcp_sync_state().get(ws_id)
+        cur_hash = _mcp_file_hash(out_path)
+        hand_edited = bool(prev_hash and cur_hash and cur_hash != prev_hash)
 
-    if mcp_servers:
-        write_json(out_path, {"mcpServers": mcp_servers})
-        # Stocke le hash du fichier RÉELLEMENT écrit (relu sur disque) pour que
-        # la prochaine comparaison soit exacte, indépendamment du rendu json.
-        _set_mcp_sync_hash(ws_id, _mcp_file_hash(out_path))
-    elif out_path.exists():
-        out_path.unlink()
-        _set_mcp_sync_hash(ws_id, None)
-    else:
-        # Rien à générer et rien sur disque : nettoie un éventuel hash résiduel.
-        _set_mcp_sync_hash(ws_id, None)
+        if mcp_servers:
+            write_json(out_path, {"mcpServers": mcp_servers})
+            # Stocke le hash du fichier RÉELLEMENT écrit (relu sur disque) pour que
+            # la prochaine comparaison soit exacte, indépendamment du rendu json.
+            _set_mcp_sync_hash(ws_id, _mcp_file_hash(out_path))
+        elif out_path.exists():
+            out_path.unlink()
+            _set_mcp_sync_hash(ws_id, None)
+        else:
+            # Rien à générer et rien sur disque : nettoie un éventuel hash résiduel.
+            _set_mcp_sync_hash(ws_id, None)
 
-    result = {"ok": True, "applied": applied, "missing_env": missing, "path": str(out_path)}
-    if hand_edited:
-        result["hand_edited"] = True
-    return 200, result
+        result = {"ok": True, "applied": applied, "missing_env": missing, "path": str(out_path)}
+        if hand_edited:
+            result["hand_edited"] = True
+        return 200, result
 
 
 def sync_all_workspaces() -> tuple[int, dict]:
@@ -830,9 +1175,14 @@ def find_global_mcp_conflicts() -> dict:
                     "source_label": src.name,
                     "registry_status": registry_ids[name].get("status", "à configurer"),
                     "registry_workspaces": registry_ids[name].get("workspaces", []),
+                    # F3.2 : valeurs masquées (la commande seule n'est pas un
+                    # secret ; l'URL est masquée ; on n'expose que les NOMS des
+                    # clés env/headers, jamais leurs valeurs).
                     "global_command": cfg.get("command", ""),
-                    "global_url": cfg.get("url", ""),
+                    "global_url": _mask_url(cfg.get("url", "")),
                     "global_transport": cfg.get("type") or cfg.get("transport") or ("http" if cfg.get("url") else "stdio"),
+                    "global_env_keys": _mask_env_keys(cfg.get("env")),
+                    "global_header_keys": _mask_env_keys(cfg.get("headers")),
                 })
 
     # MCPs uniquement dans la config globale (jamais importés dans Nebula)
@@ -854,8 +1204,11 @@ def find_global_mcp_conflicts() -> dict:
                     "source": str(src),
                     "source_label": src.name,
                     "transport": cfg.get("type") or cfg.get("transport") or ("http" if cfg.get("url") else "stdio"),
+                    # F3.2 : même politique de masquage que les conflits.
                     "command": cfg.get("command", ""),
-                    "url": cfg.get("url", ""),
+                    "url": _mask_url(cfg.get("url", "")),
+                    "env_keys": _mask_env_keys(cfg.get("env")),
+                    "header_keys": _mask_env_keys(cfg.get("headers")),
                 })
 
     return {
@@ -955,21 +1308,27 @@ def scan_claude_config() -> tuple[int, dict]:
     existing_ids = {m["id"] for m in read_json(MCP_REGISTRY, {"mcps": []}).get("mcps", [])}
     seen: set[str] = set()
 
-    def _collect_servers(servers: dict) -> None:
+    def _collect_servers(servers: dict, source: str) -> None:
         for name, cfg in servers.items():
             if name in seen:
-                return
+                continue
             seen.add(name)
+            # F3.2 : on n'émet PAS les valeurs sensibles (env/headers/URL avec
+            # token) vers le front. On renvoie les NOMS de clés + une URL masquée
+            # + un champ `source` qui permet à l'import de re-lire les valeurs
+            # réelles côté serveur (cf. h_post_setup_import). command/args ne sont
+            # pas considérés comme des secrets (identifiants du package).
             result["mcps"].append({
                 "id": name,
                 "name": name,
                 "transport": cfg.get("transport") or cfg.get("type") or ("http" if cfg.get("url") else "stdio"),
                 "command": cfg.get("command", ""),
                 "args": cfg.get("args", []),
-                "env": cfg.get("env", {}),
+                "env_keys": _mask_env_keys(cfg.get("env")),
                 "cwd": cfg.get("cwd", ""),
-                "url": cfg.get("url", ""),
-                "headers": cfg.get("headers", {}),
+                "url": _mask_url(cfg.get("url", "")),
+                "header_keys": _mask_env_keys(cfg.get("headers")),
+                "source": source,
                 "already_registered": name in existing_ids,
             })
 
@@ -979,7 +1338,7 @@ def scan_claude_config() -> tuple[int, dict]:
             continue
         servers = (read_json(sf, {}).get("mcpServers") or {})
         if isinstance(servers, dict):
-            _collect_servers(servers)
+            _collect_servers(servers, str(sf))
 
     # .claude.json : MCPs déclarés par projet (projects.<path>.mcpServers)
     if CLAUDE_JSON.exists():
@@ -989,7 +1348,7 @@ def scan_claude_config() -> tuple[int, dict]:
                 for proj_cfg in projects_data.values():
                     servers = (proj_cfg.get("mcpServers") or {}) if isinstance(proj_cfg, dict) else {}
                     if isinstance(servers, dict):
-                        _collect_servers(servers)
+                        _collect_servers(servers, str(CLAUDE_JSON))
         except Exception:
             pass
 
@@ -1029,6 +1388,39 @@ def scan_claude_config() -> tuple[int, dict]:
 
     result["projects"].sort(key=lambda x: x["last_modified"], reverse=True)
     return 200, result
+
+
+def resolve_scanned_mcp(mcp_id: str, source: str) -> dict | None:
+    """Re-lit la config RÉELLE d'un MCP scanné depuis sa source autorisée (F3.2).
+
+    Permet à l'import du wizard de récupérer les valeurs sensibles (env/headers/
+    url) côté serveur sans qu'elles aient jamais transité par le front. `source`
+    doit être l'un des CLAUDE_GLOBAL_SOURCES (anti-traversal). Pour .claude.json,
+    on cherche aussi dans les MCPs déclarés par projet (projects.<path>.mcpServers).
+    Retourne le cfg brut (dict) ou None si introuvable.
+    """
+    if not safe_id(mcp_id):
+        return None
+    src_path = Path(source).resolve()
+    if src_path not in {s.resolve() for s in CLAUDE_GLOBAL_SOURCES}:
+        return None
+    if not src_path.exists():
+        return None
+    try:
+        data = read_json(src_path, {}) or {}
+    except Exception:
+        return None
+    servers = data.get("mcpServers") or {}
+    if isinstance(servers, dict) and mcp_id in servers:
+        return servers[mcp_id]
+    # .claude.json : fallback sur les MCPs par projet.
+    projects_data = data.get("projects") or {}
+    if isinstance(projects_data, dict):
+        for proj_cfg in projects_data.values():
+            psrv = (proj_cfg.get("mcpServers") or {}) if isinstance(proj_cfg, dict) else {}
+            if isinstance(psrv, dict) and mcp_id in psrv:
+                return psrv[mcp_id]
+    return None
 
 
 # ── Recettes MCP ────────────────────────────────────────────────────────────

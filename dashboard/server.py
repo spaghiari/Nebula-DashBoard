@@ -46,6 +46,10 @@ from dashcore.api_workspaces import (
     get_workspace_settings, save_workspace_settings, patch_workspace_settings,
     get_global_hooks, set_global_hooks, register_existing_workspace,
     get_hooks_errors, get_hooks_backup, restore_hooks_backup,
+    inspect_workspace_path, adopt_workspace,
+)
+from dashcore.api_overlays import (
+    list_overlays, apply_overlay, get_overlay, overlay_is_active,
 )
 from dashcore.api_overlays import (
     list_overlays, apply_overlay, get_overlay, overlay_is_active,
@@ -68,6 +72,7 @@ from dashcore.api_mcps import (
     find_global_mcp_conflicts, remove_mcp_from_claude_global, migrate_global_mcp_to_registry,
     list_mcp_recipes, ensure_local_recipes_file,
     add_or_update_local_recipe, delete_local_recipe, list_mcps_with_computed_status,
+    export_mcps_claude_format, resolve_scanned_mcp,
 )
 from dashcore.system_update import (
     system_version_info, system_apply_update, system_reset_to_upstream,
@@ -127,6 +132,8 @@ def h_get_ws_export(q, b, ws):
 def h_post_create_ws(q, b):              return create_workspace(b)
 def h_post_update_ws(q, b, ws):          return update_workspace(ws, b)
 def h_post_duplicate_ws(q, b):           return duplicate_workspace(b)
+def h_post_inspect_path(q, b):           return inspect_workspace_path(b or {})
+def h_post_adopt_ws(q, b):               return adopt_workspace(b or {})
 def h_post_sync_mcps(q, b, ws):          return sync_workspace_mcps(ws)
 def h_post_save_settings(q, b, ws):      return save_workspace_settings(ws, b.get("content", "{}"))
 def h_post_patch_settings(q, b, ws, sec): return patch_workspace_settings(ws, sec, b.get("value"))
@@ -179,6 +186,7 @@ def h_del_ws(q, b, ws):
 
 # ── MCPs ────────────────────────────────────────────────────────────────────
 def h_get_mcps(q, b):           return 200, list_mcps_with_computed_status()
+def h_get_mcp_export(q, b):     return export_mcps_claude_format()
 def h_get_mcp_diagnose(q, b, mid): return diagnose_mcp(mid)
 def h_get_mcp_recipes(q, b):    return list_mcp_recipes()
 def h_post_ensure_local_recipes(q, b):
@@ -224,6 +232,10 @@ def h_post_import_mcps(q, b):
 
     if entries is not None:
         for cfg in entries:
+            # F6.1 : une entrée non-dict (string, nombre, null...) ferait planter
+            # cfg.get() en 500 opaque. On rejette explicitement par entrée (400).
+            if not isinstance(cfg, dict):
+                results.append({"id": None, "ok": False, "error": "entrée invalide (objet attendu)"}); continue
             mcp_id = cfg.get("id", "")
             if not safe_id(mcp_id):
                 results.append({"id": mcp_id, "ok": False, "error": "id invalide"}); continue
@@ -241,6 +253,9 @@ def h_post_import_mcps(q, b):
     for name, cfg in servers.items():
         if not safe_id(name):
             results.append({"id": name, "ok": False, "error": "id invalide"}); continue
+        # F6.1 : même garde sur le format Claude {mcpServers:{"x": <non-dict>}}.
+        if not isinstance(cfg, dict):
+            results.append({"id": name, "ok": False, "error": "config invalide (objet attendu)"}); continue
         mcp = {
             "id": name,
             "name": cfg.get("name", name),
@@ -457,11 +472,37 @@ def h_post_hooks_restore(q, b):          return restore_hooks_backup(None)
 def h_post_ws_hooks_restore(q, b, ws):   return restore_hooks_backup(ws)
 
 def h_post_setup_import(q, b):
-    """Import combiné MCPs + workspaces (depuis le wizard d'onboarding)."""
+    """Import combiné MCPs + workspaces (depuis le wizard d'onboarding).
+
+    F3.2 : le scan ne renvoie plus les valeurs sensibles (env/headers/url) au
+    front. Quand un MCP porte un champ `source` (fichier de config Claude
+    d'origine, validé anti-traversal par resolve_scanned_mcp), on RE-LIT ses
+    valeurs réelles côté serveur -- elles n'ont jamais transité par le client.
+    Sans `source` (import manuel direct), comportement historique conservé.
+    """
     mcps = b.get("mcps", [])
     projects = b.get("projects", [])
     mcp_results, ws_results = [], []
     for mcp in mcps:
+        source = mcp.get("source")
+        if source:
+            cfg = resolve_scanned_mcp(mcp.get("id", ""), source)
+            if cfg is None:
+                mcp_results.append({"id": mcp.get("id"), "ok": False,
+                                    "error": "source introuvable ou non autorisée"})
+                continue
+            mcp = {
+                "id": mcp.get("id", ""),
+                "name": mcp.get("name") or mcp.get("id", ""),
+                "transport": cfg.get("transport") or cfg.get("type") or ("http" if cfg.get("url") else "stdio"),
+                "command": cfg.get("command", ""),
+                "args": cfg.get("args", []),
+                "env": cfg.get("env", {}),
+                "cwd": cfg.get("cwd", ""),
+                "url": cfg.get("url", ""),
+                "headers": cfg.get("headers", {}),
+                "workspaces": mcp.get("workspaces", []),
+            }
         mcp.setdefault("status", "disponible")
         s, r = add_or_update_mcp(mcp)
         mcp_results.append({"id": mcp.get("id"), "ok": s < 400, **r})
@@ -508,6 +549,7 @@ ROUTES_GET = [
     (re.compile(rf"^/api/workspaces/({_ID})/fs/search$"),                                   h_get_ws_fs_search),
     # MCPs
     (re.compile(rf"^/api/mcps$"),                                                           h_get_mcps),
+    (re.compile(rf"^/api/mcps/export$"),                                                    h_get_mcp_export),
     (re.compile(rf"^/api/mcps/recipes$"),                                                   h_get_mcp_recipes),
     (re.compile(rf"^/api/mcps/conflicts$"),                                                 h_get_mcp_conflicts),
     (re.compile(rf"^/api/mcps/({_ID})/diagnose$"),                                          h_get_mcp_diagnose),
@@ -565,6 +607,8 @@ ROUTES_GET = [
 ROUTES_POST = [
     # Workspaces
     (re.compile(rf"^/api/workspaces$"),                                                     h_post_create_ws),
+    (re.compile(rf"^/api/workspaces/inspect-path$"),                                        h_post_inspect_path),
+    (re.compile(rf"^/api/workspaces/adopt$"),                                               h_post_adopt_ws),
     (re.compile(rf"^/api/workspaces/duplicate$"),                                           h_post_duplicate_ws),
     (re.compile(rf"^/api/workspaces/({_ID})/update$"),                                      h_post_update_ws),
     (re.compile(rf"^/api/workspaces/({_ID})/sync-mcps$"),                                   h_post_sync_mcps),
@@ -733,8 +777,11 @@ class Handler(BaseHTTPRequestHandler):
     _SENSITIVE_ROUTES = {"/api/env/values", "/api/env/encrypt", "/api/env/decrypt",
                          "/api/env/export-plain"}
     # Préfixes dont les mutations (POST/DELETE) exigent X-Nebula-XHR.
-    # Les GET restent libres (lectures inoffensives).
-    _SENSITIVE_PREFIXES: tuple[str, ...] = ()
+    # Les GET restent libres (lectures inoffensives). Le front pose toujours
+    # X-Nebula-XHR via API._req (js/api.js) -> aucune mutation légitime cassée.
+    # F3.4 : /api/mcps couvre add/delete/import ; /api/mcps/conflicts couvre
+    # remove/migrate (mutation de la config Claude globale, sensible).
+    _SENSITIVE_PREFIXES: tuple[str, ...] = ("/api/mcps", "/api/mcps/conflicts")
 
     def _dispatch(self, method: str, body=None):
         parsed = urlparse(self.path)

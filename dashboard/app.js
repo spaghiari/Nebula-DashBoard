@@ -1454,12 +1454,10 @@ async function startFirstRunWizard() {
       const btnEl = scanHost.querySelector('[data-import-all]');
       btnEl.disabled = true;
       btnEl.innerHTML = `<div class="spinner" style="width:12px;height:12px"></div><span>Import en cours…</span>`;
+      // F3.2 : on transmet `source` (le serveur re-lit les valeurs réelles), pas
+      // les valeurs sensibles qui ne transitent plus par le scan.
       const mcps = newMcps.map(m => ({
-        id: m.id, name: m.id,
-        transport: m.transport || (m.url ? 'http' : 'stdio'),
-        command: m.command || '', args: m.args || [], env: m.env || {},
-        cwd: m.cwd || '', url: m.url || '', headers: m.headers || {},
-        status: 'disponible',
+        id: m.id, name: m.id, source: m.source || '', status: 'disponible',
       }));
       const projects = newProjects.map(p => {
         const guessId = (p.path || '').split(/[\\/]/).filter(Boolean).pop() || 'workspace';
@@ -2305,14 +2303,13 @@ async function modalSetupWizard() {
       if (!cb.checked || cb.disabled) continue;
       if (cb.dataset.kind === 'mcp') {
         const m = item._mcp;
+        // F3.2 : on n'envoie plus les valeurs sensibles (env/url) -- le scan ne
+        // les expose pas. On transmet `source` : le serveur re-lit les valeurs
+        // réelles depuis la config Claude d'origine (resolve_scanned_mcp).
         selectedMcps.push({
           id: m.id,
           name: m.id,
-          transport: m.transport || (m.url ? 'http' : 'stdio'),
-          command: m.command || '',
-          args: m.args || [],
-          env: m.env || {},
-          url: m.url || '',
+          source: m.source || '',
           status: 'disponible',
         });
       } else if (cb.dataset.kind === 'project') {
@@ -2348,48 +2345,332 @@ async function modalSetupWizard() {
   });
 }
 
+// ============================================================================
+// modalRegisterExisting -- Adoption d'un workspace existant (flux 2 etapes).
+// ----------------------------------------------------------------------------
+// Etape 1 : inspection du chemin (POST /api/workspaces/inspect-path). Affiche
+//           un recap des signaux Claude detectes (CLAUDE.md, .mcp.json, skills,
+//           agents, commands, hooks) + warnings (sous ~/.claude/, deja adopte,
+//           aucun signal). Garde-fous bloquants = erreur backend, warnings non
+//           bloquants = check explicite.
+// Etape 2 : adoption (POST /api/workspaces/adopt). Champs id (prerempli depuis
+//           le basename slugifie, editable), label, emoji, description, et une
+//           checkbox optionnelle d'import des MCPs declares dans le .mcp.json
+//           (cochee par defaut SSI au moins 1 MCP detecte). Strategie d'import
+//           = merge non destructif (skip si nom deja present dans le registre).
+// ============================================================================
 function modalRegisterExisting() {
   const body = el('div');
-  body.innerHTML = `
-    <p class="muted" style="margin-top:0">Enregistre un dossier existant comme workspace, sans créer de fichiers.</p>
-    <div class="field"><label class="field-label">ID *</label><input class="input mono" name="id" placeholder="mon-projet"></div>
-    <div class="field"><label class="field-label">Chemin absolu *</label><input class="input mono" name="path" placeholder="C:\\path\\to\\folder"></div>
-    <div class="field-row">
-      <div class="field"><label class="field-label">Label</label><input class="input" name="label"></div>
-      <div class="field"><label class="field-label">Emoji</label><input class="input" name="emoji" value="📁"></div>
+
+  // Etape 1 : champ chemin + bouton Inspecter + zone resultats.
+  const step1 = el('div', 'adopt-step adopt-step-1');
+  step1.innerHTML = `
+    <p class="muted" style="margin-top:0">Adopte un dossier existant comme workspace Nebula. Aucun fichier du dossier n'est créé ni modifié.</p>
+    <div class="field">
+      <label class="field-label">Chemin absolu du dossier *</label>
+      <input class="input mono" name="path" placeholder="C:\\dev\\mon-projet" autocomplete="off">
     </div>
-    <div class="field"><label class="field-label">Description</label><input class="input" name="description"></div>
+    <div class="row" style="gap:var(--sp-2);align-items:center">
+      <button type="button" class="btn btn-primary" data-inspect>Inspecter</button>
+      <span class="muted" style="font-size:12px">Lecture seule -- aucun fichier modifié.</span>
+    </div>
+    <div class="adopt-inspect-result" data-inspect-result style="margin-top:var(--sp-3);display:none"></div>
   `;
+  body.appendChild(step1);
+
+  // Etape 2 : champs d'adoption (cachee tant que l'inspection n'a pas reussi).
+  const step2 = el('div', 'adopt-step adopt-step-2');
+  step2.style.display = 'none';
+  step2.style.marginTop = 'var(--sp-3)';
+  step2.style.paddingTop = 'var(--sp-3)';
+  step2.style.borderTop = '1px solid var(--border)';
+  step2.innerHTML = `
+    <div class="field-row">
+      <div class="field"><label class="field-label">ID *</label><input class="input mono" name="id" placeholder="mon-projet" autocomplete="off"></div>
+      <div class="field"><label class="field-label">Emoji</label><input class="input" name="emoji" value="📁" autocomplete="off"></div>
+    </div>
+    <div class="field"><label class="field-label">Label</label><input class="input" name="label" autocomplete="off"></div>
+    <div class="field"><label class="field-label">Description</label><input class="input" name="description" autocomplete="off"></div>
+    <label class="row" data-import-mcps-row style="cursor:pointer;font-size:13px;margin-top:var(--sp-2);gap:var(--sp-2);align-items:flex-start;display:none">
+      <input type="checkbox" name="import_mcps" style="margin-top:3px">
+      <span>
+        <strong>Importer les MCPs du <code class="mono">.mcp.json</code></strong> dans le registre Nebula.
+        <div class="muted" style="font-size:12px">Les MCPs déjà présents dans le registre ne sont pas écrasés.</div>
+      </span>
+    </label>
+    <div class="muted" data-no-signal-warning style="font-size:12px;margin-top:var(--sp-2);display:none">
+      Aucun signal Claude détecté dans ce dossier. L'adoption reste possible -- le workspace apparaîtra dans la liste, mais sans skills/MCPs/hooks détectés.
+    </div>
+  `;
+  body.appendChild(step2);
+
   const cancel = btn('Annuler', 'btn-ghost');
-  const ok = btn('Enregistrer', 'btn-primary', I.plus);
-  const { close } = openModal({ title: 'Enregistrer un dossier existant', body, footer: [cancel, ok] });
+  const adopt = btn('Adopter', 'btn-primary', I.plus);
+  adopt.disabled = true;
+  const { close } = openModal({ title: 'Adopter un workspace existant', body, footer: [cancel, adopt], wide: true });
   cancel.addEventListener('click', close);
-  ok.addEventListener('click', async () => {
-    const get = n => body.querySelector(`[name=${n}]`).value.trim();
-    const payload = { id: get('id'), path: get('path'), label: get('label'), emoji: get('emoji'), description: get('description') };
-    if (!payload.id || !payload.path) { toastErr('ID et chemin requis'); return; }
+
+  // Etat partage entre etape 1 et etape 2.
+  let lastInspect = null;
+
+  // Slugifie le basename d'un chemin pour proposer un id par defaut.
+  // Garde-fou de meme nature que SAFE_ID cote backend (a-z, 0-9, _, -).
+  const slugify = (path) => {
+    if (!path) return '';
+    const parts = path.replace(/\\/g, '/').split('/').filter(Boolean);
+    const base = parts[parts.length - 1] || '';
+    return base.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  };
+
+  // Rend le bloc de resultat d'inspection. Utilise textContent partout pour le
+  // chemin (pas d'injection HTML). La structure statique reste innerHTML.
+  const renderInspectResult = (r) => {
+    const host = step1.querySelector('[data-inspect-result]');
+    host.innerHTML = '';
+    host.style.display = 'block';
+
+    // Erreur backend (chemin invalide, sous ~/.claude/, etc.) : message brut.
+    if (r.error) {
+      const errBox = el('div', 'error-box');
+      errBox.textContent = r.error;
+      host.appendChild(errBox);
+      return;
+    }
+
+    const pathLine = el('div', 'muted');
+    pathLine.style.fontSize = '12px';
+    pathLine.style.marginBottom = 'var(--sp-2)';
+    const pathStrong = el('strong');
+    pathStrong.textContent = r.path || '';
+    pathLine.appendChild(document.createTextNode('Chemin inspecté : '));
+    pathLine.appendChild(pathStrong);
+    host.appendChild(pathLine);
+
+    // Si chemin inexistant : warning explicite, pas de detail.
+    if (!r.exists) {
+      const w = el('div', 'badge badge-err');
+      w.textContent = '⛔ Le dossier n\'existe pas sur disque';
+      host.appendChild(w);
+      return;
+    }
+
+    // Tableau visuel des signaux detectes.
+    const grid = el('div', 'adopt-signals');
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:var(--sp-2);margin:var(--sp-2) 0';
+    const addSignal = (ok, label, detail) => {
+      const cell = el('div');
+      cell.style.cssText = 'display:flex;gap:6px;align-items:flex-start;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2)';
+      const icon = el('span');
+      icon.textContent = ok ? '✓' : '–';
+      icon.style.cssText = ok
+        ? 'color:var(--ok);font-weight:600;flex-shrink:0'
+        : 'color:var(--text-dim);font-weight:400;flex-shrink:0';
+      const txt = el('div');
+      txt.style.fontSize = '12.5px';
+      const lbl = el('div');
+      lbl.textContent = label;
+      lbl.style.fontWeight = ok ? '500' : '400';
+      lbl.style.color = ok ? 'var(--text)' : 'var(--text-dim)';
+      txt.appendChild(lbl);
+      if (detail) {
+        const d = el('div', 'muted');
+        d.textContent = detail;
+        d.style.fontSize = '11.5px';
+        txt.appendChild(d);
+      }
+      cell.append(icon, txt);
+      grid.appendChild(cell);
+    };
+    addSignal(
+      r.has_claude_md,
+      r.has_claude_md ? 'CLAUDE.md' : 'Pas de CLAUDE.md',
+      r.has_claude_md ? (r.claude_md_size + ' octets') : null
+    );
+    addSignal(
+      r.has_mcp_json,
+      r.has_mcp_json ? '.mcp.json' : 'Pas de .mcp.json',
+      r.has_mcp_json ? (r.mcps.length + ' MCP' + (r.mcps.length > 1 ? 's' : '')) : null
+    );
+    addSignal(r.skills_count > 0, r.skills_count + ' skill' + (r.skills_count > 1 ? 's' : ''), null);
+    addSignal(r.agents_count > 0, r.agents_count + ' agent' + (r.agents_count > 1 ? 's' : ''), null);
+    addSignal(r.commands_count > 0, r.commands_count + ' command' + (r.commands_count > 1 ? 's' : ''), null);
+    addSignal(
+      !!r.hooks_settings,
+      r.hooks_settings ? 'hooks dans settings.json' : 'Pas de hooks',
+      r.hooks_settings ? (Object.keys(r.hooks_settings).length + ' événement(s)') : null
+    );
+    host.appendChild(grid);
+
+    // Liste des MCPs detectes (jusqu'a 8 visibles, le reste compact).
+    if (r.has_mcp_json && r.mcps.length) {
+      const mcpHeader = el('div', 'muted');
+      mcpHeader.style.cssText = 'font-size:12px;margin:var(--sp-2) 0 4px';
+      mcpHeader.textContent = 'MCPs détectés :';
+      host.appendChild(mcpHeader);
+      const mcpList = el('div');
+      mcpList.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px';
+      const shown = r.mcps.slice(0, 8);
+      for (const mcp of shown) {
+        const chip = el('span', 'badge');
+        chip.style.cssText = 'font-family:var(--font-mono);font-size:11.5px';
+        chip.textContent = mcp.name + ' (' + mcp.transport + ')';
+        mcpList.appendChild(chip);
+      }
+      if (r.mcps.length > shown.length) {
+        const more = el('span', 'muted');
+        more.style.fontSize = '11.5px';
+        more.textContent = '+ ' + (r.mcps.length - shown.length) + ' autre(s)';
+        mcpList.appendChild(more);
+      }
+      host.appendChild(mcpList);
+    }
+
+    // Warnings (deja adopte, aucun signal). Distincts d'erreur, on adopte
+    // quand meme apres confirmation visuelle.
+    if (r.warnings && r.warnings.length) {
+      const wHost = el('div');
+      wHost.style.cssText = 'margin-top:var(--sp-2);display:flex;flex-direction:column;gap:4px';
+      for (const w of r.warnings) {
+        const wb = el('div', 'badge badge-warn');
+        wb.style.fontSize = '12px';
+        wb.textContent = '⚠ ' + w;
+        wHost.appendChild(wb);
+      }
+      host.appendChild(wHost);
+    }
+  };
+
+  // Handler du bouton Inspecter.
+  const inspectBtn = step1.querySelector('[data-inspect]');
+  inspectBtn.addEventListener('click', () => withBusy(inspectBtn, async () => {
+    const path = step1.querySelector('[name=path]').value.trim();
+    if (!path) { toastErr('Chemin requis'); return; }
     try {
-      const r = await API.post('/api/setup/import', { mcps: [], projects: [payload] });
-      const ws = (r.workspaces || [])[0];
-      if (!ws || !ws.ok) { toastErr((ws && ws.error) || 'Échec'); return; }
-      toastOk('Workspace enregistré');
-      close(); STATE.loading = true;
-      location.hash = `#/workspace/${ws.id}`;
-    } catch (e) { toastErr(e.message); }
-  });
+      const r = await API.post('/api/workspaces/inspect-path', { path });
+      lastInspect = r;
+      renderInspectResult(r);
+
+      // Affiche etape 2 si inspection OK (au moins exists=true ou exists=false
+      // mais on autorise adoption d'un chemin inexistant via re-essai backend ?
+      // Non -- on requiert le dossier existant cote adopt(). Donc on n'expose
+      // step 2 que si exists=true ET pas deja adopte.
+      if (r.exists && !r.already_adopted) {
+        step2.style.display = 'block';
+        adopt.disabled = false;
+
+        // Pre-remplit id depuis le basename. Garde la valeur user si deja saisie.
+        const idInput = step2.querySelector('[name=id]');
+        if (!idInput.value) idInput.value = slugify(r.path);
+        const labelInput = step2.querySelector('[name=label]');
+        if (!labelInput.value) labelInput.value = slugify(r.path);
+
+        // Checkbox import MCPs : visible et cochee par defaut si MCPs detectes.
+        const mcpsRow = step2.querySelector('[data-import-mcps-row]');
+        const mcpsCb = step2.querySelector('[name=import_mcps]');
+        if (r.has_mcp_json && r.mcps.length > 0) {
+          mcpsRow.style.display = 'flex';
+          mcpsCb.checked = true;
+        } else {
+          mcpsRow.style.display = 'none';
+          mcpsCb.checked = false;
+        }
+
+        // Bandeau "aucun signal" : visible si pas un seul signal Claude.
+        const hasAnySignal = r.has_claude_md || r.has_mcp_json || r.has_claude_dir
+          || r.skills_count || r.agents_count || r.commands_count;
+        step2.querySelector('[data-no-signal-warning]').style.display = hasAnySignal ? 'none' : 'block';
+      } else {
+        step2.style.display = 'none';
+        adopt.disabled = true;
+      }
+    } catch (e) {
+      lastInspect = null;
+      renderInspectResult({ error: e.message });
+      step2.style.display = 'none';
+      adopt.disabled = true;
+    }
+  }));
+
+  // Bouton Adopter (etape 2).
+  adopt.addEventListener('click', () => withBusy(adopt, async () => {
+    if (!lastInspect || !lastInspect.exists) {
+      toastErr('Inspecter le chemin d\'abord');
+      return;
+    }
+    const get = n => step2.querySelector(`[name=${n}]`).value.trim();
+    const importMcps = step2.querySelector('[name=import_mcps]').checked;
+    const payload = {
+      path: lastInspect.path,
+      id: get('id'),
+      label: get('label'),
+      emoji: get('emoji'),
+      description: get('description'),
+      import_mcps: importMcps,
+    };
+    if (!payload.id) { toastErr('ID requis'); return; }
+    try {
+      const r = await API.post('/api/workspaces/adopt', payload);
+      // Toast resume : skills/MCPs + ratio ajoutes/skipped si import demande.
+      const det = r.detected || {};
+      const imp = r.imported || {};
+      const parts = [];
+      if (det.skills) parts.push(det.skills + ' skill' + (det.skills > 1 ? 's' : ''));
+      if (det.agents) parts.push(det.agents + ' agent' + (det.agents > 1 ? 's' : ''));
+      if (det.commands) parts.push(det.commands + ' command' + (det.commands > 1 ? 's' : ''));
+      if (importMcps && imp.mcps_added) {
+        const added = imp.mcps_added.length;
+        const skipped = (imp.mcps_skipped || []).length;
+        parts.push(added + ' MCP ajouté' + (added > 1 ? 's' : '')
+          + (skipped ? ' (' + skipped + ' déjà présent' + (skipped > 1 ? 's' : '') + ')' : ''));
+      }
+      const summary = parts.length ? ' -- ' + parts.join(', ') : '';
+      toastOk('Workspace adopté' + summary);
+      close();
+      STATE.loading = true;
+      location.hash = `#/workspace/${r.id}`;
+    } catch (e) {
+      toastErr(e.message);
+    }
+  }));
 }
 
 function modalImportMCPs() {
   const body = el('div');
   body.innerHTML = `
     <p class="muted" style="margin-top:0">Colle un objet MCP, un tableau, ou la section <code>mcpServers</code> d'un fichier Claude.</p>
-    <div class="field"><label class="field-label">JSON</label><textarea class="textarea" name="raw" rows="14" placeholder='{"mcpServers": {...}}'></textarea></div>
+    <div class="field"><label class="field-label">JSON</label><textarea class="textarea" name="raw" rows="12" placeholder='{"mcpServers": {...}}'></textarea></div>
     <div class="field"><label class="field-label">Workspaces cibles (optionnel — surchage)</label><input class="input mono" name="ws" placeholder="dev,homeassistant ou *"></div>
+    <div class="field" style="border-top:1px solid var(--border);padding-top:var(--sp-3)">
+      <label class="field-label">Exporter le registre</label>
+      <p class="muted" style="margin:0 0 var(--sp-2) 0;font-size:12px">Génère le JSON <code>mcpServers</code> de TOUS les MCPs actifs (les <code>\${VAR}</code> restent littéraux -- aucun secret) pour le coller sur un autre poste.</p>
+      <div class="row" style="gap:var(--sp-2)">
+        <button class="btn btn-sm" data-act="export-fill">Pré-remplir le champ ci-dessus</button>
+        <button class="btn btn-sm" data-act="export-copy">Copier dans le presse-papier</button>
+      </div>
+    </div>
   `;
   const cancel = btn('Annuler', 'btn-ghost');
   const imp = btn('Importer', 'btn-primary', I.download);
-  const { close } = openModal({ title: 'Importer des MCPs', body, footer: [cancel, imp], wide: true });
+  const { close } = openModal({ title: 'Importer / exporter des MCPs', body, footer: [cancel, imp], wide: true });
   cancel.addEventListener('click', close);
+
+  // Export à la demande depuis le registre (F5.1 : plus de fichier figé
+  // import-mcps.json maintenu à la main).
+  async function fetchExport() {
+    const r = await API.get('/api/mcps/export');
+    return JSON.stringify(r, null, 2);
+  }
+  body.querySelector('[data-act=export-fill]').addEventListener('click', async () => {
+    try { body.querySelector('[name=raw]').value = await fetchExport(); toastOk('Registre exporté dans le champ'); }
+    catch (e) { toastErr(e.message); }
+  });
+  body.querySelector('[data-act=export-copy]').addEventListener('click', async () => {
+    try {
+      const txt = await fetchExport();
+      await navigator.clipboard.writeText(txt);
+      toastOk('Export copié dans le presse-papier');
+    } catch (e) { toastErr('Copie impossible : ' + e.message); }
+  });
   imp.addEventListener('click', async () => {
     let obj;
     try { obj = JSON.parse(body.querySelector('[name=raw]').value); }

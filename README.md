@@ -155,8 +155,7 @@ claude-workspace/
 │       └── mcp_recipes.local.json # ← LOCAL, gitignored (recettes perso)
 │
 ├── mcp/                         # Registre des MCPs
-│   ├── registry.json            # ← LOCAL, gitignored
-│   ├── import-mcps.json         # Bundle d'exemples à importer
+│   ├── registry.json            # ← LOCAL, gitignored (source unique)
 │   └── configs/                 # Configs détaillées (samples)
 │
 ├── memory/                      # Mémoire chargée via @import
@@ -482,8 +481,10 @@ transitions douces.
 
 ## 📚 Lexique de MCPs prêts à l'emploi
 
-Bundle prêt dans `mcp/import-mcps.json` — copie la partie `mcpServers` dans
-**MCPs → Importer**. Les `${VAR}` à définir dans `.env.local` :
+Exporte ta config actuelle depuis **MCPs → Importer / exporter → Copier**
+(généré à la demande depuis le registre, format Claude `mcpServers`, sans
+secret résolu), ou colle l'un des exemples ci-dessous dans **MCPs → Importer**.
+Les `${VAR}` sont à définir dans `.env.local` :
 
 ### 📁 filesystem — accès fichiers scopé
 
@@ -491,7 +492,7 @@ Bundle prêt dans `mcp/import-mcps.json` — copie la partie `mcpServers` dans
 "filesystem": {
   "type": "stdio",
   "command": "npx",
-  "args": ["-y", "@anthropic-ai/mcp-server-filesystem", "C:\\claude-workspace\\workspaces"]
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\claude-workspace\\workspaces"]
 }
 ```
 
@@ -544,7 +545,8 @@ X64DBG_SCRIPT=C:/path/to/x64dbg_mcp.py
 "homeassistant": { "type": "http", "url": "${HA_MCP_URL}" }
 ```
 
-Voir le détail complet de chaque MCP dans `mcp/import-mcps.json`.
+Pour récupérer le détail complet de ta config, utilise l'export depuis
+**MCPs → Importer / exporter** (dérivé du registre `mcp/registry.json`).
 
 ---
 
