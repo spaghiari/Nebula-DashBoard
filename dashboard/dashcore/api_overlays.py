@@ -26,6 +26,7 @@ Contraintes :
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from dashcore.config import TEMPLATES_DIR, log
@@ -298,6 +299,36 @@ def _prefill_overview(ws_dir: Path, options: dict, prefilled: list) -> None:
         prefilled.append(".claude/memory/overview.md")
 
 
+# Capture les chemins de hooks references par settings.json, du type
+# `python "${CLAUDE_PROJECT_DIR}/.claude/hooks/foo.py"`. Le [\\/]+ apres la
+# variable consomme le(s) separateur(s) pour que le groupe capture soit
+# RELATIF (sinon Path(ws_dir) / "/.claude/..." se reancrerait a la racine).
+_HOOK_REF_RE = re.compile(r"\$\{CLAUDE_PROJECT_DIR\}[\\/]+([^\"']+?\.py)")
+
+
+def _missing_hook_refs(ws_dir: Path) -> list[str]:
+    """Liste les hooks reference par `.claude/settings.json` mais absents du
+    workspace. Garde fail-fast post-generation : un settings.json qui pointe
+    vers un hook inexistant deadlocke Claude Code (exit 2 d'un PreToolUse =
+    refus bloquant sur Bash/Edit/Write, le workspace devient inutilisable).
+    Retourne la liste dedupliquee (ordre preserve) des chemins manquants."""
+    settings = ws_dir / ".claude" / "settings.json"
+    if not settings.exists():
+        return []
+    try:
+        text = settings.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    seen: set[str] = set()
+    missing: list[str] = []
+    for raw in _HOOK_REF_RE.findall(text):
+        rel = raw.replace("\\", "/")
+        if not (ws_dir / rel).exists() and rel not in seen:
+            seen.add(rel)
+            missing.append(rel)
+    return missing
+
+
 def apply_overlay(ws_id: str, overlay_id: str, vars: dict,
                   options: dict | None = None) -> tuple[int, dict]:
     """Applique l'overlay `overlay_id` sur le workspace `ws_id`.
@@ -406,6 +437,32 @@ def apply_overlay(ws_id: str, overlay_id: str, vars: dict,
     # 5. Pre-remplissage du mode + langue dans overview.md.
     prefilled: list[str] = []
     _prefill_overview(ws_dir, opts, prefilled)
+
+    # 6. Garde fail-fast : refuser de livrer un workspace ou settings.json
+    #    reference un hook absent (sinon deadlock Claude Code, cf.
+    #    _missing_hook_refs). Verrouille le couplage settings <-> hooks que
+    #    le mode-gating / la profondeur d'install pourraient rompre.
+    missing_hooks = _missing_hook_refs(ws_dir)
+    if missing_hooks:
+        log.error("overlay %s on %s : settings.json reference %d hook(s) "
+                  "absent(s), generation refusee : %s",
+                  overlay_id, ws_id, len(missing_hooks), missing_hooks)
+        return 500, {
+            "ok": False,
+            "overlay_id": overlay_id,
+            "error": ("Génération incohérente : .claude/settings.json "
+                      "référence des hooks absents du workspace ("
+                      + ", ".join(missing_hooks)
+                      + "). Workspace laissé en l'état — corriger l'overlay "
+                        "puis réappliquer."),
+            "missing_hooks": missing_hooks,
+            "copied": copied,
+            "appended": appended,
+            "seeded": seeded,
+            "prefilled": prefilled,
+            "skipped": skipped,
+            "options": opts,
+        }
 
     log.info("overlay %s applied on %s (mode=%s depth=%s) : "
              "%d copied, %d appended, %d seeded, %d skipped",

@@ -20,7 +20,7 @@
     { "path": ".claude/agents/slug-digest-compiler.md", "modes": ["equipe-hierarchique"] }
   ],
 
-  "_comment_depth": "Profondeur d'install. minimale = squelette nu (overview + improvements + outillage), pas d'exemples seed ; complète = tout + un exemple travaillé appendé dans chaque registre. Défaut suggéré côté UI : solo -> minimale, équipe -> complète.",
+  "_comment_depth": "Profondeur d'install. minimale = squelette nu (overview + improvements + outillage), pas d'exemples seed ; complète = tout + un exemple travaillé appendé dans chaque registre. Défaut suggéré côté UI : solo -> minimale, équipe -> complète. ATTENTION couplage : settings.json référence les 6 hooks Python via ${CLAUDE_PROJECT_DIR}/.claude/hooks/*.py. Ils DOIVENT donc figurer ici tant que settings.json y figure — sinon le workspace minimal embarque un settings.json pointant vers des hooks absents et Claude Code deadlocke (exit 2 d'un PreToolUse = refus bloquant sur Bash/Edit/Write). La garde fail-fast _missing_hook_refs (api_overlays.py) verrouille cet invariant à la génération.",
   "depth": {
     "minimal_keep": [
       "CLAUDE.md",
@@ -30,7 +30,14 @@
       ".claude/improvements.md",
       ".claude/settings.json",
       ".claude/settings.local.json.example",
-      ".claude/memory/overview.md"
+      ".claude/memory/overview.md",
+      ".claude/hooks/README.md",
+      ".claude/hooks/protect-local-files.py",
+      ".claude/hooks/em-dash-precommit.py",
+      ".claude/hooks/improvements-validate.py",
+      ".claude/hooks/co-authored-by-precommit.py",
+      ".claude/hooks/remind-check-all.py",
+      ".claude/hooks/statusline.py"
     ]
   },
 
