@@ -35,6 +35,10 @@ Nebula centralise tout ça.
 - **Templates** — création depuis modèle (Python, Node, audit, automation,
   YAML, blank) avec interpolation `{{name}}`, `{{label}}`, `{{description}}`,
   `{{tools}}`, `{{date}}`, `{{emoji}}`. Édition multi-fichiers depuis l'UI.
+- **Overlays** — paquets de fichiers appliqués *par-dessus* un workspace
+  existant sans rien écraser (ex. `claude-self-improving`, cf. §
+  Auto-amélioration). Marqués par `.nebula-overlay.json`, appliqués depuis la
+  carte du workspace.
 - **MCPs** — registre unique, transport `stdio`/`http`/`sse`, champs `cwd` et
   `headers`, substitution `${VAR}` depuis `.env.local`, **auto-sync** des
   `.mcp.json` à chaque modif, import bulk depuis JSON Claude.
@@ -45,8 +49,11 @@ Nebula centralise tout ça.
   + **recettes locales** gitignored pour les MCPs perso/propriétaires.
   Éditeur GUI complet, conversion MCP → recette en 1 clic (avec détection
   auto des secrets), installation multi-instances avec auto-suffix d'ID.
-- **Skills** — page dédiée avec édition multi-fichiers (SKILL.md + références),
-  copier vers workspaces, cross-référence.
+- **Skills** — **bibliothèque centralisée** (magasin
+  `dashboard/data/skills-library/`) comme source de vérité : édition
+  multi-fichiers (SKILL.md + références), **distribution** vers le scope global
+  (`~/.claude/skills/`) ou un workspace, avec **détection de désynchronisation**
+  (les copies distribuées ne sont jamais écrasées en silence ; resync explicite).
 - **Plugins** — browser marketplace (catalogue officiel + externes + README),
   install/uninstall en un clic, **vue scope par workspace** scalable
   (segmented control 3 états : Actif / Inactif / Hériter), actions de masse.
@@ -55,20 +62,23 @@ Nebula centralise tout ça.
   pour éviter les re-fetch).
 - **Hooks & permissions** — éditeur GUI pour `settings.json` global + local.
 
-### Réflexion (optionnel)
-- **Reflexive** — boucle réflexive mesurable sur l'utilisation de Claude Code :
-  observation des interactions → scoring sur 4 dimensions (correctness,
-  efficiency, alignment, learning) → propositions d'amélioration → application
-  → mesure de l'effet. **Opt-in par workspace** : un toggle dans la modale
-  d'édition installe ou retire les hooks Reflexive dans le `settings.json`
-  du workspace (avec backup `.bak`, sans toucher aux hooks tiers).
-  - Page dédiée (`#/reflexive`, raccourci <kbd>g r</kbd>) avec 4 sous-tabs :
-    vue d'ensemble (KPIs + courbe SVG + barres par dimension), interactions,
-    propositions (Apply / Reject), mesures en cours.
-  - Stockage : DB SQLite locale `dashboard/data/reflexive.db` (WAL mode),
-    propositions générées dans `dashboard/data/proposals/`. Tout gitignored.
-  - Skill `reflexive-core` (rubrique de scoring + format des propositions)
-    + agents `evaluator` et `diagnostician` livrés dans le repo.
+### Auto-amélioration (overlay, optionnel)
+- **Overlay `claude-self-improving`** — paquet de fichiers appliqué
+  **par-dessus** un workspace existant (jamais d'écrasement d'un fichier déjà
+  présent ; `CLAUDE.md` reçoit juste un fragment borné par marqueurs). Il
+  installe une boucle d'auto-amélioration de Claude :
+  - **mémoire structurée** `.claude/memory/` en hub-and-spoke (overview,
+    architecture, conventions, pitfalls, sécurité…) ;
+  - **pipeline d'amélioration** : `improvements.md` + (en profondeur complète)
+    `ideas.md`, `backlog.md`, `roadmap.md` et **digests** hiérarchiques ;
+  - **agents, slash commands et hooks pré-commit** en Python stdlib portable
+    (protection des fichiers locaux, garde em-dash, validation, statusline).
+  - **Bootstrap paramétrable** depuis la carte du workspace : mode projet
+    (`solo` / `équipe` / `équipe-hiérarchique`) et profondeur d'install
+    (`minimale` = squelette nu, `complète` = + exemples seed travaillés).
+    **Idempotent** : ré-appliquer ne touche qu'aux fichiers manquants, et la
+    génération échoue plutôt que de livrer un workspace incohérent (ex. un
+    `settings.json` qui référencerait un hook absent).
 
 ### Confort & UX
 - **5 thèmes** — Nebula sombre/clair, Marine (bleu), Solarized (cyan & ambre,
@@ -143,14 +153,19 @@ claude-workspace/
 │   │   ├── env_crypto.py        # Chiffrement DPAPI Windows + ACL stricte
 │   │   ├── journal.py           # Journal markdown
 │   │   ├── workspace_io.py      # Paths workspace, stats, sanity check
+│   │   ├── active_sessions.py   # Sessions Claude Code actives par workspace
 │   │   ├── api_workspaces.py    # CRUD workspaces, templates, settings
+│   │   ├── api_overlays.py      # Overlays (paquets appliqués par-dessus)
+│   │   ├── api_files.py         # Explorateur de fichiers des workspaces
 │   │   ├── api_mcps.py          # MCPs, conflicts, scan, sync, recettes
 │   │   ├── api_plugins.py       # Plugins, skills, agents, commandes
+│   │   ├── api_skills_library.py # Bibliothèque de skills centralisée (magasin)
 │   │   ├── api_ui_state.py      # Persistance thème + onboarding côté serveur
 │   │   └── system_update.py     # Auto-update bulletproof (auto-stash + reset)
 │   └── data/
 │       ├── workspaces.json      # ← LOCAL, gitignored
 │       ├── ui_state.json        # ← LOCAL, gitignored (thème, onboarded)
+│       ├── skills-library/      # Magasin central de skills (source de vérité)
 │       ├── mcp_recipes.json     # Catalogue public de recettes MCP
 │       └── mcp_recipes.local.json # ← LOCAL, gitignored (recettes perso)
 │
@@ -172,9 +187,10 @@ claude-workspace/
 │   ├── statusline.py            # Statusline Claude Code
 │   └── update-memory.bat        # Édite memory/global.md
 │
-├── templates/                   # Templates de workspace
+├── templates/                   # Templates + overlays de workspace
 │   ├── blank/, dev-python/, dev-node/
 │   ├── audit/, automation/, config-yaml/
+│   ├── claude-self-improving/   # Overlay (.nebula-overlay.json) — auto-amélioration
 │   └── README.md
 │
 └── workspaces/                  # ← LOCAL, gitignored sauf .gitkeep
