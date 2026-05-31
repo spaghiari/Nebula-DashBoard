@@ -345,6 +345,14 @@ def system_apply_update() -> tuple[int, dict]:
         head_before[:7], head_after[:7], len(changed_files), needs_restart,
     )
 
+    # Rétention auto : purge les vieux stash nebula-* après un cycle réussi.
+    # Garde-fou : on ne purge QUE si le pop a réussi (pas de conflit en
+    # suspens). Un `stash_pop_warning` signifie qu'un stash est laissé
+    # volontairement dans la pile pour récupération -- on n'y touche pas.
+    pruned = None
+    if not stash_pop_warning:
+        pruned = _prune_nebula_stashes()
+
     return 200, {
         "ok": True,
         "applied": True,
@@ -354,6 +362,7 @@ def system_apply_update() -> tuple[int, dict]:
         "needs_restart": needs_restart,
         "stash_applied": stash_applied,
         "stash_pop_warning": stash_pop_warning,
+        "stashes_pruned": pruned["dropped"] if pruned else [],
         "sensitive_in_stash": sensitive_in_stash if stash_applied else [],
         "message": (
             "Mise à jour appliquée. Redémarre le dashboard pour activer les changements."
@@ -363,13 +372,35 @@ def system_apply_update() -> tuple[int, dict]:
     }
 
 
+def _stash_file_count(ref: str) -> int:
+    """Nombre de fichiers trackés capturés par un stash (`git stash show`).
+
+    `git stash show --name-only <ref>` liste un fichier par ligne. Un stash
+    `nebula-pre-reset-*` créé sur un working tree sans modif trackée (cas le
+    plus fréquent : seuls des untracked / user-data) ressort à 0 fichier --
+    donc aucune valeur de récupération.
+
+    Best-effort : en cas d'échec git (ref volatile, erreur), on renvoie -1
+    (« inconnu ») pour ne JAMAIS classer à tort un stash comme vide.
+    """
+    rc, out, _ = _git("stash", "show", "--name-only", ref, timeout=GIT_TIMEOUT_QUICK)
+    if rc != 0:
+        return -1
+    return len([ln for ln in out.splitlines() if ln.strip()])
+
+
 def _list_nebula_stashes() -> list[dict]:
     """Liste les entrées de stash créées par l'auto-update Nebula.
 
     Repère les labels `nebula-autostash-*` / `nebula-pre-reset-*` posés par
     `system_apply_update` / `system_reset_to_upstream`. Retourne une liste
     ordonnée (le plus récent en premier, comme `git stash list`) de dicts
-    `{ref, label, subject}` où `ref` est la référence stable (`stash@{N}`).
+    `{ref, label, subject, kind, file_count, empty}` où `ref` est la
+    référence stable (`stash@{N}`).
+
+    `kind` vaut `"autostash"` ou `"pre-reset"`. `file_count` est le nombre de
+    fichiers trackés capturés (-1 = inconnu). `empty` est True uniquement
+    pour un `pre-reset` à 0 fichier tracké (candidat à purge sans condition).
     """
     rc, out, _ = _git("stash", "list", "--format=%gd%x1f%gs")
     if rc != 0 or not out.strip():
@@ -380,15 +411,111 @@ def _list_nebula_stashes() -> list[dict]:
         if len(parts) != 2:
             continue
         ref, subject = parts[0].strip(), parts[1].strip()
-        if "nebula-autostash-" in subject or "nebula-pre-reset-" in subject:
+        is_autostash = "nebula-autostash-" in subject
+        is_pre_reset = "nebula-pre-reset-" in subject
+        if is_autostash or is_pre_reset:
             # Extrait le label nebula-* lisible pour l'UI.
             label = ""
             for token in subject.replace(":", " ").split():
                 if token.startswith("nebula-"):
                     label = token
                     break
-            stashes.append({"ref": ref, "label": label or subject, "subject": subject})
+            file_count = _stash_file_count(ref)
+            kind = "pre-reset" if is_pre_reset else "autostash"
+            stashes.append({
+                "ref": ref,
+                "label": label or subject,
+                "subject": subject,
+                "kind": kind,
+                "file_count": file_count,
+                # Un pre-reset à 0 fichier tracké n'a aucune valeur : purge
+                # systématique. On exige file_count == 0 (pas -1 « inconnu »).
+                "empty": kind == "pre-reset" and file_count == 0,
+            })
     return stashes
+
+
+def _drop_stash_ref(ref: str, nebula: list[dict] | None = None) -> tuple[bool, str]:
+    """Drop sécurisé d'UN stash, garde de sécurité partagée.
+
+    INVARIANT DUR : on ne droppe QUE des stash créés par l'auto-update Nebula
+    (labels nebula-autostash-* / nebula-pre-reset-*), JAMAIS un stash
+    utilisateur arbitraire. La ref est revalidée contre la liste courante des
+    stash nebula (passée en `nebula` pour éviter un re-scan, ou recalculée).
+
+    Retourne `(dropped, message)`. Cette garde est la SEULE source de vérité
+    pour `system_drop_stash` (drop unitaire UI) et `_prune_nebula_stashes`
+    (rétention auto) -- ne jamais la dupliquer ailleurs.
+    """
+    ref = (ref or "").strip()
+    if not ref:
+        return False, "Référence de stash manquante."
+    if nebula is None:
+        nebula = _list_nebula_stashes()
+    match = next((s for s in nebula if s["ref"] == ref), None)
+    if not match:
+        return False, "Stash introuvable ou non géré par Nebula."
+    rc, _out, err = _git("stash", "drop", ref, timeout=GIT_TIMEOUT_QUICK)
+    if rc != 0:
+        return False, f"Échec du drop ({(err or '')[:200]})."
+    log.info("Stash nebula supprimé : %s (%s)", ref, match["label"])
+    return True, f"Stash « {match['label']} » supprimé."
+
+
+def _prune_nebula_stashes(keep: int = 3) -> dict:
+    """Applique la politique de rétention sur les stash nebula-* (best-effort).
+
+    Politique :
+    - garder les `keep` stash nebula-* les plus récents (tous labels
+      confondus, ordre `git stash list` = plus récent en tête) ;
+    - dropper EN PLUS tout `nebula-pre-reset-*` VIDE (0 fichier tracké,
+      `empty == True`), même s'il fait partie des `keep` les plus récents --
+      un pre-reset vide n'a aucune valeur de récupération ;
+    - ne JAMAIS toucher un stash non-nebula (garanti par `_list_nebula_stashes`
+      qui ne remonte que les labels nebula-*).
+
+    PITFALL INDEX GIT : les `stash@{N}` se décalent à chaque drop. On
+    raisonne donc par LABEL (stable), puis on re-résout la ref via un re-scan
+    `_list_nebula_stashes` AVANT chaque drop, et `_drop_stash_ref` revalide
+    encore une fois. Jamais de drop sur une ref figée d'un scan obsolète.
+
+    Best-effort : ne lève jamais ; renvoie un récap `{dropped, kept, errors}`.
+    """
+    result = {"dropped": [], "kept": [], "errors": []}
+    try:
+        stashes = _list_nebula_stashes()
+        if not stashes:
+            return result
+
+        # Candidats au drop, ciblés par label (stable). Au-delà des `keep`
+        # plus récents OU pre-reset vide quelle que soit la position.
+        to_drop_labels: list[str] = []
+        for idx, s in enumerate(stashes):
+            beyond_retention = idx >= keep
+            if beyond_retention or s.get("empty"):
+                to_drop_labels.append(s["label"])
+            else:
+                result["kept"].append(s["label"])
+
+        # Drop label par label en re-résolvant la ref à chaque itération.
+        for label in to_drop_labels:
+            current = _list_nebula_stashes()
+            match = next((s for s in current if s["label"] == label), None)
+            if not match:
+                # Déjà parti (collision de labels improbable) -- on saute.
+                continue
+            dropped, msg = _drop_stash_ref(match["ref"], nebula=current)
+            if dropped:
+                result["dropped"].append(label)
+            else:
+                result["errors"].append(f"{label}: {msg}")
+    except Exception as e:  # noqa: BLE001 -- best-effort, ne jamais casser l'update
+        log.warning("Prune des stash nebula a échoué (non bloquant) : %s", e)
+        result["errors"].append(str(e))
+    if result["dropped"]:
+        log.info("Rétention stash nebula : %d droppé(s), %d gardé(s).",
+                 len(result["dropped"]), len(result["kept"]))
+    return result
 
 
 def system_recover_stash() -> tuple[int, dict]:
@@ -514,16 +641,83 @@ def system_drop_stash(ref: str) -> tuple[int, dict]:
             "stashes": nebula,
         }
 
-    rc, _out, err = _git("stash", "drop", ref, timeout=GIT_TIMEOUT_QUICK)
-    if rc != 0:
+    dropped, msg = _drop_stash_ref(ref, nebula=nebula)
+    if not dropped:
         return 500, {"ok": False, "error": "Échec de la suppression du stash.",
-                     "stderr": (err or "")[:300]}
+                     "stderr": msg}
 
-    log.info("Stash nebula supprimé : %s (%s)", ref, match["label"])
     return 200, {
         "ok": True,
-        "message": f"Stash « {match['label']} » supprimé.",
+        "message": msg,
         "remaining_stashes": _list_nebula_stashes(),
+    }
+
+
+def system_prune_stashes(refs: list | None = None, keep: int = 3) -> tuple[int, dict]:
+    """Purge groupée des stash nebula-* depuis l'UI (« Nettoyer les sauvegardes »).
+
+    Deux modes :
+    - `refs` fourni (liste non vide) : drop ciblé de ces refs précises (chaque
+      ref est revalidée comme stash nebula-* par `_drop_stash_ref` -- une ref
+      non-nebula ou inconnue est IGNORÉE, jamais droppée) ;
+    - `refs` absent / vide : applique la politique de rétention auto
+      (`_prune_nebula_stashes`, garde les `keep` plus récents + droppe les
+      pre-reset vides).
+
+    PITFALL INDEX GIT : en mode `refs`, on traduit d'abord les refs en LABELS
+    (stables), puis on droppe en re-résolvant à chaque itération. Drop direct
+    par `stash@{N}` figé décalerait les autres refs et supprimerait le mauvais
+    stash.
+
+    INVARIANT DUR : seuls les stash nebula-* sont touchés (garde dans
+    `_drop_stash_ref`). Un stash utilisateur (« WIP … » sans label nebula-*)
+    n'est jamais droppé, même si sa ref est passée explicitement.
+    """
+    if not _is_git_repo():
+        return 400, {"ok": False, "error": "Pas un dépôt git"}
+
+    _check_stale_lock()
+
+    if refs:
+        nebula = _list_nebula_stashes()
+        # Traduit les refs demandées en labels nebula valides (ignore le reste).
+        labels = []
+        ignored = []
+        for ref in refs:
+            match = next((s for s in nebula if s["ref"] == (ref or "").strip()), None)
+            if match:
+                labels.append(match["label"])
+            else:
+                ignored.append(ref)
+        dropped, errors = [], []
+        for label in labels:
+            current = _list_nebula_stashes()
+            match = next((s for s in current if s["label"] == label), None)
+            if not match:
+                continue
+            ok, msg = _drop_stash_ref(match["ref"], nebula=current)
+            (dropped if ok else errors).append(label if ok else f"{label}: {msg}")
+        return 200, {
+            "ok": True,
+            "dropped": dropped,
+            "errors": errors,
+            "ignored": ignored,
+            "remaining_stashes": _list_nebula_stashes(),
+            "message": (f"{len(dropped)} sauvegarde(s) supprimée(s)."
+                        if dropped else "Aucune sauvegarde supprimée."),
+        }
+
+    # Mode politique de rétention.
+    res = _prune_nebula_stashes(keep=keep)
+    return 200, {
+        "ok": True,
+        "dropped": res["dropped"],
+        "kept": res["kept"],
+        "errors": res["errors"],
+        "remaining_stashes": _list_nebula_stashes(),
+        "message": (f"{len(res['dropped'])} sauvegarde(s) ancienne(s) purgée(s) "
+                    f"(rétention : {keep} récentes conservées)."
+                    if res["dropped"] else "Aucune sauvegarde à purger."),
     }
 
 
@@ -577,6 +771,12 @@ def system_reset_to_upstream() -> tuple[int, dict]:
     log.warning("system reset to upstream: %s → %s (%d fichiers, restart=%s)",
                 head_before[:7], head_after[:7], len(changed_files), needs_restart)
 
+    # Rétention auto après reset réussi. Le pre-reset fraîchement créé est le
+    # plus récent (gardé par la politique) SAUF s'il est vide -- un pre-reset
+    # à 0 fichier tracké ne protège rien et est purgé systématiquement. Purge
+    # aussi les anciens pre-reset vides accumulés.
+    pruned = _prune_nebula_stashes()
+
     return 200, {
         "ok": True,
         "from": head_before[:7],
@@ -585,6 +785,7 @@ def system_reset_to_upstream() -> tuple[int, dict]:
         "needs_restart": needs_restart,
         "stash_applied": stash_applied,
         "stash_label": stash_label if stash_applied else None,
+        "stashes_pruned": pruned["dropped"],
         "message": (
             f"Repo réinitialisé sur {upstream}. "
             + (f"Tes modifs sont sauvegardées dans `git stash list` (label: {stash_label})." if stash_applied else "")

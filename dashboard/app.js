@@ -1848,6 +1848,80 @@ async function mountStashRecover(host) {
   host.appendChild(box);
 }
 
+// Formate le timestamp epoch encodé dans un label nebula-*-<ts> en date
+// lisible. Renvoie '' si le label n'a pas de timestamp exploitable.
+function stashLabelDate(label) {
+  const m = /-(\d{10})$/.exec(label || '');
+  if (!m) return '';
+  const d = new Date(parseInt(m[1], 10) * 1000);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// Construit l'encart « Sauvegardes locales (stash Nebula) » dans la modale
+// MAJ. Conforme au feedback « UX découvrable » : le NOMBRE de sauvegardes est
+// visible, et le nettoyage est accessible sans CLI. Ne liste QUE les stash
+// nebula-* (l'endpoint /api/system/stashes ne remonte jamais un stash
+// utilisateur), donc aucun risque de purger un « WIP » manuel.
+async function mountStashManager(host) {
+  if (!host) return;
+  let data;
+  try { data = await API.get('/api/system/stashes'); }
+  catch { return; }
+  const stashes = (data && data.stashes) || [];
+  if (!stashes.length) return;
+
+  const box = el('div');
+  box.style.cssText = 'margin-top:var(--sp-4);padding:var(--sp-3);background:var(--surface-2);border:1px solid var(--border);border-radius:8px';
+
+  const render = (list) => {
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2);margin-bottom:var(--sp-2)">
+        <div style="font-size:13px;font-weight:500">🧹 Sauvegardes locales · ${list.length}</div>
+        <span class="dim" style="font-size:11px">stash Nebula auto-créés avant pull/reset</span>
+      </div>
+      <div class="dim" style="font-size:11.5px;margin-bottom:var(--sp-2);line-height:1.5">
+        Ces sauvegardes (<code class="mono">git stash</code>) sont créées automatiquement avant chaque mise à jour ou réinitialisation. Une fois tes modifs vérifiées, tu peux les nettoyer ici. Seules les sauvegardes Nebula sont listées -- tes éventuels stash manuels ne sont jamais touchés.
+      </div>
+      <div class="stash-list">${list.map(s => {
+        const date = stashLabelDate(s.label);
+        const fc = (s.file_count === undefined || s.file_count < 0)
+          ? '? fichier(s)'
+          : `${s.file_count} fichier(s)`;
+        const emptyTag = s.empty
+          ? ' · <span class="text-warn" style="font-size:10.5px">vide</span>'
+          : '';
+        return `<div class="mono" style="font-size:11px;padding:3px 0;display:flex;gap:8px;align-items:baseline">
+          <span style="color:var(--accent)">${escapeHtml(s.label || s.ref)}</span>
+          <span class="dim" style="font-size:10.5px">${escapeHtml(date)} · ${fc}${emptyTag}</span>
+        </div>`;
+      }).join('')}</div>
+    `;
+    const cleanBtn = btn('Nettoyer les sauvegardes', 'btn-sm btn-ghost', I.trash);
+    cleanBtn.style.marginTop = 'var(--sp-2)';
+    cleanBtn.title = 'Supprime toutes les sauvegardes Nebula listées (git stash drop)';
+    cleanBtn.addEventListener('click', () => {
+      confirmDialog(
+        `Supprimer ${list.length} sauvegarde(s) Nebula ? Cette action est définitive (git stash drop). Tes stash manuels éventuels ne sont pas touchés.`,
+        () => withBusy(cleanBtn, async () => {
+          let res;
+          try { res = await API.post('/api/system/stash-prune', { refs: list.map(s => s.ref) }); }
+          catch (e) { toastErr(e.message); return; }
+          toastOk(res.message || 'Sauvegardes nettoyées');
+          const remaining = res.remaining_stashes || [];
+          if (!remaining.length) { box.remove(); }
+          else { render(remaining); }
+        }),
+        { danger: true }
+      );
+    });
+    box.appendChild(cleanBtn);
+  };
+
+  render(stashes);
+  host.appendChild(box);
+}
+
 async function modalSystemUpdate() {
   const body = el('div');
   body.innerHTML = `<div class="page-loader"><div class="spinner"></div><span>Vérification…</span></div>`;
@@ -1954,6 +2028,8 @@ async function modalSystemUpdate() {
     });
     resetBox.appendChild(resetBtn);
     body.appendChild(resetBox);
+    // Gestionnaire de sauvegardes : les pre-reset s'accumulent surtout ici.
+    mountStashManager(body);
     return;
   }
 
@@ -1988,6 +2064,8 @@ async function modalSystemUpdate() {
     // Filet de sécurité : un stash résiduel d'un pull précédent doit rester
     // récupérable même quand il n'y a plus de mise à jour à appliquer.
     mountStashRecover(body);
+    // Gestionnaire de sauvegardes : visibilité + nettoyage 1-clic (sans CLI).
+    mountStashManager(body);
     return;
   }
 
@@ -2138,6 +2216,9 @@ async function modalSystemUpdate() {
     if (reloadBtn) reloadBtn.addEventListener('click', () => location.reload());
     // Si le stash pop a échoué pendant l'update, propose la récupération 1-clic.
     if (r.stash_pop_warning) mountStashRecover(body.querySelector('[data-stash-recover]'));
+    // Gestionnaire de sauvegardes : visibilité + nettoyage 1-clic des stash
+    // résiduels (la rétention auto a déjà purgé les anciens côté serveur).
+    mountStashManager(body);
     // Rafraîchit le badge
     setTimeout(() => checkForUpdates({ force: true }).then(renderUpdateBadge), 500);
   });

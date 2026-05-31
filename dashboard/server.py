@@ -76,7 +76,8 @@ from dashcore.api_mcps import (
 )
 from dashcore.system_update import (
     system_version_info, system_apply_update, system_reset_to_upstream,
-    system_recover_stash, system_drop_stash, _list_nebula_stashes,
+    system_recover_stash, system_drop_stash, system_prune_stashes,
+    _list_nebula_stashes,
 )
 from dashcore.api_ui_state import get_ui_state, patch_ui_state
 from dashcore.api_plugins import (
@@ -466,6 +467,9 @@ def h_post_system_reset(q, b):   return system_reset_to_upstream()
 def h_get_system_stashes(q, b):  return 200, {"stashes": _list_nebula_stashes()}
 def h_post_system_stash_recover(q, b): return system_recover_stash()
 def h_post_system_stash_drop(q, b): return system_drop_stash((b or {}).get("ref", ""))
+def h_post_system_stash_prune(q, b):
+    b = b or {}
+    return system_prune_stashes(refs=b.get("refs"), keep=int(b.get("keep", 3)))
 
 def h_post_set_env(q, b):        return set_env_var(b.get("key", ""), b.get("value", ""))
 def h_post_env_encrypt(q, b):    return enable_encryption()
@@ -705,6 +709,7 @@ ROUTES_POST = [
     (re.compile(rf"^/api/system/reset$"),                                                   h_post_system_reset),
     (re.compile(rf"^/api/system/stash-recover$"),                                           h_post_system_stash_recover),
     (re.compile(rf"^/api/system/stash-drop$"),                                              h_post_system_stash_drop),
+    (re.compile(rf"^/api/system/stash-prune$"),                                             h_post_system_stash_prune),
 ]
 
 ROUTES_DELETE = [
