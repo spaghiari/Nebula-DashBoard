@@ -264,6 +264,39 @@ def save_library_skill_content(name: str, content: str) -> tuple[int, dict]:
     return 200, {"ok": True, "backup": backup}
 
 
+# ── Navigateur de fichiers de la bibliothèque ────────────────────────────────
+# La bibliothèque expose l'arborescence complète de chaque skill (SKILL.md +
+# fichiers annexes : README.md, references/*.md, examples/*…), pas seulement
+# SKILL.md. On réutilise tel quel l'outillage fichiers de `api_plugins.py` via
+# le scope « library » (cf. `_skill_dir` dans api_plugins.py) : sécurité
+# path-traversal (`_SKILL_PATH_RE`, refus `..`, refus suppression de SKILL.md)
+# et backup `.bak` à l'écriture sont déjà gérés là-bas. Aucune duplication.
+
+
+def get_library_skill_detail(name: str) -> tuple[int, dict]:
+    """Meta + arborescence des fichiers d'un skill de la bibliothèque."""
+    from dashcore.api_plugins import get_skill_detail
+    return get_skill_detail("library", name)
+
+
+def get_library_skill_file(name: str, rel_path: str) -> tuple[int, dict]:
+    """Contenu d'un fichier annexe d'un skill de la bibliothèque."""
+    from dashcore.api_plugins import get_skill_file
+    return get_skill_file("library", name, rel_path)
+
+
+def write_library_skill_file(name: str, rel_path: str, content: str) -> tuple[int, dict]:
+    """Écrit (avec backup `.bak`) un fichier annexe d'un skill de la bibliothèque."""
+    from dashcore.api_plugins import write_skill_file
+    return write_skill_file("library", name, rel_path, content)
+
+
+def delete_library_skill_file(name: str, rel_path: str) -> tuple[int, dict]:
+    """Supprime un fichier annexe d'un skill de la bibliothèque (refuse SKILL.md)."""
+    from dashcore.api_plugins import delete_skill_file
+    return delete_skill_file("library", name, rel_path)
+
+
 def import_dir_into_library(src_dir: Path, requested_name: str | None = None,
                             overwrite: bool = False, origin: dict | None = None) -> tuple[int, dict]:
     """Copie un dossier (validé comme skill : contient SKILL.md) dans la bibliothèque."""

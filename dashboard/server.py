@@ -97,6 +97,8 @@ from dashcore.api_skills_library import (
     list_library, get_distribution, distribute, create_library_skill,
     delete_library_skill, get_library_skill_content, save_library_skill_content,
     migrate_existing_to_library,
+    get_library_skill_detail, get_library_skill_file,
+    write_library_skill_file, delete_library_skill_file,
 )
 
 
@@ -379,6 +381,14 @@ def h_del_library_skill(q, b, name):
     also = (q.get("also_remove_distributed", ["0"])[0] == "1")
     return delete_library_skill(name, also_remove_distributed=also)
 def h_post_library_migrate(q, b):            return 200, migrate_existing_to_library()
+def h_get_library_detail(q, b, name):        return get_library_skill_detail(name)
+def h_get_library_file(q, b, name):
+    rel = q.get("path", [""])[0]
+    return get_library_skill_file(name, rel)
+def h_post_library_file(q, b, name):         return write_library_skill_file(name, b.get("path", ""), b.get("content", ""))
+def h_del_library_file(q, b, name):
+    rel = q.get("path", [""])[0]
+    return delete_library_skill_file(name, rel)
 def h_post_skill_content(q, b, scope, name): return save_skill_content(scope, name, b.get("content", ""))
 def h_post_skill_file(q, b, scope, name):   return write_skill_file(scope, name, b.get("path", ""), b.get("content", ""))
 
@@ -590,6 +600,8 @@ ROUTES_GET = [
     (re.compile(rf"^/api/skills-library$"),                                                 h_get_skills_library),
     (re.compile(rf"^/api/skills-library/({_ID})/distribution$"),                            h_get_skill_distribution),
     (re.compile(rf"^/api/skills-library/({_ID})/content$"),                                 h_get_library_content),
+    (re.compile(rf"^/api/skills-library/({_ID})/file$"),                                    h_get_library_file),
+    (re.compile(rf"^/api/skills-library/({_ID})/detail$"),                                  h_get_library_detail),
     # Plugins
     (re.compile(rf"^/api/plugins$"),                                                        h_get_plugins),
     (re.compile(rf"^/api/plugins/installed$"),                                              h_get_plugins_installed),
@@ -662,6 +674,7 @@ ROUTES_POST = [
     (re.compile(rf"^/api/skills-library/migrate$"),                                         h_post_library_migrate),
     (re.compile(rf"^/api/skills-library/({_ID})/distribute$"),                              h_post_library_distribute),
     (re.compile(rf"^/api/skills-library/({_ID})/content$"),                                 h_post_library_content),
+    (re.compile(rf"^/api/skills-library/({_ID})/file$"),                                    h_post_library_file),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/content$"),                              h_post_skill_content),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/file$"),                                 h_post_skill_file),
     # Plugins
@@ -705,6 +718,7 @@ ROUTES_DELETE = [
     (re.compile(rf"^/api/templates/({_ID})$"),                                              h_del_template),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/file$"),                                 h_del_skill_file),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})$"),                                      h_del_skill),
+    (re.compile(rf"^/api/skills-library/({_ID})/file$"),                                    h_del_library_file),
     (re.compile(rf"^/api/skills-library/({_ID})$"),                                         h_del_library_skill),
     (re.compile(rf"^/api/({_KIND_FILEITEM})/({_SCOPE})/({_ID})$"),                          h_del_fileitem),
 ]

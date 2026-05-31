@@ -25,6 +25,7 @@ from dashcore.config import (
     ROOT, USER_HOME, CLAUDE_HOME, CLAUDE_JSON, CLAUDE_SETTINGS, CLAUDE_PROJECTS,
     BACKUPS_DIR, JOURNAL_FILE, TEMPLATES_DIR, DASHBOARD_DIR, WORKSPACES_DIR,
     SCRIPTS_DIR, SNIPPETS_DIR, WORKSPACES_JSON, MCP_REGISTRY, ENV_FILE, LOGS_DIR,
+    SKILLS_LIBRARY_DIR,
     TEXT_EXTENSIONS, SAFE_ID, SAFE_PLUGIN_SPEC, ENV_VAR_PATTERN, BAT_UNSAFE,
     PATH_UNSAFE, STATIC_TYPES, ENV_KEY_RE, _MUTATION_LOCK, log,
 )
@@ -510,9 +511,23 @@ def list_skills_for_workspace(ws_id: str) -> dict:
 
 
 def _skill_dir(scope: str) -> Path | None:
-    """Retourne le dossier parent des skills selon le scope."""
+    """Retourne le dossier parent des skills selon le scope.
+
+    Scopes reconnus :
+    - `global`            -> `~/.claude/skills/`
+    - `workspace:<id>`    -> `<ws>/.claude/skills/`
+    - `library`           -> `dashboard/data/skills-library/` (le magasin)
+
+    Le scope `library` est exposé via le préfixe d'URL `/api/skills-library/`
+    (cf. `api_skills_library.py`), jamais via `/api/skills/<scope>/...` : le
+    regex `_SCOPE` de `server.py` ne l'inclut pas. Le partager ici permet de
+    réutiliser tout l'outillage fichiers (`get_skill_detail`, `get_skill_file`,
+    `write_skill_file`, `delete_skill_file`) sans le dupliquer.
+    """
     if scope == "global":
         return CLAUDE_HOME / "skills"
+    if scope == "library":
+        return SKILLS_LIBRARY_DIR
     if scope.startswith("workspace:"):
         ws_id = scope.split(":", 1)[1]
         if not safe_id(ws_id):
@@ -629,8 +644,10 @@ def get_skill_detail(scope: str, name: str) -> tuple[int, dict]:
     for entry in sorted(skill_dir.rglob("*")):
         if not entry.is_file():
             continue
-        # Ignore les .bak
-        if entry.suffix == ".bak":
+        # Ignore les .bak et le marqueur d'origine Nebula (.nebula-origin.json,
+        # métadonnée interne écrite par l'import GitHub, pas un fichier du skill ;
+        # cohérent avec _hash_dir dans api_skills_library.py qui l'exclut aussi).
+        if entry.suffix == ".bak" or entry.name == ".nebula-origin.json":
             continue
         rel = entry.relative_to(skill_dir).as_posix()
         try:

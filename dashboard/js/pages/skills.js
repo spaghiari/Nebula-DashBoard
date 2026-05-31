@@ -5,7 +5,8 @@
    librarySkillCard / skillCard : cards des deux sections.
    modalDistributeSkill : copier un skill library vers N workspaces.
    modalAddSkillFromLibrary : ajouter au workspace courant.
-   modalEditLibrarySkill / modalDeleteLibrarySkill : CRUD library.
+   modalEditSkillFiles : navigateur de fichiers partagé (global/workspace/library).
+   modalDeleteLibrarySkill : suppression library.
    modalCopySkillToWorkspace : copier global -> workspace.
    modalEditSkillFiles : editeur tree + textarea du dossier skill.
 
@@ -205,7 +206,9 @@ function librarySkillCard(s) {
   const dist = btn('Distribuer', 'btn-sm btn-primary', '📤');
   dist.addEventListener('click', () => modalDistributeSkill(s));
   const ed = btn('Éditer', 'btn-sm btn-ghost', I.edit);
-  ed.addEventListener('click', () => modalEditLibrarySkill(s));
+  // Ouvre le navigateur de fichiers complet (SKILL.md + annexes), même UI que
+  // les skills global/workspace. Remplace l'ancien textarea SKILL.md-seul.
+  ed.addEventListener('click', () => modalEditSkillFiles('library', s.id));
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
   rm.title = 'Supprimer de la bibliothèque';
   rm.addEventListener('click', () => modalDeleteLibrarySkill(s));
@@ -332,34 +335,6 @@ function modalAddSkillFromLibrary(wsId) {
   });
 }
 
-function modalEditLibrarySkill(s) {
-  (async () => {
-    let data;
-    try { data = await API.get(`/api/skills-library/${s.id}/content`); }
-    catch (e) { toastErr(e.message); return; }
-    const body = el('div');
-    body['innerHTML'] = `
-      <p class="muted" style="margin-top:0">Édition de la version <strong>bibliothèque</strong>.
-      Les copies déjà distribuées ne seront <strong>pas écrasées</strong> automatiquement —
-      utilise « Distribuer » pour propager les changements.</p>
-      <textarea class="textarea mono" rows="22" style="width:100%;font-size:12.5px"></textarea>
-    `;
-    const ta = body.querySelector('textarea');
-    ta.value = data.content || '';
-    const cancel = btn('Annuler', 'btn-ghost');
-    const save = btn('Enregistrer', 'btn-primary', I.check);
-    const { close } = openModal({ title: `Éditer ${s.id} (bibliothèque)`, body, footer: [cancel, save], wide: true });
-    cancel.addEventListener('click', close);
-    save.addEventListener('click', () => withBusy(save, async () => {
-      try {
-        await API.post(`/api/skills-library/${s.id}/content`, { content: ta.value });
-        toastOk('Enregistré dans la bibliothèque');
-        close(); STATE.loading = true; route();
-      } catch (e) { toastErr(e.message); }
-    }));
-  })();
-}
-
 function modalDeleteLibrarySkill(s) {
   const distributed = (s.distributed_to || []).length;
   const body = el('div');
@@ -469,15 +444,37 @@ function modalCopySkillToWorkspace(skill) {
   });
 }
 
+// Navigateur de fichiers d'un skill, partagé par les scopes global / workspace
+// ET bibliothèque ('library'). Seules les URLs diffèrent : la bibliothèque a son
+// propre préfixe `/api/skills-library/<name>/…`, les autres `/api/skills/<scope>/<name>/…`.
+function skillFileUrls(scope, name) {
+  if (scope === 'library') {
+    const base = `/api/skills-library/${name}`;
+    return {
+      detail: `${base}/detail`,
+      file: (p) => `${base}/file?path=${encodeURIComponent(p)}`,
+      filePost: `${base}/file`,
+    };
+  }
+  const base = `/api/skills/${scope}/${name}`;
+  return {
+    detail: base,
+    file: (p) => `${base}/file?path=${encodeURIComponent(p)}`,
+    filePost: `${base}/file`,
+  };
+}
+
 async function modalEditSkillFiles(scope, name) {
+  const U = skillFileUrls(scope, name);
   const body = el('div');
   body['innerHTML'] = `<div class="page-loader"><div class="spinner"></div><span>Chargement du skill…</span></div>`;
   const closeBtn = btn('Fermer', 'btn-ghost');
-  const { close } = openModal({ title: `Skill · ${name}`, body, footer: closeBtn, wide: true });
+  const titleSuffix = scope === 'library' ? ' (bibliothèque)' : '';
+  const { close } = openModal({ title: `Skill · ${name}${titleSuffix}`, body, footer: closeBtn, wide: true });
   closeBtn.addEventListener('click', close);
 
   let detail;
-  try { detail = await API.get(`/api/skills/${scope}/${name}`); }
+  try { detail = await API.get(U.detail); }
   catch (e) { body['innerHTML'] = `<div class="error-box">${escapeHtml(e.message)}</div>`; return; }
 
   body['innerHTML'] = `
@@ -528,7 +525,7 @@ async function modalEditSkillFiles(scope, name) {
           e.stopPropagation();
           confirmDialog(`Supprimer ${f.path} ?`, async () => {
             try {
-              await API.del(`/api/skills/${scope}/${name}/file?path=${encodeURIComponent(f.path)}`);
+              await API.del(U.file(f.path));
               files = files.filter(x => x.path !== f.path);
               if (currentPath === f.path) { currentPath = 'SKILL.md'; openFile('SKILL.md'); }
               renderTree(); toastOk('Supprimé');
@@ -546,7 +543,7 @@ async function modalEditSkillFiles(scope, name) {
     renderTree();
     pane['innerHTML'] = `<div class="page-loader"><div class="spinner"></div></div>`;
     let data;
-    try { data = await API.get(`/api/skills/${scope}/${name}/file?path=${encodeURIComponent(path)}`); }
+    try { data = await API.get(U.file(path)); }
     catch (e) { pane['innerHTML'] = `<div class="error-box">${escapeHtml(e.message)}</div>`; return; }
     if (data.binary || data.error) {
       pane['innerHTML'] = `<div class="error-box">${escapeHtml(data.error || 'Fichier binaire non éditable')}</div>`;
@@ -565,7 +562,7 @@ async function modalEditSkillFiles(scope, name) {
     ta.focus();
     pane.querySelector('[data-save-file]').addEventListener('click', async () => {
       try {
-        const r = await API.post(`/api/skills/${scope}/${name}/file`, { path, content: ta.value });
+        const r = await API.post(U.filePost, { path, content: ta.value });
         const f = files.find(x => x.path === path);
         if (f) f.size = r.size;
         renderTree(); toastOk('Enregistré');
@@ -622,7 +619,7 @@ async function modalEditSkillFiles(scope, name) {
       const path = [folder, filename].filter(Boolean).join('/');
       const content = fbody.querySelector('[name=content]').value;
       try {
-        const r = await API.post(`/api/skills/${scope}/${name}/file`, { path, content });
+        const r = await API.post(U.filePost, { path, content });
         files.push({ path: r.path, size: r.size });
         renderTree(); closeAdd(); toastOk('Fichier créé');
         openFile(r.path);
