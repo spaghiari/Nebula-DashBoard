@@ -1272,7 +1272,14 @@ def create_workspace(payload: dict) -> tuple[int, dict]:
         if not isinstance(ov_id, str) or not safe_id(ov_id):
             overlays_applied.append({"id": ov_id, "ok": False, "error": "id invalide"})
             continue
-        status, result = apply_overlay(ws_id, ov_id, vars)
+        # Profondeur COMPLÈTE à la création : cocher l'overlay dans le
+        # formulaire signifie « je veux le kit annoncé » (agents, commands,
+        # registres ideas/backlog/roadmap, mémoire complète). Sans option,
+        # _normalize_options retombait sur solo -> minimal (squelette nu) et
+        # excluait silencieusement agents/commands -- incohérent avec la
+        # description de l'overlay. La profondeur minimale reste choisissable
+        # via la modale « Activer » sur la carte du workspace.
+        status, result = apply_overlay(ws_id, ov_id, vars, {"depth": "complete"})
         if status == 200:
             overlays_applied.append({
                 "id": ov_id, "ok": True,
