@@ -1167,7 +1167,10 @@ async function loadFileItems(wsId, host) {
     host.appendChild(block);
     try {
       const data = await API.get(`/api/${kind}/workspace/${wsId}`);
-      const items = data.workspace || data.items || [];
+      // L'endpoint renvoie {global, local} : les agents/commands du workspace
+      // sont dans `local`. (Bug : lisait data.workspace/data.items -> clés
+      // inexistantes -> toujours "Aucun agent" meme quand le workspace en a.)
+      const items = data.local || data.workspace || data.items || [];
       if (!items.length) {
         list.innerHTML = `<div class="dim" style="font-size:12px;padding:var(--sp-2)">Aucun ${kind === 'agents' ? 'agent' : 'commande'}</div>`;
         continue;
