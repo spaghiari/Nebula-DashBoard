@@ -45,7 +45,7 @@
 /dashboard/data/reflexive_hook_errors.log
 /dashboard/data/proposals/
 
-# Outils de dev local (preflight, checklist) — voir aussi entry plus bas
+# Outils de dev local (preflight, checklist)
 /dashboard/tools/
 
 # Caches
@@ -64,6 +64,3 @@ Thumbs.db
 
 # Configuration IDE de Claude Code (par projet)
 .claude/settings.local.json
-
-# Outils de dev local-only (preflight, checklist) — jamais en remote
-/dashboard/tools/

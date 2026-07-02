@@ -807,26 +807,29 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             return None
 
-    # Routes qui exposent des données sensibles : exigent un header custom
-    # qui ne peut pas être posé par <form>, <img>, <link>… (anti-CSRF basique
-    # même si on est sur 127.0.0.1).
+    # Routes GET qui exposent des données sensibles : exigent aussi le header
+    # (les GET ne sont pas gatés par défaut, ceux-ci le sont explicitement).
     _SENSITIVE_ROUTES = {"/api/env/values", "/api/env/encrypt", "/api/env/decrypt",
                          "/api/env/export-plain"}
-    # Préfixes dont les mutations (POST/DELETE) exigent X-Nebula-XHR.
-    # Les GET restent libres (lectures inoffensives). Le front pose toujours
-    # X-Nebula-XHR via API._req (js/api.js) -> aucune mutation légitime cassée.
-    # F3.4 : /api/mcps couvre add/delete/import ; /api/mcps/conflicts couvre
-    # remove/migrate (mutation de la config Claude globale, sensible).
-    _SENSITIVE_PREFIXES: tuple[str, ...] = ("/api/mcps", "/api/mcps/conflicts")
 
     def _dispatch(self, method: str, body=None):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
 
-        needs_csrf = path in self._SENSITIVE_ROUTES or (
+        # Anti-CSRF en DÉFAUT-REFUS : TOUTE mutation (POST/DELETE) exige le
+        # header custom X-Nebula-XHR, qu'un <form>/<img> ou un fetch cross-origin
+        # « simple » ne peut pas poser (le poser force un preflight CORS que le
+        # serveur ne satisfait pas -> requête bloquée). Un site malveillant
+        # ouvert pendant que le dashboard tourne ne peut donc pas déclencher
+        # reset / purge / launch / env… (cf. review #1 : auparavant seul
+        # /api/mcps* était protégé, laissant toutes les autres routes exposées).
+        # Le front pose toujours le header via API._req (js/api.js) -> aucune
+        # mutation légitime cassée. Allowlist d'exemption uniquement, jamais
+        # d'inclusion à maintenir à la main.
+        needs_csrf = (
             method in ("POST", "DELETE")
-            and any(path.startswith(p) for p in self._SENSITIVE_PREFIXES)
+            or path in self._SENSITIVE_ROUTES
         )
         if needs_csrf and self.headers.get("X-Nebula-XHR") != "1":
             self._send_json(403, {"error": "header X-Nebula-XHR requis"}); return

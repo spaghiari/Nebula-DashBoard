@@ -1185,7 +1185,12 @@ def export_workspace(ws_id: str) -> tuple[int, bytes | dict]:
                 # Skip secrets locaux
                 if entry.name in (".env", ".env.local"):
                     continue
-                arc = str(entry.relative_to(WORKSPACES_DIR))
+                # relative_to(ws_dir.parent) et non WORKSPACES_DIR : les
+                # workspaces adoptés vivent hors de WORKSPACES_DIR, auquel cas
+                # relative_to(WORKSPACES_DIR) lèverait ValueError (export cassé,
+                # cf. review #9). ws_dir.parent donne toujours une arborescence
+                # préfixée par le nom du dossier workspace.
+                arc = str(entry.relative_to(ws_dir.parent))
                 zf.write(entry, arcname=arc)
     return 200, buf.getvalue()
 
@@ -1307,9 +1312,33 @@ def update_workspace(ws_id: str, payload: dict) -> tuple[int, dict]:
     return 200, {"ok": True, "workspace": entry}
 
 
+def _backup_workspace_zip(ws_dir: Path, ws_id: str) -> Path:
+    """Zippe le dossier workspace dans backups/ avant une purge irréversible.
+
+    Retourne le chemin du zip. Lève OSError si l'écriture échoue -- l'appelant
+    doit alors annuler la purge (aucune suppression sans copie récupérable,
+    cf. review #5). Backup complet (secrets inclus) : c'est une sauvegarde
+    locale gitignored destinée à une restauration fidèle.
+    """
+    BACKUPS_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    dst = BACKUPS_DIR / f"deleted-ws-{ws_id}-{stamp}.zip"
+    with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zf:
+        for entry in ws_dir.rglob("*"):
+            if entry.is_file():
+                zf.write(entry, arcname=str(entry.relative_to(ws_dir.parent)))
+    return dst
+
+
 def delete_workspace(ws_id: str, purge: bool = False) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
+    # Résoudre le dossier AVANT de retirer l'entrée du registre : pour un
+    # workspace adopté/importé, resolve_ws_dir s'appuie sur l'entrée registre
+    # (le dossier peut vivre hors de WORKSPACES_DIR). Le résoudre après
+    # suppression retomberait sur WORKSPACES_DIR/<id> -> purge sur la mauvaise
+    # cible, voire suppression d'un dossier homonyme sans rapport (cf. #4).
+    ws_dir = _resolve_ws_dir(ws_id)
     with _MUTATION_LOCK:
         data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
         before = len(data.get("workspaces", []))
@@ -1327,8 +1356,16 @@ def delete_workspace(ws_id: str, purge: bool = False) -> tuple[int, dict]:
         notes.append("absent du registre")
 
     if purge:
-        ws_dir = _resolve_ws_dir(ws_id)
         if ws_dir.exists():
+            # Backup zip avant suppression irréversible (cf. #5) : aucune purge
+            # sans copie récupérable. Si le backup échoue, on annule la purge.
+            try:
+                backup = _backup_workspace_zip(ws_dir, ws_id)
+                notes.append(f"backup : {backup.name}")
+            except OSError as e:
+                log.error("purge %s : backup échoué, suppression annulée : %s", ws_id, e)
+                return 500, {"ok": False,
+                             "error": f"Backup avant purge échoué, suppression annulée : {e}"}
             _remove_dir_or_link(ws_dir)
             notes.append(f"dossier supprimé : {ws_dir}")
         else:
@@ -1339,6 +1376,43 @@ def delete_workspace(ws_id: str, purge: bool = False) -> tuple[int, dict]:
     if not registered and not purge:
         return 404, {"error": "Workspace absent du registre"}
     return 200, {"ok": True, "note": " · ".join(notes)}
+
+
+# Masque affiché à la place d'une valeur de secret (env/header résolu).
+_SECRET_MASK = "••••••"
+
+
+def _mask_secret_values(d) -> dict:
+    """Remplace les valeurs d'un dict env/headers par un masque (garde les clés)."""
+    if not isinstance(d, dict):
+        return {}
+    return {str(k): _SECRET_MASK for k in d}
+
+
+def _mask_mcp_json_text(text: str | None) -> str | None:
+    """Masque env/headers/url d'un `.mcp.json` avant de le renvoyer au
+    navigateur. Le fichier sur disque porte les secrets résolus (${VAR}
+    substitués) nécessaires à Claude Code -- ils ne doivent jamais transiter
+    par l'API (cf. review #3, cohérent avec le masquage F3.2 de api_mcps)."""
+    if not text:
+        return text
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        return "[.mcp.json présent mais illisible en JSON — masqué par sécurité]"
+    from dashcore.api_mcps import _mask_url
+    servers = data.get("mcpServers") if isinstance(data, dict) else None
+    if isinstance(servers, dict):
+        for entry in servers.values():
+            if not isinstance(entry, dict):
+                continue
+            if isinstance(entry.get("env"), dict):
+                entry["env"] = _mask_secret_values(entry["env"])
+            if isinstance(entry.get("headers"), dict):
+                entry["headers"] = _mask_secret_values(entry["headers"])
+            if isinstance(entry.get("url"), str) and entry["url"]:
+                entry["url"] = _mask_url(entry["url"])
+    return json.dumps(data, ensure_ascii=False, indent=2)
 
 
 def read_workspace_config(ws_id: str) -> tuple[int, dict]:
@@ -1361,7 +1435,8 @@ def read_workspace_config(ws_id: str) -> tuple[int, dict]:
 
     files = {
         "CLAUDE.md":              read_text(ws_dir / "CLAUDE.md"),
-        ".mcp.json":              read_text(ws_dir / ".mcp.json"),
+        # .mcp.json masqué : le fichier disque porte les secrets résolus (#3).
+        ".mcp.json":              _mask_mcp_json_text(read_text(ws_dir / ".mcp.json")),
         ".claude/settings.json":  read_text(ws_dir / ".claude" / "settings.json"),
         "notes.md":               read_text(ws_dir / "notes.md"),
     }
@@ -1468,20 +1543,24 @@ def _parse_mcp_json_entries(mcp_json_path: Path) -> list[dict]:
     servers = data.get("mcpServers") if isinstance(data, dict) else None
     if not isinstance(servers, dict):
         return []
+    # Masquage des valeurs sensibles avant renvoi au navigateur : inspect peut
+    # cibler un .mcp.json arbitraire porteur de secrets résolus (cf. #3).
+    from dashcore.api_mcps import _mask_url
     out: list[dict] = []
     for name, cfg in servers.items():
         if not isinstance(cfg, dict):
             continue
         transport = (cfg.get("transport") or cfg.get("type")
                      or ("http" if cfg.get("url") else "stdio"))
+        url = cfg.get("url") or ""
         out.append({
             "name": str(name),
             "transport": str(transport),
             "command": cfg.get("command") or "",
-            "url": cfg.get("url") or "",
+            "url": _mask_url(url) if url else "",
             "args": cfg.get("args") or [],
-            "env": cfg.get("env") or {},
-            "headers": cfg.get("headers") or {},
+            "env": _mask_secret_values(cfg.get("env")),
+            "headers": _mask_secret_values(cfg.get("headers")),
         })
     return out
 

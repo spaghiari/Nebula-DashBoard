@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -22,6 +23,18 @@ from dashcore.config import ROOT, log
 GIT_TIMEOUT_FETCH = 20
 GIT_TIMEOUT_QUICK = 5
 GIT_TIMEOUT_PULL = 60
+
+# Âge minimum (secondes) avant de considérer un .git/index.lock comme
+# orphelin. 5 min : un repack/gc ou un fetch lent peut légitimement tenir
+# le lock bien au-delà d'une minute.
+STALE_LOCK_AGE = 300
+
+# Sérialise TOUTES les opérations git mutantes du dashboard. Le serveur est
+# un ThreadingHTTPServer : deux requêtes concurrentes (double-clic « Mettre à
+# jour », retry navigateur) pourraient sinon lancer stash/pull/reset en
+# parallèle et corrompre l'index. RLock (et non Lock) pour tolérer des appels
+# imbriqués entre ces fonctions sans deadlock.
+_GIT_LOCK = threading.RLock()
 
 # Fichiers connus comme contenant des données utilisateur — leurs modifications
 # locales ne doivent PAS bloquer un git pull (le pull n'écrasera pas ces
@@ -192,6 +205,31 @@ def system_version_info(check_remote: bool = False) -> dict:
     return info
 
 
+def _git_process_running() -> bool | None:
+    """Best-effort : détecte un process git.exe vivant (Windows, stdlib only).
+
+    Utilise `tasklist` (shell=False, arguments hardcodés). Retourne True si au
+    moins un git.exe tourne, False si aucun, None si la vérification elle-même
+    a échoué (tasklist indisponible, timeout…) — l'appelant retombe alors sur
+    le seul critère d'âge.
+    """
+    try:
+        r = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq git.exe", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace",
+            timeout=GIT_TIMEOUT_QUICK,
+        )
+        if r.returncode != 0:
+            return None
+        # Sans correspondance, tasklist affiche un message informatif
+        # (« INFO: ... ») au lieu d'une ligne CSV — on cherche simplement
+        # le nom d'image dans la sortie.
+        return "git.exe" in (r.stdout or "").lower()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
 def _check_stale_lock() -> tuple[bool, str]:
     """Détecte un .git/index.lock orphelin (process git crashé). Retourne (removed, message)."""
     lock = ROOT / ".git" / "index.lock"
@@ -201,14 +239,25 @@ def _check_stale_lock() -> tuple[bool, str]:
         age = time.time() - lock.stat().st_mtime
     except OSError:
         return False, ""
-    if age > 60:  # > 1 min : très probablement orphelin
-        try:
-            lock.unlink()
-            log.warning("Removed stale .git/index.lock (%ds old)", int(age))
-            return True, f"Lock orphelin retiré (âge: {int(age)}s)"
-        except OSError as e:
-            return False, f"Lock orphelin détecté mais retrait échoué: {e}"
-    return False, f"Lock actif (âge: {int(age)}s) — un autre git tourne ?"
+    if age <= STALE_LOCK_AGE:
+        return False, f"Lock actif (âge: {int(age)}s) — un autre git tourne ?"
+    # Vieux lock : avant de le retirer, vérifie qu'aucun process git n'est
+    # vivant. Un repack/gc lent ou un git manuel dans un autre terminal peut
+    # détenir le lock légitimement bien au-delà du seuil — le supprimer
+    # tuerait son travail en cours.
+    running = _git_process_running()
+    if running:
+        return False, (f"Un git est en cours d'exécution (lock âgé de {int(age)}s) "
+                       "— on ne retire pas le lock.")
+    if running is None:
+        log.warning("Vérification des process git impossible (tasklist) — "
+                    "repli sur le seul critère d'âge du lock.")
+    try:
+        lock.unlink()
+        log.warning("Removed stale .git/index.lock (%ds old)", int(age))
+        return True, f"Lock orphelin retiré (âge: {int(age)}s)"
+    except OSError as e:
+        return False, f"Lock orphelin détecté mais retrait échoué: {e}"
 
 
 def _diagnose_pull_failure(pull_err: str, pull_out: str) -> str | None:
@@ -233,7 +282,7 @@ def system_apply_update() -> tuple[int, dict]:
     """Applique la mise à jour via git pull. JAMAIS bloquant pour des modifs locales.
 
     Stratégie défense en profondeur :
-    1. Pré-check : retire un index.lock orphelin (si > 60s)
+    1. Pré-check : retire un index.lock orphelin (vieux ET sans git vivant)
     2. Si dirty (status non vide), pré-stash systématique (--include-untracked)
        avec timestamp pour ne pas collisionner avec les autres autostash
     3. Pull --ff-only (peut maintenant pas planter sur dirty)
@@ -243,133 +292,137 @@ def system_apply_update() -> tuple[int, dict]:
        diverged, auth…) et on suggère le reset hard si pertinent
     6. Aucune perte de données possible : le stash reste tant qu'il n'est
        pas explicitement drop
+
+    Sérialisé par _GIT_LOCK : une seule opération git mutante à la fois
+    (le serveur HTTP est multithread).
     """
-    if not _is_git_repo():
-        return 400, {"ok": False, "error": "Pas un dépôt git"}
+    with _GIT_LOCK:
+        if not _is_git_repo():
+            return 400, {"ok": False, "error": "Pas un dépôt git"}
 
-    upstream = _tracking_branch()
-    if not upstream:
-        return 400, {"ok": False, "error": "Aucune branche distante trackée"}
+        upstream = _tracking_branch()
+        if not upstream:
+            return 400, {"ok": False, "error": "Aucune branche distante trackée"}
 
-    # 1. Lock orphelin
-    lock_removed, lock_msg = _check_stale_lock()
-    if lock_msg and not lock_removed:
-        # Lock actif récent : on ne touche pas, on rapporte
-        return 423, {"ok": False, "error": lock_msg, "hint": "Réessaye dans quelques secondes."}
+        # 1. Lock orphelin
+        lock_removed, lock_msg = _check_stale_lock()
+        if lock_msg and not lock_removed:
+            # Lock actif récent : on ne touche pas, on rapporte
+            return 423, {"ok": False, "error": lock_msg, "hint": "Réessaye dans quelques secondes."}
 
-    # 2. Snapshot HEAD + pré-stash systématique si dirty
-    rc_b, head_before, _ = _git("rev-parse", "HEAD")
-    rc_st, status, _ = _git("status", "--porcelain")
-    has_local_changes = bool(status.strip())
+        # 2. Snapshot HEAD + pré-stash systématique si dirty
+        rc_b, head_before, _ = _git("rev-parse", "HEAD")
+        rc_st, status, _ = _git("status", "--porcelain")
+        has_local_changes = bool(status.strip())
 
-    stash_applied = False
-    stash_pop_warning = None
-    stash_label = f"nebula-autostash-{int(time.time())}"
+        stash_applied = False
+        stash_pop_warning = None
+        stash_label = f"nebula-autostash-{int(time.time())}"
 
-    # Avant de stasher, on détecte les fichiers de données utilisateur connus
-    # (.env.local, registry.json, workspaces.json…) qui pourraient se retrouver
-    # dans le stash si l'utilisateur n'a pas configuré skip-worktree.
-    sensitive_in_stash: list[str] = []
-    if has_local_changes:
-        sensitive_patterns = (".env.local", "mcp/registry.json",
-                              "dashboard/data/workspaces.json")
-        for line in status.splitlines():
-            # format porcelain : "XY path"
-            path = line[3:].strip().strip('"')
-            if any(p in path for p in sensitive_patterns):
-                sensitive_in_stash.append(path)
+        # Avant de stasher, on détecte les fichiers de données utilisateur connus
+        # (.env.local, registry.json, workspaces.json…) qui pourraient se retrouver
+        # dans le stash si l'utilisateur n'a pas configuré skip-worktree.
+        sensitive_in_stash: list[str] = []
+        if has_local_changes:
+            sensitive_patterns = (".env.local", "mcp/registry.json",
+                                  "dashboard/data/workspaces.json")
+            for line in status.splitlines():
+                # format porcelain : "XY path"
+                path = line[3:].strip().strip('"')
+                if any(p in path for p in sensitive_patterns):
+                    sensitive_in_stash.append(path)
 
-        rc_s, _, stash_err = _git(
-            "stash", "push", "--include-untracked", "-m", stash_label,
-            timeout=GIT_TIMEOUT_QUICK,
-        )
-        if rc_s == 0:
-            stash_applied = True
-            log.info("Pre-pull stash effectué (%d entrées status, label=%s)",
-                     len(status.splitlines()), stash_label)
-            if sensitive_in_stash:
-                log.warning("Stash contient des fichiers sensibles : %s — label %s",
-                            sensitive_in_stash, stash_label)
-        else:
-            # Stash a échoué — on continue quand même, peut-être que pull marchera
-            log.warning("git stash a échoué (continuons quand même) : %s", stash_err)
-
-    # 3. Pull --ff-only sur état propre (ou presque)
-    rc_p, pull_out, pull_err = _git("pull", "--ff-only", timeout=GIT_TIMEOUT_PULL)
-
-    # 4. Si on a stashé, toujours essayer le pop (même si pull a échoué :
-    #    on veut restaurer l'état local plutôt que laisser le user en limbo)
-    if stash_applied:
-        rc_pop, _pop_out, pop_err = _git("stash", "pop", timeout=GIT_TIMEOUT_QUICK)
-        if rc_pop != 0:
-            stash_pop_warning = (
-                f"Conflit lors de la restauration de tes modifs (`git stash pop`). "
-                f"Elles sont SAUVES dans la pile (`git stash list` → label '{stash_label}'). "
-                f"Pour les récupérer : `git stash pop` manuel quand tu auras résolu le conflit. "
-                f"Détail: {pop_err[:300]}"
+            rc_s, _, stash_err = _git(
+                "stash", "push", "--include-untracked", "-m", stash_label,
+                timeout=GIT_TIMEOUT_QUICK,
             )
-            log.warning("git stash pop a échoué (label=%s) : %s", stash_label, pop_err)
+            if rc_s == 0:
+                stash_applied = True
+                log.info("Pre-pull stash effectué (%d entrées status, label=%s)",
+                         len(status.splitlines()), stash_label)
+                if sensitive_in_stash:
+                    log.warning("Stash contient des fichiers sensibles : %s — label %s",
+                                sensitive_in_stash, stash_label)
+            else:
+                # Stash a échoué — on continue quand même, peut-être que pull marchera
+                log.warning("git stash a échoué (continuons quand même) : %s", stash_err)
 
-    # 5. Pull a échoué : on diagnostique et on rapporte
-    if rc_p != 0:
-        hint = _diagnose_pull_failure(pull_err, pull_out)
-        # 200 (et non 500) volontaire : echec recuperable rapporte EN BANDE
-        # (ok:false) pour que le front rende le panneau riche (hint, recup du
-        # stash, reset). API.post throw sur HTTP non-ok, ce qui court-circuiterait
-        # ce panneau (cf. lot D, audit-ux-2026-05-25).
+        # 3. Pull --ff-only sur état propre (ou presque)
+        rc_p, pull_out, pull_err = _git("pull", "--ff-only", timeout=GIT_TIMEOUT_PULL)
+
+        # 4. Si on a stashé, toujours essayer le pop (même si pull a échoué :
+        #    on veut restaurer l'état local plutôt que laisser le user en limbo)
+        if stash_applied:
+            rc_pop, _pop_out, pop_err = _git("stash", "pop", timeout=GIT_TIMEOUT_QUICK)
+            if rc_pop != 0:
+                stash_pop_warning = (
+                    f"Conflit lors de la restauration de tes modifs (`git stash pop`). "
+                    f"Elles sont SAUVES dans la pile (`git stash list` → label '{stash_label}'). "
+                    f"Pour les récupérer : `git stash pop` manuel quand tu auras résolu le conflit. "
+                    f"Détail: {pop_err[:300]}"
+                )
+                log.warning("git stash pop a échoué (label=%s) : %s", stash_label, pop_err)
+
+        # 5. Pull a échoué : on diagnostique et on rapporte
+        if rc_p != 0:
+            hint = _diagnose_pull_failure(pull_err, pull_out)
+            # 200 (et non 500) volontaire : echec recuperable rapporte EN BANDE
+            # (ok:false) pour que le front rende le panneau riche (hint, recup du
+            # stash, reset). API.post throw sur HTTP non-ok, ce qui court-circuiterait
+            # ce panneau (cf. lot D, audit-ux-2026-05-25).
+            return 200, {
+                "ok": False,
+                "error": "git pull a échoué",
+                "stderr": pull_err,
+                "stdout": pull_out,
+                "hint": hint,
+                "stash_applied": stash_applied,
+                "stash_pop_warning": stash_pop_warning,
+                "can_reset_to_upstream": True,
+            }
+
+        rc_a, head_after, _ = _git("rev-parse", "HEAD")
+        if head_before == head_after:
+            return 200, {"ok": True, "applied": False, "message": "Déjà à jour."}
+
+        # Liste des fichiers changés
+        rc_d, diff_out, _ = _git("diff", "--name-only", head_before, head_after)
+        changed_files = diff_out.splitlines() if rc_d == 0 else []
+
+        # Détection : faut-il redémarrer le serveur Python ?
+        # Si un .py change, oui. Sinon (HTML/CSS/JS uniquement) un F5 suffit.
+        needs_restart = any(f.endswith(".py") for f in changed_files)
+
+        log.info(
+            "system update applied: %s → %s (%d fichiers, restart=%s)",
+            head_before[:7], head_after[:7], len(changed_files), needs_restart,
+        )
+
+        # Rétention auto : purge les vieux stash nebula-* après un cycle réussi.
+        # Garde-fou : on ne purge QUE si le pop a réussi (pas de conflit en
+        # suspens). Un `stash_pop_warning` signifie qu'un stash est laissé
+        # volontairement dans la pile pour récupération -- on n'y touche pas.
+        pruned = None
+        if not stash_pop_warning:
+            pruned = _prune_nebula_stashes()
+
         return 200, {
-            "ok": False,
-            "error": "git pull a échoué",
-            "stderr": pull_err,
-            "stdout": pull_out,
-            "hint": hint,
+            "ok": True,
+            "applied": True,
+            "from": head_before[:7],
+            "to": head_after[:7],
+            "files_changed": changed_files,
+            "needs_restart": needs_restart,
             "stash_applied": stash_applied,
             "stash_pop_warning": stash_pop_warning,
-            "can_reset_to_upstream": True,
+            "stashes_pruned": pruned["dropped"] if pruned else [],
+            "sensitive_in_stash": sensitive_in_stash if stash_applied else [],
+            "message": (
+                "Mise à jour appliquée. Redémarre le dashboard pour activer les changements."
+                if needs_restart
+                else "Mise à jour appliquée. Recharge la page (F5) pour voir les changements."
+            ),
         }
-
-    rc_a, head_after, _ = _git("rev-parse", "HEAD")
-    if head_before == head_after:
-        return 200, {"ok": True, "applied": False, "message": "Déjà à jour."}
-
-    # Liste des fichiers changés
-    rc_d, diff_out, _ = _git("diff", "--name-only", head_before, head_after)
-    changed_files = diff_out.splitlines() if rc_d == 0 else []
-
-    # Détection : faut-il redémarrer le serveur Python ?
-    # Si un .py change, oui. Sinon (HTML/CSS/JS uniquement) un F5 suffit.
-    needs_restart = any(f.endswith(".py") for f in changed_files)
-
-    log.info(
-        "system update applied: %s → %s (%d fichiers, restart=%s)",
-        head_before[:7], head_after[:7], len(changed_files), needs_restart,
-    )
-
-    # Rétention auto : purge les vieux stash nebula-* après un cycle réussi.
-    # Garde-fou : on ne purge QUE si le pop a réussi (pas de conflit en
-    # suspens). Un `stash_pop_warning` signifie qu'un stash est laissé
-    # volontairement dans la pile pour récupération -- on n'y touche pas.
-    pruned = None
-    if not stash_pop_warning:
-        pruned = _prune_nebula_stashes()
-
-    return 200, {
-        "ok": True,
-        "applied": True,
-        "from": head_before[:7],
-        "to": head_after[:7],
-        "files_changed": changed_files,
-        "needs_restart": needs_restart,
-        "stash_applied": stash_applied,
-        "stash_pop_warning": stash_pop_warning,
-        "stashes_pruned": pruned["dropped"] if pruned else [],
-        "sensitive_in_stash": sensitive_in_stash if stash_applied else [],
-        "message": (
-            "Mise à jour appliquée. Redémarre le dashboard pour activer les changements."
-            if needs_restart
-            else "Mise à jour appliquée. Recharge la page (F5) pour voir les changements."
-        ),
-    }
 
 
 def _stash_file_count(ref: str) -> int:
@@ -466,10 +519,15 @@ def _prune_nebula_stashes(keep: int = 3) -> dict:
     """Applique la politique de rétention sur les stash nebula-* (best-effort).
 
     Politique :
-    - garder les `keep` stash nebula-* les plus récents (tous labels
+    - GARDE-FOU BACKLOG : si la pile contient PLUS D'UN stash nebula non vide,
+      c'est le signe d'un backlog non résolu (un `stash pop` en conflit laisse
+      le stash dans la pile ; un vieux stash peut détenir la SEULE copie des
+      modifs pré-conflit de l'utilisateur). Dans ce cas on ne purge RIEN et on
+      renvoie une note `skipped` ;
+    - sinon : garder les `keep` stash nebula-* les plus récents (tous labels
       confondus, ordre `git stash list` = plus récent en tête) ;
     - dropper EN PLUS tout `nebula-pre-reset-*` VIDE (0 fichier tracké,
-      `empty == True`), même s'il fait partie des `keep` les plus récents --
+      `empty == True`), même s'il fait partie des `keep` plus récents --
       un pre-reset vide n'a aucune valeur de récupération ;
     - ne JAMAIS toucher un stash non-nebula (garanti par `_list_nebula_stashes`
       qui ne remonte que les labels nebula-*).
@@ -479,12 +537,30 @@ def _prune_nebula_stashes(keep: int = 3) -> dict:
     `_list_nebula_stashes` AVANT chaque drop, et `_drop_stash_ref` revalide
     encore une fois. Jamais de drop sur une ref figée d'un scan obsolète.
 
-    Best-effort : ne lève jamais ; renvoie un récap `{dropped, kept, errors}`.
+    Best-effort : ne lève jamais ; renvoie un récap `{dropped, kept, errors}`
+    (+ `skipped` si la purge a été ignorée par sécurité).
     """
     result = {"dropped": [], "kept": [], "errors": []}
     try:
         stashes = _list_nebula_stashes()
         if not stashes:
+            return result
+
+        # GARDE-FOU BACKLOG : « non vide » = tout stash dont `empty` est False
+        # (autostash toujours, pre-reset avec >=1 fichier tracké ou file_count
+        # inconnu). Plus d'un non-vide → des modifs utilisateur potentiellement
+        # uniques dorment encore dans la pile : on ne purge rien tant que le
+        # backlog n'est pas récupéré/trié.
+        non_empty = [s for s in stashes if not s.get("empty")]
+        if len(non_empty) > 1:
+            result["kept"] = [s["label"] for s in stashes]
+            result["skipped"] = (
+                "Purge ignorée par sécurité : plusieurs sauvegardes nebula non "
+                "vides en attente (conflits de stash non résolus ?). Récupère "
+                "ou supprime-les manuellement avant la purge automatique."
+            )
+            log.info("Prune stash nebula ignorée par sécurité : %d stash non vides en attente.",
+                     len(non_empty))
             return result
 
         # Candidats au drop, ciblés par label (stable). Au-delà des `keep`
@@ -536,81 +612,83 @@ def system_recover_stash() -> tuple[int, dict]:
       signale clairement. Le stash intact reste récupérable.
     - Les fichiers user-data (cf. USER_DATA_FILES) ne sont jamais touchés ici :
       on ne fait aucun reset/clean destructif, juste un apply de stash.
+    - Sérialisé par _GIT_LOCK (serveur HTTP multithread).
     """
-    if not _is_git_repo():
-        return 400, {"ok": False, "error": "Pas un dépôt git"}
+    with _GIT_LOCK:
+        if not _is_git_repo():
+            return 400, {"ok": False, "error": "Pas un dépôt git"}
 
-    _check_stale_lock()
+        _check_stale_lock()
 
-    stashes = _list_nebula_stashes()
-    if not stashes:
-        return 404, {
-            "ok": False,
-            "error": "Aucune modification stashée par Nebula à récupérer.",
-            "hint": "Le `git stash list` ne contient aucun stash nebula-* "
-                    "(soit aucun pull n'a stashé, soit les modifs ont déjà été récupérées).",
-        }
+        stashes = _list_nebula_stashes()
+        if not stashes:
+            return 404, {
+                "ok": False,
+                "error": "Aucune modification stashée par Nebula à récupérer.",
+                "hint": "Le `git stash list` ne contient aucun stash nebula-* "
+                        "(soit aucun pull n'a stashé, soit les modifs ont déjà été récupérées).",
+            }
 
-    target = stashes[0]  # le plus récent
+        target = stashes[0]  # le plus récent
 
-    # Refus si le working tree n'est pas propre (hors user-data attendues).
-    rc_st, status, _ = _git("status", "--porcelain")
-    raw_lines = status.splitlines() if status.strip() else []
-    significant = _filter_user_data(raw_lines)
-    if significant:
-        return 409, {
-            "ok": False,
-            "error": "Tu as des modifications locales non sauvegardées.",
-            "hint": "Commit, stash ou annule tes modifs courantes avant de "
-                    "récupérer le stash, pour éviter des conflits ingérables.",
-            "dirty_files": significant[:10],
-            "stashes": stashes,
-        }
+        # Refus si le working tree n'est pas propre (hors user-data attendues).
+        rc_st, status, _ = _git("status", "--porcelain")
+        raw_lines = status.splitlines() if status.strip() else []
+        significant = _filter_user_data(raw_lines)
+        if significant:
+            return 409, {
+                "ok": False,
+                "error": "Tu as des modifications locales non sauvegardées.",
+                "hint": "Commit, stash ou annule tes modifs courantes avant de "
+                        "récupérer le stash, pour éviter des conflits ingérables.",
+                "dirty_files": significant[:10],
+                "stashes": stashes,
+            }
 
-    # Apply (pas pop) : le stash reste dans la pile quoi qu'il arrive.
-    rc_a, _apply_out, apply_err = _git("stash", "apply", target["ref"], timeout=GIT_TIMEOUT_QUICK)
-    if rc_a != 0:
-        # Conflit ou échec : on revient à un état propre pour ne pas laisser
-        # de marqueurs de conflit. checkout -- . annule les fichiers trackés
-        # modifiés par l'apply partiel ; le stash intact reste récupérable.
-        _git("checkout", "--", ".")
-        return 409, {
-            "ok": False,
-            "error": "Conflit lors de la récupération du stash.",
-            "hint": f"Tes modifs sont SAUVES dans la pile (label '{target['label']}'). "
-                    f"L'application automatique provoque un conflit avec la version "
-                    f"actuelle des fichiers. Résous-le manuellement : "
-                    f"`git stash apply {target['ref']}` puis traite les conflits.",
-            "stderr": (apply_err or "")[:300],
+        # Apply (pas pop) : le stash reste dans la pile quoi qu'il arrive.
+        rc_a, _apply_out, apply_err = _git("stash", "apply", target["ref"], timeout=GIT_TIMEOUT_QUICK)
+        if rc_a != 0:
+            # Conflit ou échec : on revient à un état propre pour ne pas laisser
+            # de marqueurs de conflit. checkout -- . annule les fichiers trackés
+            # modifiés par l'apply partiel ; le stash intact reste récupérable.
+            _git("checkout", "--", ".")
+            return 409, {
+                "ok": False,
+                "error": "Conflit lors de la récupération du stash.",
+                "hint": f"Tes modifs sont SAUVES dans la pile (label '{target['label']}'). "
+                        f"L'application automatique provoque un conflit avec la version "
+                        f"actuelle des fichiers. Résous-le manuellement : "
+                        f"`git stash apply {target['ref']}` puis traite les conflits.",
+                "stderr": (apply_err or "")[:300],
+                "stash_label": target["label"],
+                "stash_ref": target["ref"],
+                "stashes": stashes,
+            }
+
+        # Apply réussi. On laisse le stash dans la pile par prudence (l'utilisateur
+        # peut le dropper manuellement une fois sûr que tout est OK).
+        rc_d, diff_out, _ = _git("diff", "--name-only")
+        changed_files = diff_out.splitlines() if rc_d == 0 else []
+        needs_restart = any(f.endswith(".py") for f in changed_files)
+
+        log.info("Stash récupéré (apply %s, %d fichiers, restart=%s)",
+                 target["ref"], len(changed_files), needs_restart)
+
+        return 200, {
+            "ok": True,
+            "applied_ref": target["ref"],
             "stash_label": target["label"],
-            "stash_ref": target["ref"],
-            "stashes": stashes,
+            "files_changed": changed_files,
+            "needs_restart": needs_restart,
+            "remaining_stashes": _list_nebula_stashes(),
+            "message": (
+                f"Modifs récupérées depuis le stash « {target['label']} ». "
+                "Le stash est conservé dans la pile par sécurité (supprime-le "
+                "manuellement via `git stash drop` une fois que tout est vérifié)."
+                + (" Des fichiers Python ont changé : redémarre le dashboard."
+                   if needs_restart else "")
+            ),
         }
-
-    # Apply réussi. On laisse le stash dans la pile par prudence (l'utilisateur
-    # peut le dropper manuellement une fois sûr que tout est OK).
-    rc_d, diff_out, _ = _git("diff", "--name-only")
-    changed_files = diff_out.splitlines() if rc_d == 0 else []
-    needs_restart = any(f.endswith(".py") for f in changed_files)
-
-    log.info("Stash récupéré (apply %s, %d fichiers, restart=%s)",
-             target["ref"], len(changed_files), needs_restart)
-
-    return 200, {
-        "ok": True,
-        "applied_ref": target["ref"],
-        "stash_label": target["label"],
-        "files_changed": changed_files,
-        "needs_restart": needs_restart,
-        "remaining_stashes": _list_nebula_stashes(),
-        "message": (
-            f"Modifs récupérées depuis le stash « {target['label']} ». "
-            "Le stash est conservé dans la pile par sécurité (supprime-le "
-            "manuellement via `git stash drop` une fois que tout est vérifié)."
-            + (" Des fichiers Python ont changé : redémarre le dashboard."
-               if needs_restart else "")
-        ),
-    }
 
 
 def system_drop_stash(ref: str) -> tuple[int, dict]:
@@ -623,34 +701,36 @@ def system_drop_stash(ref: str) -> tuple[int, dict]:
     Securite : on ne droppe QUE des stash crees par l'auto-update Nebula
     (labels nebula-autostash-* / nebula-pre-reset-*), jamais un stash
     utilisateur arbitraire. La ref est revalidee contre la liste courante.
+    Sérialisé par _GIT_LOCK (serveur HTTP multithread).
     """
-    if not _is_git_repo():
-        return 400, {"ok": False, "error": "Pas un dépôt git"}
-    ref = (ref or "").strip()
-    if not ref:
-        return 400, {"ok": False, "error": "Référence de stash manquante."}
+    with _GIT_LOCK:
+        if not _is_git_repo():
+            return 400, {"ok": False, "error": "Pas un dépôt git"}
+        ref = (ref or "").strip()
+        if not ref:
+            return 400, {"ok": False, "error": "Référence de stash manquante."}
 
-    nebula = _list_nebula_stashes()
-    match = next((s for s in nebula if s["ref"] == ref), None)
-    if not match:
-        return 404, {
-            "ok": False,
-            "error": "Stash introuvable ou non géré par Nebula.",
-            "hint": "La référence a peut-être changé (un autre stash supprimé "
-                    "entre-temps). Rouvre la fenêtre de mise à jour.",
-            "stashes": nebula,
+        nebula = _list_nebula_stashes()
+        match = next((s for s in nebula if s["ref"] == ref), None)
+        if not match:
+            return 404, {
+                "ok": False,
+                "error": "Stash introuvable ou non géré par Nebula.",
+                "hint": "La référence a peut-être changé (un autre stash supprimé "
+                        "entre-temps). Rouvre la fenêtre de mise à jour.",
+                "stashes": nebula,
+            }
+
+        dropped, msg = _drop_stash_ref(ref, nebula=nebula)
+        if not dropped:
+            return 500, {"ok": False, "error": "Échec de la suppression du stash.",
+                         "stderr": msg}
+
+        return 200, {
+            "ok": True,
+            "message": msg,
+            "remaining_stashes": _list_nebula_stashes(),
         }
-
-    dropped, msg = _drop_stash_ref(ref, nebula=nebula)
-    if not dropped:
-        return 500, {"ok": False, "error": "Échec de la suppression du stash.",
-                     "stderr": msg}
-
-    return 200, {
-        "ok": True,
-        "message": msg,
-        "remaining_stashes": _list_nebula_stashes(),
-    }
 
 
 def system_prune_stashes(refs: list | None = None, keep: int = 3) -> tuple[int, dict]:
@@ -662,7 +742,7 @@ def system_prune_stashes(refs: list | None = None, keep: int = 3) -> tuple[int, 
       non-nebula ou inconnue est IGNORÉE, jamais droppée) ;
     - `refs` absent / vide : applique la politique de rétention auto
       (`_prune_nebula_stashes`, garde les `keep` plus récents + droppe les
-      pre-reset vides).
+      pre-reset vides ; purge ignorée si backlog non résolu -- cf. garde-fou).
 
     PITFALL INDEX GIT : en mode `refs`, on traduit d'abord les refs en LABELS
     (stables), puis on droppe en re-résolvant à chaque itération. Drop direct
@@ -672,53 +752,56 @@ def system_prune_stashes(refs: list | None = None, keep: int = 3) -> tuple[int, 
     INVARIANT DUR : seuls les stash nebula-* sont touchés (garde dans
     `_drop_stash_ref`). Un stash utilisateur (« WIP … » sans label nebula-*)
     n'est jamais droppé, même si sa ref est passée explicitement.
+    Sérialisé par _GIT_LOCK (serveur HTTP multithread).
     """
-    if not _is_git_repo():
-        return 400, {"ok": False, "error": "Pas un dépôt git"}
+    with _GIT_LOCK:
+        if not _is_git_repo():
+            return 400, {"ok": False, "error": "Pas un dépôt git"}
 
-    _check_stale_lock()
+        _check_stale_lock()
 
-    if refs:
-        nebula = _list_nebula_stashes()
-        # Traduit les refs demandées en labels nebula valides (ignore le reste).
-        labels = []
-        ignored = []
-        for ref in refs:
-            match = next((s for s in nebula if s["ref"] == (ref or "").strip()), None)
-            if match:
-                labels.append(match["label"])
-            else:
-                ignored.append(ref)
-        dropped, errors = [], []
-        for label in labels:
-            current = _list_nebula_stashes()
-            match = next((s for s in current if s["label"] == label), None)
-            if not match:
-                continue
-            ok, msg = _drop_stash_ref(match["ref"], nebula=current)
-            (dropped if ok else errors).append(label if ok else f"{label}: {msg}")
+        if refs:
+            nebula = _list_nebula_stashes()
+            # Traduit les refs demandées en labels nebula valides (ignore le reste).
+            labels = []
+            ignored = []
+            for ref in refs:
+                match = next((s for s in nebula if s["ref"] == (ref or "").strip()), None)
+                if match:
+                    labels.append(match["label"])
+                else:
+                    ignored.append(ref)
+            dropped, errors = [], []
+            for label in labels:
+                current = _list_nebula_stashes()
+                match = next((s for s in current if s["label"] == label), None)
+                if not match:
+                    continue
+                ok, msg = _drop_stash_ref(match["ref"], nebula=current)
+                (dropped if ok else errors).append(label if ok else f"{label}: {msg}")
+            return 200, {
+                "ok": True,
+                "dropped": dropped,
+                "errors": errors,
+                "ignored": ignored,
+                "remaining_stashes": _list_nebula_stashes(),
+                "message": (f"{len(dropped)} sauvegarde(s) supprimée(s)."
+                            if dropped else "Aucune sauvegarde supprimée."),
+            }
+
+        # Mode politique de rétention.
+        res = _prune_nebula_stashes(keep=keep)
         return 200, {
             "ok": True,
-            "dropped": dropped,
-            "errors": errors,
-            "ignored": ignored,
+            "dropped": res["dropped"],
+            "kept": res["kept"],
+            "errors": res["errors"],
             "remaining_stashes": _list_nebula_stashes(),
-            "message": (f"{len(dropped)} sauvegarde(s) supprimée(s)."
-                        if dropped else "Aucune sauvegarde supprimée."),
+            "message": (f"{len(res['dropped'])} sauvegarde(s) ancienne(s) purgée(s) "
+                        f"(rétention : {keep} récentes conservées)."
+                        if res["dropped"]
+                        else res.get("skipped") or "Aucune sauvegarde à purger."),
         }
-
-    # Mode politique de rétention.
-    res = _prune_nebula_stashes(keep=keep)
-    return 200, {
-        "ok": True,
-        "dropped": res["dropped"],
-        "kept": res["kept"],
-        "errors": res["errors"],
-        "remaining_stashes": _list_nebula_stashes(),
-        "message": (f"{len(res['dropped'])} sauvegarde(s) ancienne(s) purgée(s) "
-                    f"(rétention : {keep} récentes conservées)."
-                    if res["dropped"] else "Aucune sauvegarde à purger."),
-    }
 
 
 def system_reset_to_upstream() -> tuple[int, dict]:
@@ -730,64 +813,66 @@ def system_reset_to_upstream() -> tuple[int, dict]:
 
     Données utilisateur (registry, workspaces.json, .env.local…) préservées
     via .gitignore et skip-worktree — non touchées par reset --hard.
+    Sérialisé par _GIT_LOCK (serveur HTTP multithread).
     """
-    if not _is_git_repo():
-        return 400, {"ok": False, "error": "Pas un dépôt git"}
-    upstream = _tracking_branch()
-    if not upstream:
-        return 400, {"ok": False, "error": "Aucune branche distante trackée"}
+    with _GIT_LOCK:
+        if not _is_git_repo():
+            return 400, {"ok": False, "error": "Pas un dépôt git"}
+        upstream = _tracking_branch()
+        if not upstream:
+            return 400, {"ok": False, "error": "Aucune branche distante trackée"}
 
-    # Lock orphelin
-    _check_stale_lock()
+        # Lock orphelin
+        _check_stale_lock()
 
-    # 1. Stash de sauvegarde (au cas où, label horodaté)
-    rc_st, status, _ = _git("status", "--porcelain")
-    stash_label = f"nebula-pre-reset-{int(time.time())}"
-    stash_applied = False
-    if status.strip():
-        rc_s, _, _ = _git("stash", "push", "--include-untracked", "-m", stash_label,
-                          timeout=GIT_TIMEOUT_QUICK)
-        if rc_s == 0:
-            stash_applied = True
-            log.info("Pre-reset stash effectué (label=%s)", stash_label)
+        # 1. Stash de sauvegarde (au cas où, label horodaté)
+        rc_st, status, _ = _git("status", "--porcelain")
+        stash_label = f"nebula-pre-reset-{int(time.time())}"
+        stash_applied = False
+        if status.strip():
+            rc_s, _, _ = _git("stash", "push", "--include-untracked", "-m", stash_label,
+                              timeout=GIT_TIMEOUT_QUICK)
+            if rc_s == 0:
+                stash_applied = True
+                log.info("Pre-reset stash effectué (label=%s)", stash_label)
 
-    # 2. Fetch
-    rc_f, _, fetch_err = _git("fetch", "--quiet", timeout=GIT_TIMEOUT_FETCH)
-    if rc_f != 0:
-        return 500, {"ok": False, "error": "git fetch a échoué", "stderr": fetch_err}
+        # 2. Fetch
+        rc_f, _, fetch_err = _git("fetch", "--quiet", timeout=GIT_TIMEOUT_FETCH)
+        if rc_f != 0:
+            return 500, {"ok": False, "error": "git fetch a échoué", "stderr": fetch_err}
 
-    # 3. Reset --hard sur upstream
-    rc_b, head_before, _ = _git("rev-parse", "HEAD")
-    rc_r, _, reset_err = _git("reset", "--hard", upstream)
-    if rc_r != 0:
-        return 500, {"ok": False, "error": "git reset --hard a échoué",
-                     "stderr": reset_err, "stash_applied": stash_applied}
+        # 3. Reset --hard sur upstream
+        rc_b, head_before, _ = _git("rev-parse", "HEAD")
+        rc_r, _, reset_err = _git("reset", "--hard", upstream)
+        if rc_r != 0:
+            return 500, {"ok": False, "error": "git reset --hard a échoué",
+                         "stderr": reset_err, "stash_applied": stash_applied}
 
-    rc_a, head_after, _ = _git("rev-parse", "HEAD")
-    rc_d, diff_out, _ = _git("diff", "--name-only", head_before, head_after)
-    changed_files = diff_out.splitlines() if rc_d == 0 else []
-    needs_restart = any(f.endswith(".py") for f in changed_files)
+        rc_a, head_after, _ = _git("rev-parse", "HEAD")
+        rc_d, diff_out, _ = _git("diff", "--name-only", head_before, head_after)
+        changed_files = diff_out.splitlines() if rc_d == 0 else []
+        needs_restart = any(f.endswith(".py") for f in changed_files)
 
-    log.warning("system reset to upstream: %s → %s (%d fichiers, restart=%s)",
-                head_before[:7], head_after[:7], len(changed_files), needs_restart)
+        log.warning("system reset to upstream: %s → %s (%d fichiers, restart=%s)",
+                    head_before[:7], head_after[:7], len(changed_files), needs_restart)
 
-    # Rétention auto après reset réussi. Le pre-reset fraîchement créé est le
-    # plus récent (gardé par la politique) SAUF s'il est vide -- un pre-reset
-    # à 0 fichier tracké ne protège rien et est purgé systématiquement. Purge
-    # aussi les anciens pre-reset vides accumulés.
-    pruned = _prune_nebula_stashes()
+        # Rétention auto après reset réussi. Le pre-reset fraîchement créé est le
+        # plus récent (gardé par la politique) SAUF s'il est vide -- un pre-reset
+        # à 0 fichier tracké ne protège rien et est purgé systématiquement. Purge
+        # aussi les anciens pre-reset vides accumulés.
+        pruned = _prune_nebula_stashes()
 
-    return 200, {
-        "ok": True,
-        "from": head_before[:7],
-        "to": head_after[:7],
-        "files_changed": changed_files,
-        "needs_restart": needs_restart,
-        "stash_applied": stash_applied,
-        "stash_label": stash_label if stash_applied else None,
-        "stashes_pruned": pruned["dropped"],
-        "message": (
-            f"Repo réinitialisé sur {upstream}. "
-            + (f"Tes modifs sont sauvegardées dans `git stash list` (label: {stash_label})." if stash_applied else "")
-        ),
-    }
+        return 200, {
+            "ok": True,
+            "from": head_before[:7],
+            "to": head_after[:7],
+            "files_changed": changed_files,
+            "needs_restart": needs_restart,
+            "stash_applied": stash_applied,
+            "stash_label": stash_label if stash_applied else None,
+            "stashes_pruned": pruned["dropped"],
+            "message": (
+                f"Repo réinitialisé sur {upstream}. "
+                + (f"Tes modifs sont sauvegardées dans `git stash list` (label: {stash_label})." if stash_applied else "")
+            ),
+        }

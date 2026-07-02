@@ -29,7 +29,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from dashcore.config import TEMPLATES_DIR, log
+from dashcore.config import TEMPLATES_DIR, _MUTATION_LOCK, log
 from dashcore.helpers import (
     apply_template, is_text_file, read_json, render_placeholders,
     resolve_ws_dir, safe_id, write_json,
@@ -367,6 +367,17 @@ def apply_overlay(ws_id: str, overlay_id: str, vars: dict,
     if not src_dir.exists():
         return 404, {"error": f"Dossier d'overlay introuvable : {overlay['dir_id']}"}
 
+    # Sérialise l'application sur le workspace (cf. review #10) : serveur
+    # ThreadingHTTPServer + read-modify-write multi-fichiers (CLAUDE.md,
+    # settings.local.json) -> deux applications concurrentes entrelaceraient
+    # leurs écritures. _MUTATION_LOCK est réentrant (write_json le reprend
+    # sans deadlock).
+    with _MUTATION_LOCK:
+        return _apply_overlay_body(ws_id, overlay_id, ws_dir, src_dir, vars, options)
+
+
+def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
+                        vars: dict, options: dict | None) -> tuple[int, dict]:
     opts = _normalize_options(options)
     marker = read_json(src_dir / OVERLAY_MARKER, {}) or {}
     cfg = _claude_md_config(marker)

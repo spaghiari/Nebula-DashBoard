@@ -63,6 +63,18 @@ async function loadAll() {
 // (montrer un loader) de "refresh same-page post-action" (silencieux).
 let _lastRoutedHash = null;
 
+// Bug #14 : jeton de rendu monotone contre les renders perimes.
+// Chaque route() qui va declencher un rendu incremente le jeton ; tout
+// travail async (loadAll ici, awaits dans les renderXxx) capture le
+// jeton a l'entree et verifie routeIsStale() avant d'ecrire dans
+// #content. Meme esprit que le garde row.isConnected
+// d'attachSessionPreview (app.js). Sans ca, une navigation rapide
+// A -> B laisse le rendu lent de A ecraser la page B apres coup
+// (y compris des boutons topbar lies au mauvais id via closures).
+let _routeToken = 0;
+
+function routeIsStale(token) { return token !== _routeToken; }
+
 async function route(opts) {
   const silent = !!(opts && opts.silent);
   clearPagePollers();
@@ -71,7 +83,14 @@ async function route(opts) {
   // Ancres intra-page (ex. #h-env depuis le TOC d'Aide) : on laisse le
   // navigateur scroller, on ne re-render rien -- sinon on perd la page courante.
   if (hash && !hash.startsWith('#/')) return;
+  // Bug #14 : ce route() va rendre une page -> il invalide tout rendu
+  // encore en vol (silent inclus : un silent re-route re-rend la page
+  // entiere, il doit donc lui aussi superseder les rendus precedents).
+  const myToken = ++_routeToken;
   if (STATE.loading) await loadAll();
+  // Bug #14 : une navigation plus recente a pris la main pendant
+  // loadAll -- on abandonne AVANT de toucher au DOM ou de dispatcher.
+  if (routeIsStale(myToken)) return;
   const content = $('#content');
   // RM-1 v1 : "silent route" pour les refresh same-page post-action.
   // Si on reste sur la meme page (refresh post-CRUD), pas de page-loader
@@ -94,6 +113,9 @@ async function route(opts) {
     if (m) return await renderWorkspace(m[1]);
     location.hash = '#/';
   } catch (e) {
+    // Bug #14 : ne pas ecraser la page d'une navigation plus recente
+    // avec la boite d'erreur d'un rendu perime.
+    if (routeIsStale(myToken)) return;
     content['innerHTML'] = `<div class="error-box">Erreur : ${escapeHtml(e.message)}</div>`;
   }
 }

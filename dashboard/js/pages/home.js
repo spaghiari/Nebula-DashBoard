@@ -91,6 +91,11 @@ function buildHomeQuickstart() {
 }
 
 async function renderHome() {
+  // Bug #14 : capture du jeton de rendu (voir _routeToken, js/router.js).
+  // renderHome await des fetchs (stats + sanity) avant d'attacher la page
+  // a #content -- si une navigation plus recente arrive entretemps, on
+  // doit abandonner au lieu d'ecraser la nouvelle page.
+  const myToken = _routeToken;
   setBreadcrumbs([{ label: 'Accueil' }]);
   const newWsBtn = btn('Nouveau workspace', 'btn-primary', I.plus);
   newWsBtn.addEventListener('click', () => modalNewWorkspace());
@@ -257,6 +262,11 @@ async function renderHome() {
   grid.appendChild(right);
   grid.appendChild(right2);
   page.appendChild(grid);
+  // Bug #14 : rendu perime (navigation pendant les awaits stats/sanity
+  // ci-dessus) -> on n'attache pas la page, #content appartient deja a
+  // la route plus recente. Tout ce qui precede n'a touche que des noeuds
+  // detaches, donc abandonner ici est sans effet de bord.
+  if (routeIsStale(myToken)) return;
   c.appendChild(page);
 }
 

@@ -872,6 +872,17 @@ def import_github_skills(payload: dict) -> tuple[int, dict]:
         return 502, {"error": "git clone a échoué"}
     tmp, sha = cloned
     try:
+        # Whitelist : seuls les rel_path réellement détectés dans CE clone sont
+        # importables. Sans ça, un rel_path forgé (chemin absolu Windows type
+        # "C:/Users/x/secret" -- pour lequel Path(tmp)/rel IGNORE tmp) copierait
+        # un dossier local arbitraire dans la bibliothèque puis vers
+        # ~/.claude/skills (cf. review #2). Le check ".." seul est insuffisant.
+        allowed = {
+            s["rel_path"].replace("\\", "/").strip("/")
+            for s in _find_skills_in_repo(tmp)
+        }
+        tmp_resolved = tmp.resolve()
+
         imported: list[dict] = []
         skipped: list[dict] = []
         errors: list[dict] = []
@@ -880,10 +891,17 @@ def import_github_skills(payload: dict) -> tuple[int, dict]:
 
         for rel in selected:
             rel = str(rel).replace("\\", "/").strip("/")
-            if ".." in rel.split("/"):
-                errors.append({"rel": rel, "error": "chemin invalide"})
+            if ".." in rel.split("/") or rel not in allowed:
+                errors.append({"rel": rel, "error": "chemin invalide ou non détecté dans le repo"})
                 continue
             src = tmp / rel
+            # Défense en profondeur : le chemin résolu doit rester sous tmp
+            # (neutralise un réancrage par chemin absolu / lettre de lecteur).
+            try:
+                src.resolve().relative_to(tmp_resolved)
+            except ValueError:
+                errors.append({"rel": rel, "error": "chemin hors du dépôt cloné"})
+                continue
             if not (src / "SKILL.md").exists():
                 errors.append({"rel": rel, "error": "SKILL.md introuvable côté source"})
                 continue
