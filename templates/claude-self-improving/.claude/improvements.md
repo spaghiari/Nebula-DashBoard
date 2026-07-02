@@ -29,7 +29,7 @@ Format d'un item :
 ```
 
 Le champ `par <author>` est **obligatoire en mode équipe** et validé
-par le hook `improvements-validate.sh` au commit. Optionnel en mode
+par le hook `improvements-validate.py` au commit. Optionnel en mode
 solo.
 
 ## Items actifs

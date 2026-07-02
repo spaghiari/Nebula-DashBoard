@@ -5,15 +5,26 @@ Mémoire projet **always-on** pour `{{label}}`.
 > **Ce fichier est issu d'un overlay (`claude-self-improving`).** À
 > l'instanciation, remplacer `{{label}}` par le nom du projet et
 > `{{name}}` par le préfixe court retenu pour les agents et
-> identifiants (par exemple `am` pour le projet AstreinteManager
-> d'origine). Voir `.claude/memory/overview.md` pour les autres
-> décisions de bootstrap.
+> identifiants (par exemple `app` pour un projet « MyApp »). Voir
+> `.claude/memory/overview.md` pour les autres décisions de bootstrap.
 >
 > Le bloc always-on ci-dessous (entre les marqueurs
 > `claude-self-improving`) est **la même source** que le fragment
 > `CLAUDE.self-improving.md` appendé sur les hôtes qui ont déjà un
 > `CLAUDE.md`. Ne pas le dupliquer : si l'hôte a son propre
 > `CLAUDE.md`, c'est ce bloc seul qui y est appendé.
+
+## Projet
+
+<!-- Si "Non initialisé" ci-dessous : lancer le bootstrap. Dire
+     « bootstrap le projet », ou lire .claude/bootstrap.md et suivre le
+     protocole. Claude remplit lui-même CLAUDE.md et
+     .claude/memory/overview.md — l'utilisateur ne touche aucun fichier.
+     Retirer ce commentaire une fois le projet initialisé. -->
+
+- **Nom** : Non initialisé
+- **Stack** : Non initialisé
+- **Mode** : solo — voir `.claude/memory/overview.md § Mode projet`
 
 <!-- BEGIN claude-self-improving -->
 <!--

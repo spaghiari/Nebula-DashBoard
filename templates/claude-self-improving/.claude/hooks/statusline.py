@@ -32,6 +32,13 @@ import shutil
 import subprocess
 import sys
 
+# Forcer UTF-8 sur stdout : la statusline écrit des glyphes non-ASCII
+# (↑ ↓ ·) qui lèveraient UnicodeEncodeError en environnement cp1252.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
 # Codes ANSI (palette riche)
 RST = "\033[0m"
 BOLD = "\033[1m"

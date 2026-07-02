@@ -58,7 +58,7 @@ cet axe (ne pas dupliquer).
 - Priorités P0/P1/P2 ?
 - Dates au format YYYY-MM-DD ?
 
-Note : le hook `improvements-validate.sh` fait ce check au commit. La
+Note : le hook `improvements-validate.py` fait ce check au commit. La
 commande `/self-review` peut s'en remettre au hook pour cet axe (mais
 peut signaler les items en `IN PROGRESS` qui traînent depuis longtemps,
 ou les `BLOCKED` à débloquer).
@@ -133,7 +133,7 @@ L'utilisateur tranche. Pas d'action sans validation.
 - **Inscrire 100 items au registre** : si le rapport remonte > 10
   frictions, c'est qu'on a sur-audité. Cibler les axes vraiment
   critiques.
-- **Doublonner avec `/readme-sync` ou `improvements-validate.sh`** :
+- **Doublonner avec `/readme-sync` ou `improvements-validate.py`** :
   ces 2 outils couvrent déjà des axes. `/self-review` les complète,
   ne les remplace pas.
 

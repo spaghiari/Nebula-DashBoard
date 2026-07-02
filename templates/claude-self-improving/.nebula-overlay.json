@@ -1,7 +1,7 @@
 {
   "id": "claude-self-improving",
   "label": "Auto-amélioration de Claude",
-  "description": "Ajoute une mémoire structurée (.claude/memory), un pipeline d'auto-amélioration (improvements.md, ideas.md, backlog.md, roadmap.md), des digests hiérarchiques, agents, commands et hooks pré-commit. S'applique par-dessus un template existant — n'écrase aucun fichier déjà présent dans le workspace.",
+  "description": "Ajoute une mémoire structurée (.claude/memory), un pipeline d'auto-amélioration (improvements.md, ideas.md, backlog.md, roadmap.md), des digests hiérarchiques, agents, commands et hooks pré-commit Python. Bootstrap conversationnel : après application, lancer Claude et dire « bootstrap le projet » — il remplit CLAUDE.md et overview.md lui-même (cf. .claude/bootstrap.md). S'applique par-dessus un template existant — n'écrase aucun fichier déjà présent.",
   "emoji": "🧠",
   "signature_file": ".claude/improvements.md",
 
@@ -27,10 +27,14 @@
       "CLAUDE.self-improving.md",
       "README.md",
       ".gitignore",
+      ".claude/bootstrap.md",
       ".claude/improvements.md",
       ".claude/settings.json",
       ".claude/settings.local.json.example",
+      ".claude/skills/review/SKILL.md",
       ".claude/memory/overview.md",
+      ".claude/memory/conventions.md",
+      ".claude/memory/pitfalls.md",
       ".claude/hooks/README.md",
       ".claude/hooks/protect-local-files.py",
       ".claude/hooks/em-dash-precommit.py",

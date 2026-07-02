@@ -15,7 +15,7 @@ Le mode détermine plusieurs comportements transverses (attribution
 d'auteur obligatoire, registre `digests` actif, hooks de validation).
 
 - [ ] **Solo** : un seul mainteneur. Auteur implicite, registre
-  `digests` inactif, hook `improvements-validate.sh` peut être passé
+  `digests` inactif, hook `improvements-validate.py` peut être passé
   en `validate_author: false`.
 - [ ] **Équipe sans hiérarchie** : plusieurs contributeurs au même
   niveau. Auteur **obligatoire** sur tous les items. Pas de digests
@@ -37,15 +37,15 @@ L'identifiant utilisé dans les champs `par <author>` des registres
 suit la convention déclarée ici. Choisir une et **une seule**
 convention au bootstrap, puis s'y tenir :
 
-- [ ] **`git config user.name` court** (par ex. `antoine.b`)
-- [ ] **Initiales** (par ex. `ab`, `mp`)
-- [ ] **Email tronqué** (par ex. `antoine.b` extrait de
-  `antoine.b@i-tracing.fr`)
-- [ ] **Slug équipe interne** (par ex. `@antoine.b` ou identifiant
+- [ ] **`git config user.name` court** (par ex. `jdupont`)
+- [ ] **Initiales** (par ex. `jd`, `mp`)
+- [ ] **Email tronqué** (par ex. `jdupont` extrait de
+  `jdupont@example.com`)
+- [ ] **Slug équipe interne** (par ex. `@jdupont` ou identifiant
   Active Directory)
 - [ ] **Autre** : (à préciser)
 
-Le hook `improvements-validate.sh` valide la **présence** du champ
+Le hook `improvements-validate.py` valide la **présence** du champ
 (`par <quelque-chose-de-non-vide>`) en mode équipe, pas la **forme
 exacte**. La cohérence du choix est de la responsabilité de l'équipe.
 

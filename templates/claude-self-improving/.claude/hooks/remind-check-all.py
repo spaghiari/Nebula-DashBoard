@@ -17,6 +17,13 @@ import shutil
 import subprocess
 import sys
 
+# Forcer UTF-8 sur stdout (message renvoyé à Claude) : évite un
+# UnicodeEncodeError sur l'emoji en environnement Windows cp1252.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
 # Dossiers de code surveillés. À adapter à la stack du projet
 # (ex. src/, dashcore/, js/...).
 WATCHED_DIRS = ("application/", "library/", "public/")

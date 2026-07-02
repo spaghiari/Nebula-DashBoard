@@ -31,6 +31,14 @@ import shutil
 import subprocess
 import sys
 
+# Forcer UTF-8 sur stderr : un message accentué/emoji peut sinon lever
+# UnicodeEncodeError (Windows cp1252) AVANT le `return 2`, dégradant le
+# blocage (exit 2) en simple avertissement non bloquant (exit 1).
+try:
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
 # Whitelist des statuts (regex). Couvre cycle de vie, idea-funnel, promoted.
 STATUS_WHITELIST = re.compile(
     r"\[TODO\]|\[IN PROGRESS\]|\[BLOCKED\]|\[DONE\]|\[ABANDONED\]"

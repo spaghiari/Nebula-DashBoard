@@ -30,8 +30,7 @@ tools: All tools
 ```
 
 - **Préfixe `{{name}}-`** systématique (cohérence avec les autres
-  identifiants du projet, par exemple `am-` pour le projet
-  AstreinteManager).
+  identifiants du projet, par exemple `app-` pour un projet « MyApp »).
 - **Suffixe descriptif court** : `-expert`, `-auditor`, `-keeper`,
   `-validator`, `-syncer`, `-compiler`.
 

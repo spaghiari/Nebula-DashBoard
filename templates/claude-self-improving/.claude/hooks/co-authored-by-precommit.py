@@ -21,6 +21,14 @@ import json
 import re
 import sys
 
+# Forcer UTF-8 sur stderr : un message accentué/emoji peut sinon lever
+# UnicodeEncodeError (Windows cp1252) AVANT le `return 2`, dégradant le
+# blocage (exit 2) en simple avertissement non bloquant (exit 1).
+try:
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
 # co-authored-by / coauthoredby / co-authored by ... claude
 # (n'importe quel séparateur non-alphabétique entre `by` et `claude`).
 PATTERN = re.compile(r"co-?authored-?by[^a-z]+claude", re.IGNORECASE)

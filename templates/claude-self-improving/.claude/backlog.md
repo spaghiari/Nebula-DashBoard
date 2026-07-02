@@ -28,7 +28,7 @@ Pour un item DONE livré par un autre que l'auteur initial, ajouter
 aussi `livré par <author>` dans le bloc DONE.
 
 Le champ `par <author>` est **obligatoire en mode équipe** et validé
-par le hook `improvements-validate.sh` au commit. Optionnel en mode
+par le hook `improvements-validate.py` au commit. Optionnel en mode
 solo (cf. `CLAUDE.md § Attribution d'auteur` et `memory/overview.md
 § Mode projet`).
 

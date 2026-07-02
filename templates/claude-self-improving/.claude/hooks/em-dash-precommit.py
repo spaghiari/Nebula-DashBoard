@@ -17,6 +17,14 @@ import shutil
 import subprocess
 import sys
 
+# Forcer UTF-8 sur stderr : un message accentué/emoji peut sinon lever
+# UnicodeEncodeError (Windows cp1252) AVANT le `return 2`, dégradant le
+# blocage (exit 2) en simple avertissement non bloquant (exit 1).
+try:
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
+
 EM_DASH = "—"  # — (caractère unicode, jamais écrit en littéral ici)
 
 # Fichiers où l'em-dash est toléré (prose éditoriale assumée).

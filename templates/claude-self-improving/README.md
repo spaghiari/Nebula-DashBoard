@@ -6,8 +6,7 @@ projet structurée, un système d'auto-amélioration continu, et un
 mécanisme de digests hebdomadaires verticaux pour les projets
 d'équipe avec hiérarchie.
 
-Inspiré du projet AstreinteManager (i-TRACING) après refactorisation
-4.7.0+ pour usage générique.
+Conçu pour un usage générique, indépendant de tout projet ou stack.
 
 ## Ce que ce template fournit
 
@@ -64,10 +63,23 @@ détaillés dans un sous-dossier homonyme quand le contenu grossit.
 ### Attribution d'auteur
 
 Tous les items des 5 registres portent l'auteur via `par <author>`.
-En mode équipe, le hook `improvements-validate.sh` valide la
+En mode équipe, le hook `improvements-validate.py` valide la
 présence du champ au commit.
 
-## Bootstrap d'un nouveau projet
+## Bootstrap express (recommandé)
+
+Après application de l'overlay (via Nebula ou copie manuelle) :
+
+1. Lancer Claude dans le workspace.
+2. Dire : **« bootstrap le projet »**.
+
+Claude lit `.claude/bootstrap.md`, pose 5 questions (nom, stack,
+commandes, structure, mode/langue/pièges) et remplit lui-même
+`CLAUDE.md` et `.claude/memory/overview.md`. Aucun fichier à éditer à
+la main. La procédure manuelle détaillée ci-dessous reste disponible
+pour les cas particuliers.
+
+## Bootstrap manuel d'un nouveau projet
 
 1. **Cloner** le template dans le dépôt du nouveau projet :
    ```bash
@@ -78,10 +90,10 @@ présence du champ au commit.
    ```
 
 2. **Remplacer les placeholders** dans tous les fichiers :
-   - `{{label}}` → nom du projet (par exemple `astreintemanager`,
+   - `{{label}}` → nom du projet (par exemple `monprojet`,
      `cmdb`, ...)
    - `{{name}}-` → préfixe court pour agents et identifiants (par
-     exemple `am-`, `cmdb-`, ...)
+     exemple `mp-`, `cmdb-`, ...)
 
    Commande type (à adapter selon plateforme) :
    ```bash

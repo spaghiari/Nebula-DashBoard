@@ -167,7 +167,7 @@ post-livraison (régression, friction nouvelle), créer un
 
 ## Garde-fous
 
-### Le hook `improvements-validate.sh`
+### Le hook `improvements-validate.py`
 
 Vérifie au commit que les statuts utilisés dans
 `.claude/improvements.md` et `.claude/backlog.md` sont dans la
