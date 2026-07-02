@@ -126,7 +126,20 @@ def write_launch_bat(ws_id: str, label: str, path: str) -> Path:
         f"echo  +======================================+\n"
         f"echo.\n"
         f'cd /d "{path}"\n'
-        f"claude\n",
+        # Auto-bootstrap : si le CLAUDE.md de l'overlay claude-self-improving
+        # est encore "Non initialise", on demarre Claude avec le prompt de
+        # bootstrap (session INTERACTIVE : le prompt positionnel est traite en
+        # 1er message puis le REPL reste ouvert). Une fois le projet
+        # bootstrappe, Claude remplace "Non initialise" -> les lancements
+        # suivants sont normaux. Marqueur ASCII (sans accent) pour un findstr
+        # fiable sur un CLAUDE.md encode en UTF-8.
+        f'findstr /C:"Non initialis" "CLAUDE.md" >nul 2>&1\n'
+        f"if errorlevel 1 (\n"
+        f"    claude\n"
+        f") else (\n"
+        f"    echo  Projet non initialise -- lancement du bootstrap...\n"
+        f'    claude "Bootstrap ce projet"\n'
+        f")\n",
         encoding="utf-8",
     )
     return bat_path
