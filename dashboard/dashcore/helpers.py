@@ -12,6 +12,7 @@ import re
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -214,15 +215,35 @@ def apply_template(src_dir: Path, dst_dir: Path, vars: dict) -> list[str]:
 # déplacés dans dashcore/workspace_io.py (re-exports en bas de fichier)
 
 
+def _force_remove(func, path, *exc) -> None:
+    """Handler rmtree : sur Windows, un fichier en lecture seule (typique des
+    objets `.git/objects/...`) fait échouer os.unlink avec WinError 5. On
+    retire le flag lecture seule et on réessaie l'opération qui a échoué."""
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    except OSError:
+        pass
+
+
 def _remove_dir_or_link(p: Path) -> None:
     """shutil.rmtree refuse un symlink/junction pointant sur un dossier.
-    On tente unlink (symlink, junction, fichier) puis rmtree (vrai dossier)."""
+    On tente unlink (symlink, junction, fichier) puis rmtree (vrai dossier).
+
+    rmtree est appelé avec un handler qui neutralise le flag lecture seule
+    (Windows : les objets d'un dépôt git imbriqué sont read-only et font
+    échouer la suppression avec WinError 5)."""
     try:
         p.unlink()
         return
     except (IsADirectoryError, PermissionError, OSError):
         pass
-    shutil.rmtree(p)
+    # onexc (Python 3.12+) remplace onerror (déprécié en 3.12). _force_remove
+    # accepte *exc -> compatible avec les deux signatures.
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(p, onexc=_force_remove)
+    else:
+        shutil.rmtree(p, onerror=_force_remove)
 
 
 OPEN_TARGETS = {
