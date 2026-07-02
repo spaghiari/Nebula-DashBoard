@@ -233,6 +233,18 @@ _PLACEHOLDER_CANDIDATE_RE = re.compile(r"(?<!\$)\{\{?\s*(\w+)\s*\}?\}")
 # rediger son rapport (ex. `{{cible}}`, `{{nb_critique}}` dans un template
 # audit). On les groupe en `info` au lieu d'inonder le linter de warn.
 _SNAKE_CASE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# Extensions de fichiers de CODE : dans ces fichiers, une accolade SIMPLE
+# `{ident}` est une syntaxe légitime (f-string Python, `.format()`, template
+# literal, set/dict-literal) et NON un placeholder de template mal formé. On
+# n'y flagge donc pas le single-brace (le double-brace `{{ }}` mal formé reste
+# signalé partout). Évite les faux positifs sur un template qui embarque des
+# scripts (ex. pipeline RE : `f"{stage}.md"`, `f"{x}+{y}"`).
+_CODE_EXTENSIONS = frozenset({
+    "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "sh", "bash", "zsh",
+    "rb", "go", "rs", "java", "kt", "kts", "c", "cc", "cpp", "cxx", "h",
+    "hpp", "cs", "php", "pl", "pm", "lua", "r", "jl", "swift", "scala",
+    "groovy", "ps1", "sql",
+})
 
 
 def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
@@ -267,6 +279,8 @@ def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
         if not entry.is_file() or entry.name == ".template.json":
             continue
         rel = entry.relative_to(base).as_posix()
+        ext = rel.rsplit(".", 1)[-1].lower() if "." in rel else ""
+        is_code_file = ext in _CODE_EXTENSIONS
         if rel.lower() == "claude.md":
             has_claude_md = True
         elif rel == ".gitignore":
@@ -304,6 +318,11 @@ def analyze_template_quality(tpl_id: str) -> tuple[int, dict]:
                     continue
                 # Sinon : vraiment mal forme (accolade simple, espaces,
                 # caracteres invalides). Warn 1 ligne par occurrence.
+                # Exception : une accolade SIMPLE dans un fichier de code est
+                # une f-string / format / set-literal legitime, pas un
+                # placeholder mal forme -> on ne la flagge pas.
+                if is_code_file and not raw.startswith("{{"):
+                    continue
                 if raw not in malformed_placeholders:
                     malformed_placeholders[raw] = rel
         except OSError:

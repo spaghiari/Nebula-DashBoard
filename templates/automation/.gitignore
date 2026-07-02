@@ -1,0 +1,15 @@
+# Secrets — jamais committés (les creds passent par .env.local)
+.env
+.env.*
+!.env.example
+secrets/
+*.key
+*.pem
+
+# OS / éditeurs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

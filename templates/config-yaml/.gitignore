@@ -1,0 +1,17 @@
+# Secrets — jamais committés
+.env
+.env.*
+!.env.example
+# Secrets YAML référencés via !secret (cf. CLAUDE.md)
+secrets.yaml
+secrets/
+*.key
+*.pem
+
+# OS / éditeurs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
