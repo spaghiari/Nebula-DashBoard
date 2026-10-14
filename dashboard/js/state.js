@@ -28,6 +28,8 @@ const STATE = {
   skillsLibrary: [],
   stats: {},
   wsMcps: {},      // ws_id -> {active, has_file}
+  overlaysActive: {}, // ws_id -> [overlay_id actif] (/api/overview, badge « Auto-amélioration »)
+  loadErrors: {},  // ressource -> message d'erreur du dernier loadAll (cf. js/router.js loadErrorsFor)
   activeSessions: {},  // ws_id -> {pid, launched_at, label} - sessions Claude Code lancees depuis Nebula
   sanity: null,
   journalCount: 0,

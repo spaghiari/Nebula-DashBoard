@@ -271,7 +271,7 @@ function modalDistributeSkill(s) {
       }
     };
     if (willRemove.length) {
-      confirmDialog(`Retirer ce skill de ${willRemove.length} emplacement(s) ?`, apply, { danger: true });
+      confirmDialog(`Retirer ce skill de ${willRemove.length} emplacement(s) ?`, apply, { danger: true, confirmLabel: 'Retirer' });
     } else {
       apply();
     }
@@ -470,8 +470,16 @@ async function modalEditSkillFiles(scope, name) {
   body['innerHTML'] = `<div class="page-loader"><div class="spinner"></div><span>Chargement du skill…</span></div>`;
   const closeBtn = btn('Fermer', 'btn-ghost');
   const titleSuffix = scope === 'library' ? ' (bibliothèque)' : '';
-  const { close } = openModal({ title: `Skill · ${name}${titleSuffix}`, body, footer: closeBtn, wide: true });
-  closeBtn.addEventListener('click', close);
+  // Garde anti-perte : fichier courant modifie et non enregistre -> la
+  // fermeture (croix, Echap, Fermer) demande confirmation.
+  let dirty = false;
+  const guard = makeDirtyGuard('Modifications non enregistrées dans ce skill. Fermer sans enregistrer ?',
+    { isDirty: () => dirty });
+  const { close, requestClose } = openModal({
+    title: `Skill · ${name}${titleSuffix}`, body, footer: closeBtn, wide: true, confirmClose: guard.confirmClose,
+  });
+  guard.bind(close);
+  closeBtn.addEventListener('click', requestClose);
 
   let detail;
   try { detail = await API.get(U.detail); }
@@ -497,6 +505,7 @@ async function modalEditSkillFiles(scope, name) {
   const pane = body.querySelector('.tpl-pane');
   let files = detail.files.slice();
   let currentPath = 'SKILL.md';  // Ouvre SKILL.md par défaut
+  let curEditor = null;          // editeur du fichier courant (mountFileEditor)
 
   const renderTree = () => {
     treeList['innerHTML'] = '';
@@ -539,6 +548,15 @@ async function modalEditSkillFiles(scope, name) {
   };
 
   const openFile = async (path) => {
+    // Changer de fichier avec des modifications non enregistrees : confirmer.
+    if (dirty && path !== currentPath) {
+      const ok = await new Promise((resolve) => {
+        confirmDialog('Modifications non sauvegardées sur le fichier courant. Changer de fichier sans enregistrer ?',
+          () => resolve(true), { danger: true, confirmLabel: 'Changer de fichier', onClose: () => resolve(false) });
+      });
+      if (!ok) return;
+    }
+    dirty = false;
     currentPath = path;
     renderTree();
     pane['innerHTML'] = `<div class="page-loader"><div class="spinner"></div></div>`;
@@ -559,20 +577,23 @@ async function modalEditSkillFiles(scope, name) {
     `;
     const ta = pane.querySelector('textarea');
     ta.value = data.content;
-    ta.focus();
-    pane.querySelector('[data-save-file]').addEventListener('click', async () => {
+    const saveBtn = pane.querySelector('[data-save-file]');
+    // .json -> editeur JSON non bloquant (placeholders {{...}}) ; Ctrl+S.
+    if (curEditor) curEditor.destroy();
+    const editor = mountFileEditor(ta, path, {
+      onChange: () => { dirty = true; },
+      onSave: () => saveBtn.click(),
+    });
+    curEditor = editor;
+    editor.focus();
+    saveBtn.addEventListener('click', async () => {
       try {
-        const r = await API.post(U.filePost, { path, content: ta.value });
+        const r = await API.post(U.filePost, { path, content: editor.getValue() });
         const f = files.find(x => x.path === path);
         if (f) f.size = r.size;
+        if (currentPath === path) dirty = false;
         renderTree(); toastOk('Enregistré');
       } catch (e) { toastErr(e.message); }
-    });
-    ta.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        pane.querySelector('[data-save-file]').click();
-      }
     });
   };
 

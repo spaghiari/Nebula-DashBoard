@@ -68,9 +68,9 @@ img, svg { display: block; max-width: 100%; }
   /* Accent -- iris premium + glow discret (cf. prototype). text-on-accent
      passe a blanc : le fond accent est desormais assez sombre/sature pour
      porter du texte blanc en AA (vs l'ancien violet clair sur noir). */
-  --accent: #7c74ff;
+  --accent: #8f88ff;
   --accent-2: #a99fff;
-  --accent-soft: rgba(124, 116, 255, 0.13);
+  --accent-soft: rgba(124, 116, 255, 0.14);
   --accent-glow: rgba(124, 116, 255, 0.45);
   /* --accent-strong : iris legerement assombri pour les SURFACES PLEINES qui
      portent du texte blanc (.btn-primary, switch coche). Blanc/#675ef0 = 4.73:1
@@ -111,21 +111,76 @@ img, svg { display: block; max-width: 100%; }
   --shadow-2: 0 12px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--border-strong);
   --shadow-glow: 0 0 24px var(--accent-glow);
 
-  /* Motion */
+  /* Motion (refonte 2026-10 : un seul mouvement orchestre par page,
+     transform/opacity uniquement, fige par prefers-reduced-motion). */
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --d-fast: 120ms;
-  --d-norm: 180ms;
-  --d-slow: 260ms;
+  --d-norm: 200ms;
+  --d-slow: 420ms;
 
   /* Layout */
   --sidebar-w: 240px;
   --topbar-h: 56px;
   --content-max: 1440px;
+
+  /* Taille de texte de base (body) + indication de schema de couleur au
+     navigateur (scrollbars, <select>, champs natifs). Les themes clairs
+     (nebula-clair, doux) posent color-scheme: light. */
+  --fs-base: 14px;
+  color-scheme: dark;
+
+  /* --- Refonte 2026-10 (prototype nebula-redesign) ---------------------
+     Valeurs par DEFAUT derivees des couleurs du theme : les themes qui ne
+     les redefinissent pas (nebula-clair, marine, solarized, cuivre)
+     restent coherents. nebula / sobre / doux / pop les fixent plus bas. */
+  /* Echelle typographique (rapport ~1.2, titres serres) */
+  --fs-xs: 11.5px; --fs-sm: 12.5px; --fs-h3: 15px; --fs-h2: 16px; --fs-h1: 30px; --fs-kpi: 32px;
+  --fw-h1: 650; --fw-kpi: 650; --ls-tight: -0.022em;
+  /* Rythme */
+  --pad-page: 30px 40px 64px; --gap: 16px; --card-pad: 20px; --ctl-h: 36px; --row-h: 60px; --chip-r: 6px;
+  /* Composants */
+  --side-bg: var(--bg); --side-bd: 1px solid var(--border);
+  --card-bd: 1px solid var(--border); --card-sh: var(--shadow-1);
+  --nav-on-bg: var(--accent-soft); --nav-on-tx: var(--text); --nav-ind: var(--accent);
+  --chip-bg: var(--surface-3); --chip-tx: var(--text-muted); --chip-bd: 1px solid transparent;
+  --kpi-ic-bg: var(--accent-soft); --kpi-ic-fg: var(--accent);
+  --gem-s: 70%; --gem-l: 62%; --gem-a: 0.16;
+  --btn-p-bg: var(--accent-strong); --btn-p-tx: var(--text-on-accent); --btn-p-sh: none;
+  --live-bg: linear-gradient(150deg, color-mix(in srgb, var(--accent) 24%, transparent), color-mix(in srgb, var(--accent) 6%, transparent) 55%, transparent), var(--surface-2);
+  --live-bg-alt: linear-gradient(150deg, color-mix(in srgb, var(--info) 20%, transparent), color-mix(in srgb, var(--info) 6%, transparent) 55%, transparent), var(--surface-2);
+  --live-bd: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  --live-bd-alt: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
+  --live-tx: var(--text); --live-mu: var(--text-muted);
+  --live-pill-bg: var(--ok-soft); --live-pill-tx: var(--ok);
+  --live-btn-bg: var(--accent-strong); --live-btn-tx: var(--text-on-accent);
+  --live-ghost-bg: var(--hover); --live-ghost-tx: var(--text);
+  --live-track: var(--hover);
+  --seg-1: var(--accent); --seg-2: var(--accent-2); --seg-3: var(--warm); --seg-4: var(--ok);
+  --syn-key: var(--accent-2); --syn-str: color-mix(in srgb, var(--ok) 62%, var(--text)); --syn-num: var(--warm); --syn-kw: var(--info); --syn-punc: var(--text-dim);
+  --overlay: rgba(4, 4, 8, 0.62);
+}
+
+/* Nebula (theme par defaut, pas d'attribut data-theme) : valeurs exactes du
+   prototype valide. :not([data-theme]) => aucune fuite vers les 7 autres. */
+:root:not([data-theme]) {
+  --bg-grid: transparent; --bg-glow-1: transparent; --bg-glow-2: transparent;
+  --side-bg: #0b0b10;
+  --nav-on-tx: #ffffff;
+  --chip-tx: #c3c2d0;
+  --kpi-ic-fg: var(--accent-2);
+  --live-bg: linear-gradient(150deg, rgba(124, 116, 255, 0.26), rgba(124, 116, 255, 0.07) 55%, rgba(124, 116, 255, 0.02)), var(--surface-2);
+  --live-bg-alt: linear-gradient(150deg, rgba(56, 189, 248, 0.2), rgba(56, 189, 248, 0.06) 55%, rgba(56, 189, 248, 0.02)), var(--surface-2);
+  --live-bd: 1px solid rgba(143, 136, 255, 0.28); --live-bd-alt: 1px solid rgba(56, 189, 248, 0.26);
+  --live-btn-tx: #ffffff;
+  --live-ghost-bg: rgba(255, 255, 255, 0.06);
+  --live-track: rgba(255, 255, 255, 0.07);
+  --syn-key: #b3adff; --syn-str: #7ee2b8; --syn-num: #f4a672; --syn-kw: #7cb6ff; --syn-punc: #6f6f80;
 }
 
 body {
   font-family: var(--font-ui);
-  font-size: 14px;
+  font-size: var(--fs-base);
   line-height: 1.55;
   color: var(--text);
   background: var(--bg);
@@ -154,6 +209,7 @@ body {
 
 /* Nebula clair : light + violet */
 :root[data-theme="nebula-clair"] {
+  color-scheme: light;
   --bg: #f8f7fb;
   --bg-grid: rgba(0, 0, 0, 0.025);
   --bg-glow-1: rgba(124, 58, 237, 0.07);
@@ -195,12 +251,17 @@ body {
 }
 :root[data-theme="nebula-clair"] .topbar { background: rgba(248, 247, 251, 0.75); }
 :root[data-theme="nebula-clair"] .modal-overlay,
-:root[data-theme="nebula-clair"] .palette-overlay { background: rgba(20, 14, 30, 0.45); }
+:root[data-theme="nebula-clair"] .palette-overlay,
+:root[data-theme="doux"] .modal-overlay,
+:root[data-theme="doux"] .palette-overlay { background: rgba(20, 14, 30, 0.45); }
 :root[data-theme="nebula-clair"] .btn-primary { color: #ffffff; }
 :root[data-theme="nebula-clair"] .switch input:checked + .switch-slider::before { background: #ffffff; }
-:root[data-theme="nebula-clair"] .modal-footer { background: rgba(0, 0, 0, 0.025); }
-:root[data-theme="nebula-clair"] .banner-error { background: #fff1f1; color: #b91c1c; border-color: #fca5a5; }
-:root[data-theme="nebula-clair"] .input-search {
+:root[data-theme="nebula-clair"] .modal-footer,
+:root[data-theme="doux"] .modal-footer { background: rgba(0, 0, 0, 0.025); }
+:root[data-theme="nebula-clair"] .banner-error,
+:root[data-theme="doux"] .banner-error { background: #fff1f1; color: #b91c1c; border-color: #fca5a5; }
+:root[data-theme="nebula-clair"] .input-search,
+:root[data-theme="doux"] .input-search {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%234a4658' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><path d='m21 21-4.35-4.35'/></svg>");
 }
 /* Halos « nebuleuse » (--g1/--g2 poses par wsGradient) : HSL fixes en sat
@@ -289,6 +350,186 @@ body {
   --text-dim: #9a9aa6;
   --warm: #fde68a;
   --warm-soft: rgba(253, 230, 138, 0.1);
+}
+
+/* ----------------------------------------------------------------
+   Themes issus de la maquette « 3 styles » (sobre / doux / pop).
+   Principe : un theme = surcharge de VARIABLES en priorite ; des
+   regles par composant uniquement la ou les variables ne suffisent
+   pas (cartes « En cours », nav active, bouton primaire...).
+   Toutes les regles sont prefixees `:root[data-theme="..."]` : aucune
+   fuite possible vers les 5 autres themes (et surtout pas vers les
+   `.theme-card[data-theme]` du selecteur, d'ou le `:root`).
+   Polices : piles SYSTEME uniquement (app 100% offline, cf. FONTS).
+   Ratios de contraste mesures (script stdlib) : texte >= 4.5:1,
+   texte-dim >= 4.5:1 sur surface-2, texte sur accent >= 4.5:1.
+   ---------------------------------------------------------------- */
+
+/* Sobre : sombre neutre, filets fins, dense, accent indigo, sans ombres.
+   (A) Linear-like. */
+:root[data-theme="sobre"] {
+  color-scheme: dark;
+  --bg: #0d0e11;
+  --bg-grid: transparent;
+  --bg-glow-1: transparent;
+  --bg-glow-2: transparent;
+  --surface-1: #14161a;
+  --surface-2: #191b20;
+  --surface-3: #22252c;
+  --hover: rgba(255, 255, 255, 0.04);
+  --border: #22252c;
+  --border-strong: #31353e;
+  --text: #e8e9ed;
+  --text-muted: #9296a3;
+  --text-dim: #8a8e9a;       /* 5.26:1 sur surface-2 (maquette #62666f = 3:1, releve) */
+  --text-on-accent: #ffffff;
+  --accent: #8483ff;         /* texte/liens sur fond sombre : 5.5:1 sur surface-2 */
+  --accent-2: #a3a2ff;
+  --accent-soft: rgba(94, 92, 230, 0.16);
+  --accent-glow: transparent;
+  --accent-strong: #5e5ce6;  /* fond plein bouton : blanc dessus = 5.06:1 */
+  --warm: #d4a95f;
+  --warm-soft: rgba(212, 169, 95, 0.1);
+  --ok: #4cc38a;   --ok-soft: rgba(76, 195, 138, 0.12);
+  --warn: #e5b341; --warn-soft: rgba(229, 179, 65, 0.12);
+  --err: #f27878;  --err-soft: rgba(242, 120, 120, 0.12);
+  --info: #6ea8f5; --info-soft: rgba(110, 168, 245, 0.12);
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", "Geist", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --fs-base: 13.5px;
+  --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-xl: 12px;
+  --shadow-1: none;
+  --shadow-2: 0 10px 28px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--border-strong);
+  --shadow-glow: none;
+  --sidebar-w: 228px;
+  --fs-h1: 26px; --fs-kpi: 30px; --pad-page: 26px 36px 56px; --gap: 14px; --card-pad: 18px; --ctl-h: 32px; --row-h: 54px;
+  --side-bg: #0d0e11; --side-bd: 1px solid #1d1f25;
+  --nav-on-bg: #1e2026; --nav-on-tx: #ffffff; --nav-ind: #8483ff;
+  --chip-bg: #1c1f26; --chip-tx: #aab0c0; --chip-bd: 1px solid #262a33;
+  --kpi-ic-bg: rgba(108, 107, 255, 0.14); --kpi-ic-fg: #8f8eff;
+  --gem-s: 55%; --gem-l: 60%; --gem-a: 0.15;
+  --btn-p-bg: #5e5ce6; --btn-p-tx: #ffffff;
+  --live-bg: #14161a; --live-bg-alt: #14161a; --live-bd: 1px solid #2a2d35; --live-bd-alt: 1px solid #2a2d35;
+  --live-btn-bg: #5e5ce6; --live-btn-tx: #ffffff; --live-ghost-bg: #1d2027; --live-track: #1d2027;
+  --seg-1: #6c6bff; --seg-2: #a3a2ff; --seg-3: #d4a95f; --seg-4: #4cc38a;
+  --syn-key: #a3a2ff; --syn-str: #7fcf9f; --syn-num: #d4a95f; --syn-kw: #6ea8f5; --syn-punc: #62666f;
+}
+
+/* Doux : CLAIR, blanc + lavande, arrondi, ombres douces, accent degrade. (B) */
+:root[data-theme="doux"] {
+  color-scheme: light;
+  --bg: #f3f4fa;
+  --bg-grid: transparent;
+  --bg-glow-1: transparent;
+  --bg-glow-2: transparent;
+  --surface-1: #ffffff;
+  --surface-2: #f4f5fc;
+  --surface-3: #e9ebf7;
+  --hover: rgba(52, 56, 140, 0.05);
+  --border: #e6e8f3;
+  --border-strong: #cdd1e6;
+  --text: #1b1d33;
+  --text-muted: #5d6280;
+  --text-dim: #62688c;       /* 4.56:1 mini (sur surface-3) ; maquette #9096b3 = 2.8:1 */
+  --text-on-accent: #ffffff;
+  --accent: #5b4fe8;         /* texte/liens : 5.6:1 sur blanc */
+  --accent-2: #3f8cff;
+  --accent-soft: rgba(91, 79, 232, 0.1);
+  --accent-glow: rgba(91, 79, 232, 0.28);
+  --accent-strong: #5548f0;  /* pastilles/switch : blanc dessus = 5.9:1 */
+  --warm: #c2410c;
+  --warm-soft: rgba(194, 65, 12, 0.08);
+  --ok: #0b7a55;   --ok-soft: rgba(21, 185, 130, 0.14);
+  --warn: #a8530a; --warn-soft: rgba(245, 158, 11, 0.16);
+  --err: #c42626;  --err-soft: rgba(239, 68, 68, 0.1);
+  --info: #1d5fd1; --info-soft: rgba(63, 140, 255, 0.12);
+  --font-ui: "Segoe UI Variable Display", "Segoe UI", "Geist", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --r-sm: 10px; --r-md: 12px; --r-lg: 18px; --r-xl: 20px;
+  --shadow-1: 0 1px 2px rgba(30, 32, 80, 0.04), 0 10px 30px rgba(52, 56, 140, 0.07);
+  --shadow-2: 0 16px 40px rgba(40, 44, 120, 0.16), 0 0 0 1px var(--border-strong);
+  --shadow-glow: 0 0 24px var(--accent-glow);
+  --sidebar-w: 244px;
+  /* Degrades maison (reutilises par les composants ci-dessous). Blanc dessus
+     >= 4.5:1 sur toute la plage (maquette #3f8cff / #ff7a59 = 3.3 / 2.6). */
+  --grad-accent: linear-gradient(135deg, #6a5cff, #2f6fe0);
+  --grad-coral: linear-gradient(135deg, #d63a2a, #c92a6e);
+  --shadow-2: 0 24px 60px rgba(40, 44, 120, 0.2), 0 0 0 1px var(--border-strong);
+  --fs-h1: 32px; --fw-h1: 750; --fs-kpi: 34px; --fw-kpi: 750; --gap: 18px; --card-pad: 22px; --ctl-h: 40px; --row-h: 64px; --chip-r: 99px;
+  --side-bg: #ffffff; --side-bd: 0;
+  --card-bd: 1px solid #e9ebf5; --card-sh: var(--shadow-1);
+  --nav-on-bg: #eef0ff; --nav-on-tx: #3b3bd8; --nav-ind: #5b4fe8;
+  --chip-bg: #eef0fb; --chip-tx: #4a4f78; --chip-bd: 0;
+  --kpi-ic-bg: #eef0ff; --kpi-ic-fg: #5b4fe8;
+  --gem-s: 85%; --gem-l: 60%; --gem-a: 0.16;
+  --btn-p-bg: var(--grad-accent); --btn-p-tx: #ffffff; --btn-p-sh: 0 8px 20px rgba(80, 80, 240, 0.28);
+  --live-bg: var(--grad-accent); --live-bg-alt: var(--grad-coral);
+  --live-bd: 0; --live-bd-alt: 0;
+  --live-tx: #ffffff; --live-mu: rgba(255, 255, 255, 0.84);
+  --live-pill-bg: rgba(255, 255, 255, 0.22); --live-pill-tx: #ffffff;
+  --live-btn-bg: #ffffff; --live-btn-tx: #3b3bd8;
+  --live-ghost-bg: rgba(255, 255, 255, 0.2); --live-ghost-tx: #ffffff;
+  --live-track: rgba(255, 255, 255, 0.22);
+  --seg-1: #ffffff; --seg-2: rgba(255, 255, 255, 0.7); --seg-3: rgba(255, 255, 255, 0.45); --seg-4: rgba(255, 255, 255, 0.28);
+  --syn-key: #4b3fd6; --syn-str: #0b7a55; --syn-num: #b4410c; --syn-kw: #1d5fd1; --syn-punc: #8a8fae;
+  --overlay: rgba(20, 14, 30, 0.42);
+}
+
+/* Pop : sombre bleute, accent citron, blocs de couleur francs. (C) */
+:root[data-theme="pop"] {
+  color-scheme: dark;
+  --bg: #10131f;
+  --bg-grid: transparent;
+  --bg-glow-1: transparent;
+  --bg-glow-2: transparent;
+  --surface-1: #181c2c;
+  --surface-2: #1d2236;
+  --surface-3: #222845;
+  --hover: rgba(255, 255, 255, 0.05);
+  --border: #232842;
+  --border-strong: #353c63;
+  --text: #f1f2fa;
+  --text-muted: #9aa1c4;
+  --text-dim: #8e95bd;       /* 5.38:1 sur surface-2 (maquette #69709a = 3.3:1) */
+  --text-on-accent: #12170a; /* texte FONCE sur citron : 15.4:1 */
+  --accent: #c6ff3d;
+  --accent-2: #dfff85;
+  --accent-soft: rgba(198, 255, 61, 0.13);
+  --accent-glow: transparent;
+  --accent-strong: #c6ff3d;
+  --warm: #ff6b4a;
+  --warm-soft: rgba(255, 107, 74, 0.12);
+  --ok: #c6ff3d;   --ok-soft: rgba(198, 255, 61, 0.14);
+  --warn: #ffc533; --warn-soft: rgba(255, 197, 51, 0.13);
+  --err: #ff7b8a;  --err-soft: rgba(255, 123, 138, 0.13);
+  --info: #9ca8ff; --info-soft: rgba(124, 140, 255, 0.15);
+  --font-ui: "Bahnschrift", "Segoe UI Variable Display", "Segoe UI", "Geist", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --r-sm: 8px; --r-md: 10px; --r-lg: 16px; --r-xl: 16px;
+  --shadow-1: none;
+  --shadow-2: 0 18px 44px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--border-strong);
+  --shadow-glow: none;
+  --sidebar-w: 236px;
+  --fs-h1: 38px; --fw-h1: 700; --fs-kpi: 38px; --fw-kpi: 700; --pad-page: 28px 38px 60px; --ctl-h: 38px; --chip-r: 7px;
+  --side-bg: #0b0d16; --side-bd: 0;
+  --nav-on-bg: #c6ff3d; --nav-on-tx: #12170a; --nav-ind: transparent;
+  --chip-bg: #222845; --chip-tx: #b9c0e6; --chip-bd: 0;
+  --kpi-ic-bg: #c6ff3d; --kpi-ic-fg: #10131f;
+  --gem-s: 85%; --gem-l: 64%; --gem-a: 1;
+  --btn-p-bg: #c6ff3d; --btn-p-tx: #12170a;
+  --live-bg: #ff6b4a; --live-bg-alt: #7c8cff; --live-bd: 0; --live-bd-alt: 0;
+  --live-tx: #1a0b06; --live-mu: rgba(26, 11, 6, 0.74);
+  --live-pill-bg: #1a0b06; --live-pill-tx: #ff9a82;
+  --live-btn-bg: #12170a; --live-btn-tx: #c6ff3d;
+  --live-ghost-bg: rgba(26, 11, 6, 0.14); --live-ghost-tx: #1a0b06;
+  --live-track: rgba(26, 11, 6, 0.16);
+  --seg-1: #1a0b06; --seg-2: rgba(26, 11, 6, 0.62); --seg-3: rgba(26, 11, 6, 0.38); --seg-4: rgba(26, 11, 6, 0.2);
+  --syn-key: #c6ff3d; --syn-str: #ffb59f; --syn-num: #ffc533; --syn-kw: #9ca8ff; --syn-punc: #69709a;
+}
+
+/* Les surcharges par composant des themes sobre / doux / pop (etiquettes,
+   KPI, cartes « En cours », nav active...) ont ete remplacees par les
+   tokens de composant ci-dessus et par css/redesign.css (refonte 2026-10).
+   Mono « Cascadia » en priorite sur ces themes (lisible a petite taille). */
+:root[data-theme="sobre"], :root[data-theme="doux"], :root[data-theme="pop"] {
+  --font-mono: "Cascadia Mono", "Geist Mono", ui-monospace, Consolas, monospace;
 }
 
 ::selection { background: var(--accent-soft); color: var(--text); }
@@ -2545,14 +2786,17 @@ body {
 }
 
 /* Adapté pour thème clair (preview en clair) */
-.theme-card[data-theme="nebula-clair"] .theme-preview {
+.theme-card[data-theme="nebula-clair"] .theme-preview,
+.theme-card[data-theme="doux"] .theme-preview {
   border-color: rgba(0,0,0,0.1);
 }
-.theme-card[data-theme="nebula-clair"] .theme-preview-sidebar {
+.theme-card[data-theme="nebula-clair"] .theme-preview-sidebar,
+.theme-card[data-theme="doux"] .theme-preview-sidebar {
   background: rgba(0,0,0,0.025);
   border-right-color: rgba(0,0,0,0.07);
 }
-.theme-card[data-theme="nebula-clair"] .theme-preview-sidebar::after {
+.theme-card[data-theme="nebula-clair"] .theme-preview-sidebar::after,
+.theme-card[data-theme="doux"] .theme-preview-sidebar::after {
   background: rgba(0,0,0,0.08);
   box-shadow:
     0 12px 0 rgba(0,0,0,0.05),
@@ -2560,11 +2804,26 @@ body {
     0 36px 0 var(--p-accent),
     0 48px 0 rgba(0,0,0,0.05);
 }
-.theme-card[data-theme="nebula-clair"] .theme-preview-bar { background: rgba(0,0,0,0.1); }
-.theme-card[data-theme="nebula-clair"] .theme-preview-card {
+.theme-card[data-theme="nebula-clair"] .theme-preview-bar,
+.theme-card[data-theme="doux"] .theme-preview-bar { background: rgba(0,0,0,0.1); }
+.theme-card[data-theme="nebula-clair"] .theme-preview-card,
+.theme-card[data-theme="doux"] .theme-preview-card {
   background: rgba(0,0,0,0.03);
   border-color: rgba(0,0,0,0.08);
 }
+
+/* Apercus des themes « maquette » : la carte d'apercu reprend le motif
+   signature (degrade pour doux, bloc corail franc pour pop). */
+.theme-card[data-theme="doux"] .theme-preview-card {
+  background: linear-gradient(135deg, var(--p-accent), var(--p-warm));
+  border-color: transparent;
+}
+.theme-card[data-theme="pop"] .theme-preview-card {
+  background: var(--p-warm);
+  border-color: transparent;
+  border-radius: 6px;
+}
+.theme-card[data-theme="pop"] .theme-preview-sidebar { background: rgba(0,0,0,0.25); }
 
 /* === SYSTEM UPDATE BADGE ====================================== */
 .update-badge {
@@ -4206,3 +4465,9 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* Erreur de chargement d'une page (loadAll, js/router.js renderLoadError) :
+   distincte d'un etat vide, avec bouton Reessayer. */
+.load-error { display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-start; }
+.load-error p, .load-error ul { margin: 0; }
+.load-error ul { padding-left: var(--sp-4); }

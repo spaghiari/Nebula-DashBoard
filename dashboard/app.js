@@ -20,15 +20,72 @@
 
 
 /* ================================================================
-   PAGE: WORKSPACE DETAIL
+   PAGE WORKSPACE (refonte 2026-10) : en-tete + chiffres + 5 onglets
+   ----------------------------------------------------------------
+   Onglets Memoire / Configuration / Extensions / Sessions / Fichiers,
+   memorises dans l'URL (#/workspace/<id>/<onglet>, replaceState : pas
+   d'entree d'historique). Chaque onglet est monte au PREMIER affichage
+   (lazy) puis conserve : basculer d'onglet ne detruit rien.
+   Re-rendu de la meme page (silent route apres une action, lancement...) :
+   les panneaux en cours d'edition (CLAUDE.md, settings.json, fichier
+   ouvert dans l'explorateur) sont TRANSPLANTES tels quels dans la
+   nouvelle page, jamais recrees. Les conteneurs [data-ws-session-actions]
+   et [data-ws-state] restent les cibles du polling des sessions.
    ================================================================ */
-/* ================================================================
-   PAGE WORKSPACE (détail d'un workspace : explorer + extensions)
-   ================================================================ */
-async function renderWorkspace(wsId) {
+const WS_TABS = [
+  ['memoire', 'Mémoire'],
+  ['config', 'Configuration'],
+  ['extensions', 'Extensions'],
+  ['sessions', 'Sessions'],
+  ['fichiers', 'Fichiers'],
+];
+const WS_TAB_KEYS = WS_TABS.map(t => t[0]);
+// Page workspace courante : { wsId, root, tab, panels: {key: {el, mounted,
+// isDirty}} }. null hors page workspace.
+let WS_PAGE = null;
+
+// Actions de session (en-tete du detail). Reconstruites en place par le
+// polling (router.js refreshSessionNodes) : running -> Stop + Reprendre ;
+// idle (« Terminal ouvert ») -> Fermer le terminal + Reprendre ;
+// sinon -> Reprendre (si sessions) + Lancer.
+function wsSessionActions(w) {
+  const st = sessionState(w.id);
+  const out = [];
+  if (st) {
+    const stop = btn(st === 'idle' ? 'Fermer le terminal' : 'Stop', 'btn-danger-outline', st === 'idle' ? I.x : I.stop);
+    stop.title = st === 'idle' ? 'Fermer la fenêtre cmd restée ouverte' : 'Arrêter la session Claude Code en cours pour ce workspace';
+    stop.addEventListener('click', () => doStop(w));
+    const resume = btn('Reprendre', 'btn-primary', st === 'idle' ? I.play : I.terminal);
+    resume.title = 'Reprendre la dernière session Claude Code';
+    resume.addEventListener('click', () => doResume(w, resume));
+    out.push(stop, resume);
+  } else {
+    if (((STATE.stats || {})[w.id] || {}).sessions) {
+      const resume = btn('Reprendre', 'btn', I.ret);
+      resume.title = 'Reprendre la dernière session Claude Code';
+      resume.addEventListener('click', () => doResume(w, resume));
+      out.push(resume);
+    }
+    const launch = btn('Lancer', 'btn-primary', I.play);
+    launch.addEventListener('click', () => doLaunch(w, launch));
+    out.push(launch);
+  }
+  return out;
+}
+
+function wsTabCounts(w) {
+  const s = (STATE.stats || {})[w.id] || {};
+  return {
+    extensions: ((STATE.wsMcps || {})[w.id] || { active: [] }).active.length,
+    sessions: s.sessions || 0,
+  };
+}
+
+async function renderWorkspace(wsId, tab) {
   const w = STATE.workspaces.find(x => x.id === wsId);
   if (!w) {
-    $('#content').innerHTML = `<div class="error-box">Workspace introuvable : ${escapeHtml(wsId)}</div>`;
+    $('#content').innerHTML = `<div class="page"><div class="error-box">Workspace introuvable : <span class="mono">${escapeHtml(wsId)}</span>. <a class="btn btn-sm" href="#/">Retour à l'accueil</a></div></div>`;
+    WS_PAGE = null;
     return;
   }
   setBreadcrumbs([
@@ -36,77 +93,79 @@ async function renderWorkspace(wsId) {
     { label: w.label || w.id },
   ]);
 
-  const isActiveDetail = !!(STATE.activeSessions || {})[w.id];
-  const topbarActions = [];
-  if (isActiveDetail) {
-    const stopBtn = btn('Stop', 'btn-danger-outline', I.x);
-    stopBtn.title = 'Arrêter la session Claude Code en cours pour ce workspace';
-    stopBtn.addEventListener('click', () => {
-      confirmDialog(`Arrêter la session Claude Code de « ${w.label || w.id} » ?`, async () => {
-        try {
-          const r = await API.post(`/api/workspaces/${w.id}/stop`, {});
-          if (r.ok) {
-            toastOk(r.message || 'Session arrêtée');
-            // RM-1 v2 : mutation locale + silent route
-            if (STATE.activeSessions) delete STATE.activeSessions[w.id];
-            route({ silent: true });
-          }
-          else { toastErr(r.message || 'Échec'); }
-        } catch (e) { toastErr(e.message); }
-      }, { danger: true });
-    });
-    topbarActions.push(stopBtn);
-  } else {
-    const launch = btn('Lancer', 'btn-primary', I.play);
-    launch.addEventListener('click', () => withBusy(launch, async () => {
-      try { const r = await API.post(`/api/launch/${w.id}`, {}); toastOk(r.message || 'Lancé'); STATE.loading = true; setTimeout(route, 400); }
-      catch (e) { toastErr(e.message); }
-    }, { keepBusyOnSuccess: true }));
-    const resume = btn('Reprendre', 'btn', I.history);
-    resume.addEventListener('click', () => withBusy(resume, async () => {
-      try { const r = await API.post(`/api/launch-resume/${w.id}`, {}); toastOk(r.message || 'Reprise'); STATE.loading = true; setTimeout(route, 400); }
-      catch (e) { toastErr(e.message); }
-    }, { keepBusyOnSuccess: true }));
-    topbarActions.push(resume, launch);
-  }
+  // Boutons de session dans un conteneur cible : le polling des sessions
+  // les remplace en place (explorer / editeurs preserves).
+  const sessionBox = el('span', 'ws-session-actions');
+  sessionBox.dataset.wsSessionActions = w.id;
+  sessionBox.append(...wsSessionActions(w));
   const sync = btn('Sync MCPs', 'btn', I.refresh);
-  sync.addEventListener('click', async () => {
+  sync.title = 'Synchronise le registre MCP vers le .mcp.json de ce workspace';
+  sync.addEventListener('click', () => withBusy(sync, async () => {
     try {
       const r = await API.post(`/api/workspaces/${w.id}/sync-mcps`, {});
       toastOk('Sync : ' + (r.applied || []).length + ' MCP(s) appliqués');
+      warnHandEdited([syncNotice(w.id, r)]);
     } catch (e) { toastErr(e.message); }
-  });
-  // Ordre : actions secondaires à gauche, action primaire (Lancer / Stop) à droite
-  setTopbarActions([sync, ...topbarActions]);
+  }));
+  // Ordre : actions secondaires a gauche, action primaire a droite.
+  setTopbarActions([sync, sessionBox]);
 
-  const c = $('#content');
-  c.innerHTML = '';
-  const page = el('div', 'page');
+  // Panneaux en cours d'edition de la page precedente (meme workspace) :
+  // transplantes dans la nouvelle page au lieu d'etre recrees.
+  const prev = (WS_PAGE && WS_PAGE.wsId === wsId && WS_PAGE.root && WS_PAGE.root.isConnected) ? WS_PAGE : null;
+  const keep = {};
+  if (prev) {
+    for (const [k, p] of Object.entries(prev.panels)) {
+      if (p.mounted && p.isDirty && p.isDirty()) keep[k] = p;
+    }
+  }
 
-  // ── Header (full width) ──
-  // Hero "command center" : gem a degrade nebuleuse derive du nom + halo
-  // radial (cf. prototype .ws-hero), dot live si session active.
-  const header = el('div', 'ws-header ws-hero');
-  wsGradient(header, w.label || w.id);
-  header.innerHTML = `
-    <div class="ws-header-top">
-      <div class="ws-emoji ws-gem">${escapeHtml(w.emoji || '📁')}</div>
-      <div class="ws-title-block">
-        <div class="page-eyebrow"><span class="index">WS</span><span>${escapeHtml(w.id)}</span></div>
-        <h1 class="ws-title">${escapeHtml(w.label || w.id)}${isActiveDetail ? '<span class="ws-title-live" title="Session Claude Code active"></span>' : ''}</h1>
-        <div class="ws-path">${escapeHtml(w.path || '')}</div>
-        ${w.description ? `<p class="muted" style="margin-top:8px;font-size:13.5px">${escapeHtml(w.description)}</p>` : ''}
+  const stats = (STATE.stats || {})[w.id] || {};
+  const counts = wsTabCounts(w);
+  const current = WS_TAB_KEYS.includes(tab) ? tab : (prev && prev.tab) || 'memoire';
+  const animate = !prev;
+  const r = (i) => animate ? ` rise" style="--i:${i}` : '';
+
+  const page = el('div', 'page ws-page');
+  page.innerHTML = `
+    <nav class="crumbs${r(0)}" aria-label="Fil d'Ariane"><a href="#/">Workspaces</a>${I.right}<span aria-current="page">${escapeHtml(w.label || w.id)}</span></nav>
+    <header class="wsh${r(0)}">
+      ${wsGem(w)}
+      <div style="min-width:0">
+        <h1>${escapeHtml(w.label || w.id)}${wsStateMarker(w.id, 'header')}<span data-ws-si></span></h1>
+        <div class="ws-pathline"><span class="mono" title="${escapeHtml(w.path || '')}">${escapeHtml(w.path || '')}</span><button type="button" data-copy-path aria-label="Copier le chemin" title="Copier le chemin">${I.copy}</button></div>
+        ${w.description ? `<p>${escapeHtml(w.description)}</p>` : ''}
+        <div class="state-badges">${stateBadgesHtml(w)}</div>
       </div>
+      <div data-page-actions></div>
+    </header>
+    <section class="card ws-stats${r(2)}" aria-label="Statistiques">
+      <div class="ws-stat"><span>Sessions</span><b data-count="${stats.sessions || 0}">${fmtNum(stats.sessions || 0)}</b></div>
+      <div class="ws-stat"><span>Messages</span><b data-count="${stats.messages || 0}">${fmtNum(stats.messages || 0)}</b></div>
+      <div class="ws-stat"><span>Tokens entrée</span><b title="${fmtNum(stats.input_tokens || 0)}">${escapeHtml(fmtCompact(stats.input_tokens || 0))}</b></div>
+      <div class="ws-stat"><span>Tokens sortie</span><b title="${fmtNum(stats.output_tokens || 0)}">${escapeHtml(fmtCompact(stats.output_tokens || 0))}</b></div>
+      <div class="ws-stat"><span>Cache lu</span><b title="${fmtNum(stats.cache_read_tokens || 0)}">${escapeHtml(fmtCompact(stats.cache_read_tokens || 0))}</b></div>
+      <div class="ws-stat"><span>Dernière activité</span><b class="s">${escapeHtml(stats.last ? fmtDateTime(stats.last) : 'jamais')}</b></div>
+    </section>
+    <div class="ws-tabbar${r(3)}">
+      <div class="ws-tabs" role="tablist" aria-label="Sections du workspace">${WS_TABS.map(([k, l]) =>
+        `<button class="ws-tab" type="button" role="tab" id="ws-tab-${k}" aria-controls="ws-panel-${k}" aria-selected="${k === current}" tabindex="${k === current ? 0 : -1}" data-tab="${k}">${l}${counts[k] != null ? `<span class="ct">${counts[k]}</span>` : ''}<span class="dirty" hidden title="Modifications non sauvegardées"></span></button>`).join('')}</div>
+      <span class="ws-tab-ind" aria-hidden="true"></span>
+      <div class="ws-maint"></div>
     </div>
+    ${WS_TABS.map(([k]) => `<section class="ws-tabpanel" id="ws-panel-${k}" role="tabpanel" aria-labelledby="ws-tab-${k}" tabindex="0" data-panel="${k}" hidden></section>`).join('')}
   `;
-  // Secondary actions : 4 actions de maintenance (Modifier / Dupliquer /
-  // Exporter / Dossier) groupées à gauche, Supprimer isolé spatialement
-  // à droite avec bordure rouge permanente (btn-danger-outline). Tous
-  // visibles, aucun caché — la protection contre le clic accidentel
-  // vient du gap visuel + de la distinction de style, pas d'une
-  // hiérarchie cachée. Tooltips ajoutés pour l'a11y et la
-  // découvrabilité.
-  const headerActions = el('div', 'ws-actions');
+
+  // Copier le chemin
+  page.querySelector('[data-copy-path]').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(w.path || ''); toastOk('Chemin copié'); }
+    catch { toastErr('Copie impossible : sélectionne le chemin à la main'); }
+  });
+  bindStateBadges(page.querySelector('.wsh'), w);
+
+  // Maintenance : Modifier / Dupliquer / Exporter / Dossier groupes,
+  // Supprimer isole spatialement (bordure rouge permanente).
+  const maint = page.querySelector('.ws-maint');
   const editBtn = btn('Modifier', 'btn-sm btn-ghost', I.edit);
   editBtn.title = "Modifier le nom, l'emoji, la description, le chemin";
   editBtn.addEventListener('click', () => modalEditWorkspace(w));
@@ -115,139 +174,411 @@ async function renderWorkspace(wsId) {
   dupBtn.addEventListener('click', () => modalDuplicateWorkspace(w));
   const exportBtn = btn('Exporter', 'btn-sm btn-ghost', I.download);
   exportBtn.title = 'Télécharger un ZIP du workspace';
-  exportBtn.addEventListener('click', () => { window.location.href = `/api/workspaces/${w.id}/export`; });
+  // POST + X-Nebula-XHR (le zip contient des secrets) -> fetch + Blob,
+  // jamais window.location (le header ne serait pas posé).
+  exportBtn.addEventListener('click', () => withBusy(exportBtn, async () => {
+    try {
+      const name = await API.download('POST', `/api/workspaces/${w.id}/export`, `${w.id}.zip`, {});
+      toastOk(`Export téléchargé : ${name}`);
+    } catch (e) { toastErr(`Export impossible : ${e.message}`); }
+  }));
   const openBtn = btn('Dossier', 'btn-sm btn-ghost', I.folder);
   openBtn.title = "Ouvrir le dossier du workspace dans l'explorateur";
   openBtn.addEventListener('click', async () => {
-    try { const r = await API.post('/api/open', { target: `workspace-dir:${w.id}` }); toastOk(r.message); }
+    try { const r2 = await API.post('/api/open', { target: `workspace-dir:${w.id}` }); toastOk(r2.message); }
     catch (e) { toastErr(e.message); }
   });
   const delBtn = btn('Supprimer', 'btn-sm btn-danger-outline', I.trash);
   delBtn.title = 'Supprimer ce workspace (action destructive, confirmation demandée)';
-  delBtn.style.marginLeft = 'auto';  // pousse à droite, isole spatialement
   delBtn.addEventListener('click', () => modalDeleteWorkspace(w));
-  headerActions.append(editBtn, dupBtn, exportBtn, openBtn, delBtn);
-  header.appendChild(headerActions);
-  page.appendChild(header);
+  maint.append(editBtn, dupBtn, exportBtn, openBtn, delBtn);
 
-  // ── Stats tiles (full width) ──
-  const stats = STATE.stats[w.id] || {};
-  const tiles = el('div', 'ws-info-grid');
-  tiles.innerHTML = `
-    <div class="info-tile"><div class="info-tile-label">Sessions</div><div class="info-tile-value tabular">${stats.sessions || 0}</div></div>
-    <div class="info-tile"><div class="info-tile-label">Messages</div><div class="info-tile-value tabular">${fmtNum(stats.messages || 0)}</div></div>
-    <div class="info-tile"><div class="info-tile-label">Tokens in</div><div class="info-tile-value tabular">${fmtNum(stats.input_tokens || 0)}</div></div>
-    <div class="info-tile"><div class="info-tile-label">Tokens out</div><div class="info-tile-value tabular">${fmtNum(stats.output_tokens || 0)}</div></div>
-    <div class="info-tile"><div class="info-tile-label">Dernière</div><div class="info-tile-value" style="font-size:14px">${stats.last ? fmtDate(stats.last) : '—'}</div></div>
-  `;
-  page.appendChild(tiles);
+  // Onglets : clic + fleches / Debut / Fin (motif ARIA tabs).
+  const tabs = page.querySelector('.ws-tabs');
+  tabs.addEventListener('click', (e) => { const b = e.target.closest('.ws-tab'); if (b) wsSelectTab(b.dataset.tab, true); });
+  tabs.addEventListener('keydown', (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    let i = WS_TAB_KEYS.indexOf(WS_PAGE.tab);
+    i = e.key === 'Home' ? 0 : e.key === 'End' ? WS_TAB_KEYS.length - 1
+      : (i + (e.key === 'ArrowRight' ? 1 : -1) + WS_TAB_KEYS.length) % WS_TAB_KEYS.length;
+    wsSelectTab(WS_TAB_KEYS[i], true);
+    page.querySelector(`#ws-tab-${WS_TAB_KEYS[i]}`).focus();
+  });
 
-  // ── Section A : Mémoire projet (CLAUDE.md inline) ──
-  // CLAUDE.md = fichier le plus modifié sur un workspace actif. Le mettre
-  // en édition fixe (pas dans un modal) = 1 clic en moins par cycle
-  // d'édition et visibilité permanente du contenu.
-  page.appendChild(el('div', 'section-label', '<span class="num">A.</span> Mémoire projet (CLAUDE.md)'));
-  const claudeMdHost = el('div');
-  page.appendChild(claudeMdHost);
-  renderWsClaudeMdInline(w.id, claudeMdHost);
+  const panels = {};
+  for (const [k] of WS_TABS) {
+    const host = page.querySelector(`#ws-panel-${k}`);
+    if (keep[k]) {
+      host.replaceChildren(...keep[k].el.childNodes);
+      panels[k] = { el: host, mounted: true, isDirty: keep[k].isDirty };
+    } else {
+      panels[k] = { el: host, mounted: false, isDirty: () => false };
+    }
+  }
 
-  // ── Config toolbar (horizontal full width) ──
-  // CLAUDE.md retiré ici car maintenant édité en place dans Section A.
-  page.appendChild(el('div', 'section-label', '<span class="num">B.</span> Configuration'));
-  const cfgBar = el('div', 'config-bar');
-  const cfgItems = [
-    { label: 'notes.md',      icon: I.book,    action: () => openWsFile(w.id, 'notes.md') },
-    { label: 'settings.json', icon: I.code,    action: () => modalEditSettings(w.id) },
-    { label: 'Permissions',   icon: I.shield,  action: () => modalPermissions(w.id) },
-    { label: 'Hooks',         icon: I.zap,     action: () => modalHooks(w.id) },
+  const c = $('#content');
+  c.replaceChildren(page);
+  WS_PAGE = { wsId, w, root: page, tab: current, panels };
+  wsRefreshSiBadge();
+  wsSelectTab(current, false);
+  if (animate) countUp(page);
+  wsUpdateDirtyDots();
+}
+
+// Bascule d'onglet depuis le hash (lien, palette, historique) sans re-rendu.
+function wsSwitchTabFromHash(hash) {
+  const m = hash.match(/^#\/workspace\/([a-zA-Z0-9_-]+)(?:\/([a-z]+))?$/);
+  if (!m || !WS_PAGE || WS_PAGE.wsId !== m[1] || !WS_PAGE.root.isConnected) return false;
+  wsSelectTab(WS_TAB_KEYS.includes(m[2]) ? m[2] : 'memoire', false);
+  return true;
+}
+
+function placeWsTabInd() {
+  if (!WS_PAGE || !WS_PAGE.root.isConnected) return;
+  const on = WS_PAGE.root.querySelector('.ws-tab[aria-selected="true"]');
+  const ind = WS_PAGE.root.querySelector('.ws-tab-ind');
+  if (!on || !ind) return;
+  ind.style.transform = `translateX(${on.offsetLeft}px) scaleX(${on.offsetWidth / 100})`;
+}
+window.addEventListener('resize', debounce(placeWsTabInd, 80));
+
+function wsSelectTab(key, user) {
+  if (!WS_PAGE) return;
+  if (!WS_TAB_KEYS.includes(key)) key = 'memoire';
+  const { root, panels } = WS_PAGE;
+  WS_PAGE.tab = key;
+  root.querySelectorAll('.ws-tab').forEach(b => {
+    const on = b.dataset.tab === key;
+    b.setAttribute('aria-selected', String(on));
+    b.tabIndex = on ? 0 : -1;
+  });
+  for (const [k, p] of Object.entries(panels)) p.el.hidden = (k !== key);
+  const p = panels[key];
+  if (!p.mounted) wsMountPanel(key);
+  if (user && motionOK()) { p.el.classList.remove('fade-in'); void p.el.offsetWidth; p.el.classList.add('fade-in'); }
+  requestAnimationFrame(placeWsTabInd);
+  const h = `#/workspace/${WS_PAGE.wsId}/${key}`;
+  if (location.hash !== h) {
+    history.replaceState(null, '', h);
+    _lastRoutedHash = h;
+  }
+}
+
+// Monte (ou remonte) un onglet. Remonter n'arrive que si le panneau n'est
+// pas en cours d'edition (cf. wsRefreshPanels).
+function wsMountPanel(key) {
+  if (!WS_PAGE) return;
+  const w = WS_PAGE.w;
+  const p = WS_PAGE.panels[key];
+  p.el.replaceChildren();
+  p.mounted = true;
+  p.isDirty = () => false;
+  if (key === 'memoire') mountWsMemoryTab(w, p);
+  else if (key === 'config') mountWsConfigTab(w, p);
+  else if (key === 'extensions') mountWsExtensionsTab(w, p);
+  else if (key === 'sessions') mountWsSessionsTab(w, p);
+  else if (key === 'fichiers') mountWsFilesTab(w, p);
+}
+
+// Rafraichit des onglets apres une action (au lieu d'un route() qui
+// reconstruisait toute la page) : recharge eventuellement STATE, puis
+// remonte chaque onglet DEJA monte et non modifie ; un onglet en cours
+// d'edition est laisse intact. Met a jour les compteurs des onglets.
+async function wsRefreshPanels(keys, { reload = false } = {}) {
+  if (!WS_PAGE) return;
+  const wsId = WS_PAGE.wsId;
+  if (reload) {
+    STATE.loading = true;
+    try { await loadAll(); } finally { STATE.loading = false; }
+  }
+  if (!WS_PAGE || WS_PAGE.wsId !== wsId || !WS_PAGE.root.isConnected) return;
+  const w = STATE.workspaces.find(x => x.id === wsId);
+  if (w) WS_PAGE.w = w;
+  for (const k of keys) {
+    const p = WS_PAGE.panels[k];
+    if (!p || !p.mounted) continue;
+    if (p.isDirty()) {
+      // Panneau en cours d'edition laisse intact : prevenir qu'il est perime
+      // (l'enregistrer ecraserait ce qui vient d'etre ecrit ailleurs).
+      const tab = (WS_TABS.find(t => t[0] === k) || [k, k])[1];
+      toast(`Onglet ${tab} : le fichier a changé pendant ton édition. Annule tes modifications pour voir la nouvelle version, ou enregistre en connaissance de cause (cela écrase la modification).`, 'info', 10000);
+      continue;
+    }
+    if (k === WS_PAGE.tab) wsMountPanel(k); else p.mounted = false;
+  }
+  const counts = wsTabCounts(WS_PAGE.w);
+  for (const [k, n] of Object.entries(counts)) {
+    const ct = WS_PAGE.root.querySelector(`#ws-tab-${k} .ct`);
+    if (ct) ct.textContent = String(n);
+  }
+  requestAnimationFrame(placeWsTabInd);
+}
+
+// Quitter / recharger l'onglet du navigateur avec une edition non
+// enregistree (CLAUDE.md, settings.json, fichier de l'explorateur).
+window.addEventListener('beforeunload', (e) => {
+  if (WS_PAGE && WS_PAGE.root && WS_PAGE.root.isConnected
+      && Object.values(WS_PAGE.panels).some(p => p.mounted && p.isDirty())) {
+    e.preventDefault(); e.returnValue = '';
+  }
+});
+
+// Pastille « modifie » sur les onglets en cours d'edition.
+function wsUpdateDirtyDots() {
+  if (!WS_PAGE) return;
+  for (const [k, p] of Object.entries(WS_PAGE.panels)) {
+    const dot = WS_PAGE.root.querySelector(`#ws-tab-${k} .dirty`);
+    if (dot) dot.hidden = !(p.mounted && p.isDirty());
+  }
+}
+
+// Badge « Auto-amelioration » de l'en-tete (etat /api/overview) : renvoie
+// vers le module dans l'onglet Configuration.
+function wsRefreshSiBadge() {
+  if (!WS_PAGE) return;
+  const slot = WS_PAGE.root.querySelector('[data-ws-si]');
+  if (!slot) return;
+  if (!wsHasOverlay(WS_PAGE.wsId)) { slot.replaceChildren(); return; }
+  slot['innerHTML'] = `<button type="button" class="pill info" title="Auto-amélioration de Claude active : voir le module dans l'onglet Configuration"><span aria-hidden="true">🧠</span>Auto-amélioration</button>`;
+  slot.firstElementChild.addEventListener('click', () => {
+    wsSelectTab('config', true);
+    const mod = WS_PAGE.root.querySelector('#ws-panel-config .mods');
+    if (mod) mod.scrollIntoView({ behavior: motionOK() ? 'smooth' : 'auto', block: 'nearest' });
+  });
+}
+
+// Carte d'editeur : barre de fichier + corps + pied (etat, Annuler / Sauvegarder).
+function edCard(name, icon) {
+  const card = el('div', 'card ed');
+  card['innerHTML'] = `
+    <div class="ed-bar"><span class="fn">${icon || I.file}<span>${escapeHtml(name)}</span></span><span class="r"></span></div>
+    <div class="ed-slot"></div>
+    <div class="ed-foot"><span class="vstate" aria-live="polite"></span><span class="lc"></span><span class="r"><span class="dim" aria-hidden="true"><kbd class="k">Ctrl</kbd> <kbd class="k">S</kbd></span></span></div>`;
+  return {
+    card,
+    bar: card.querySelector('.ed-bar .r'),
+    slot: card.querySelector('.ed-slot'),
+    vstate: card.querySelector('.vstate'),
+    lc: card.querySelector('.lc'),
+    foot: card.querySelector('.ed-foot .r'),
+  };
+}
+
+/* ---- Editeur Markdown leger ---------------------------------------
+   Meme principe que js/json-editor.js : textarea transparente sur un
+   <pre> colore + goutiere, defilement commun (un seul conteneur). Tab
+   n'est PAS intercepte (la page n'est pas une modale : Tab doit sortir). */
+function _mdHighlight(src) {
+  return escapeHtml(src).split('\n').map(l => {
+    if (/^#{1,6}\s/.test(l)) return `<span class="mdh">${l}</span>`;
+    return l.replace(/(\*\*[^*]+\*\*)/g, '<span class="mdb">$1</span>')
+      .replace(/(`[^`]+`)/g, '<span class="mdc">$1</span>')
+      .replace(/^(\s*[-*+]|\s*\d+\.)(\s)/, '<span class="mdl">$1</span>$2');
+  }).join('\n');
+}
+function createMdEditor({ value = '', ariaLabel = 'Contenu', readOnly = false, onChange = null, onSave = null } = {}) {
+  const root = el('div', 'md-body');
+  root['innerHTML'] = `<div class="md-gut" aria-hidden="true"></div><div class="md-src"><pre aria-hidden="true"></pre><textarea spellcheck="false"></textarea></div>`;
+  const gut = root.querySelector('.md-gut');
+  const pre = root.querySelector('pre');
+  const ta = root.querySelector('textarea');
+  ta.setAttribute('aria-label', ariaLabel);
+  ta.readOnly = readOnly;
+  ta.value = String(value).replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
+  let lines = 0;
+  let raf = 0;
+  const paint = () => {
+    raf = 0;
+    const v = ta.value;
+    pre['innerHTML'] = _mdHighlight(v) + '\n';
+    const n = v.split('\n').length;
+    if (n !== lines) {
+      lines = n;
+      gut['innerHTML'] = Array.from({ length: n }, (_, i) => `<div>${i + 1}</div>`).join('');
+    }
+  };
+  ta.addEventListener('input', () => {
+    if (!raf) raf = requestAnimationFrame(paint);
+    if (onChange) onChange();
+  });
+  ta.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); if (onSave) onSave(); }
+  });
+  paint();
+  return {
+    el: root,
+    textarea: ta,
+    getValue: () => ta.value,
+    setValue: (v) => { ta.value = String(v); paint(); },
+    lineCount: () => ta.value.split('\n').length,
+  };
+}
+
+/* ---- Onglet Memoire : CLAUDE.md + raccourcis de configuration ------ */
+function mountWsMemoryTab(w, panel) {
+  const grid = el('div', 'two');
+  const left = el('div');
+  const right = el('div', 'card flush');
+  right['innerHTML'] = `<div class="card-h"><h3>Fichiers de configuration</h3></div><div class="card-b qlist"></div>`;
+  const q = right.querySelector('.qlist');
+  const items = [
+    [I.book, 'notes.md', 'Notes libres du workspace', () => openWsFile(w.id, 'notes.md')],
+    [I.code, 'settings.json', 'Permissions, plugins, hooks', () => wsSelectTab('config', true)],
+    [I.shield, 'Permissions', 'Règles allow / deny', () => modalPermissions(w.id, () => wsRefreshPanels(['config']))],
+    [I.zap, 'Hooks', 'Commandes déclenchées par Claude Code', () => modalHooks(w.id, () => wsRefreshPanels(['config']))],
+    [I.cpu, 'Agents et commandes', 'Onglet Extensions', () => wsSelectTab('extensions', true)],
   ];
-  for (const it of cfgItems) {
-    const b = el('button', 'config-btn', `${it.icon}<span>${escapeHtml(it.label)}</span>`);
-    b.addEventListener('click', it.action);
-    cfgBar.appendChild(b);
+  for (const [icon, t, d, fn] of items) {
+    const b = el('button', 'qi', `<span class="qic">${icon}</span><span><b>${escapeHtml(t)}</b><small>${escapeHtml(d)}</small></span>${I.right}`);
+    b.type = 'button';
+    b.addEventListener('click', fn);
+    q.appendChild(b);
   }
-  page.appendChild(cfgBar);
+  grid.append(left, right);
+  panel.el.appendChild(grid);
+  renderWsClaudeMdInline(w.id, left, panel);
+}
 
-  // ── Modules optionnels (overlays appliquables sur le workspace) ──
-  // Affiche un bouton « Activer » par overlay disponible. Idempotent :
-  // si l'overlay est deja applique (signature_file present), badge
-  // « Activé » + bouton « Ré-appliquer » qui ne copiera que les fichiers
-  // manquants (utile si l'utilisateur a perdu un fichier).
-  if ((STATE.overlays || []).length) {
-    const modulesHost = el('div');
-    page.appendChild(modulesHost);
-    renderWsOverlays(w.id, modulesHost);
-  }
+/* ---- Onglet Configuration : modules + settings.json + permissions/hooks */
+function mountWsConfigTab(w, panel) {
+  const modulesHost = el('div');
+  panel.el.appendChild(modulesHost);
+  if ((STATE.overlays || []).length) renderWsOverlays(w.id, modulesHost);
+  const grid = el('div', 'two');
+  const left = el('div');
+  const right = el('div', 'col');
+  grid.append(left, right);
+  panel.el.appendChild(grid);
+  left.innerHTML = '<div class="dim" style="padding:var(--sp-3)">Chargement de settings.json…</div>';
 
-  // ── Trio MCPs / Skills / Plugins (full width, 3 columns) ──
-  page.appendChild(el('div', 'section-label', '<span class="num">C.</span> Extensions actives'));
-  const trio = el('div', 'ws-trio');
+  (async () => {
+    let data;
+    try { data = await API.get(`/api/workspaces/${w.id}/settings`); }
+    catch (e) { left.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`; return; }
+    let saved = data.content || '{}';
+    const ed = edCard('.claude/settings.json', I.code);
+    let dirty = false;
+    const save = btn('Sauvegarder', 'btn-sm btn-primary', I.check);
+    save.title = 'Ctrl+S';
+    const cancel = btn('Annuler', 'btn-sm btn-ghost');
+    let editor = null;
+    const refresh = () => {
+      if (!editor) return;
+      dirty = editor.getValue() !== saved;
+      // Validite + nombre de lignes : barre de l'editeur JSON ; ici l'etat d'enregistrement.
+      ed.vstate.className = 'vstate ' + (dirty ? 'dirty' : 'ok');
+      ed.vstate['innerHTML'] = dirty ? `${I.edit}Modifié, non enregistré` : `${I.check}Enregistré`;
+      save.disabled = !dirty || !editor.isValid();
+      wsUpdateDirtyDots();
+    };
+    const doSave = () => withBusy(save, async () => {
+      if (!editor.validate().ok) { toastErr("JSON invalide : corrige-le avant d'enregistrer"); return; }
+      try {
+        await API.post(`/api/workspaces/${w.id}/settings`, { content: editor.getValue() });
+        saved = editor.getValue();
+        toastOk('settings.json enregistré');
+      } catch (e) { toastErr(e.message); }
+    }).finally(refresh);
+    editor = createJsonEditor({
+      value: saved, ariaLabel: 'Contenu de .claude/settings.json',
+      onChange: () => refresh(),
+      onSave: () => { if (!save.disabled) doSave(); },
+      onValidChange: () => refresh(),
+    });
+    saved = editor.getValue();
+    save.addEventListener('click', doSave);
+    cancel.addEventListener('click', () => { if (dirty) { editor.setValue(saved); refresh(); } });
+    ed.foot.append(cancel, save);
+    ed.slot.replaceWith(editor.el);
+    left.replaceChildren(ed.card);
+    panel.isDirty = () => dirty;
+    refresh();
 
-  const mcpsCard = el('div', 'card ws-card');
-  mcpsCard.innerHTML = `<div class="card-header"><h3 class="card-title">${I.cpu} MCPs scopés</h3></div>`;
-  const mcpsList = el('div', 'stack');
-  mcpsCard.appendChild(mcpsList);
-  trio.appendChild(mcpsCard);
-  renderWsMCPs(w.id, mcpsList);
+    // Cartes Permissions / Hooks : resume lu dans settings.json enregistre.
+    let parsed = {};
+    try { parsed = JSON.parse(saved) || {}; } catch { parsed = {}; }
+    const perms = parsed.permissions || {};
+    const allow = Array.isArray(perms.allow) ? perms.allow : [];
+    const deny = Array.isArray(perms.deny) ? perms.deny : [];
+    const tot = allow.length + deny.length;
+    const pc = el('div', 'card flush');
+    pc['innerHTML'] = `<div class="card-h"><h3>${I.shield} Permissions</h3><span class="r"></span></div><div class="card-b">
+      <div class="muted" style="font-size:13px"><b style="color:var(--text)">${allow.length}</b> autorisée${allow.length > 1 ? 's' : ''}, <b style="color:var(--text)">${deny.length}</b> refusée${deny.length > 1 ? 's' : ''}</div>
+      ${tot ? `<div class="meter" aria-hidden="true"><i style="width:${allow.length / tot * 100}%;background:var(--ok)"></i><i style="width:${deny.length / tot * 100}%;background:var(--err)"></i></div>` : ''}
+      <div class="perm">${deny.slice(0, 8).map(x => `<span class="chip deny" title="Refusée">${escapeHtml(x.replace(/^Bash\((.*)\)$/, '$1'))}</span>`).join('')}${deny.length > 8 ? `<span class="chip more">+${deny.length - 8}</span>` : ''}</div></div>`;
+    const pe = btn('Éditer', 'btn-sm btn-ghost');
+    pe.addEventListener('click', () => modalPermissions(w.id, () => wsRefreshPanels(['config'])));
+    pc.querySelector('.r').appendChild(pe);
+    const hooks = parsed.hooks && typeof parsed.hooks === 'object' ? parsed.hooks : {};
+    const hookRows = [];
+    for (const [ev, arr] of Object.entries(hooks)) {
+      for (const h of (Array.isArray(arr) ? arr : [])) {
+        const cmds = (h.hooks || []).map(x => String(x.command || '').split(/[\\/]/).pop().replace(/["']/g, '')).filter(Boolean);
+        hookRows.push(`<div class="hl"><span class="hi ok">${I.zap}</span><div><b>${escapeHtml(ev)}${h.matcher ? ` sur ${escapeHtml(h.matcher)}` : ''}</b><span class="d mono">${escapeHtml(cmds.join(', ') || '(commande vide)')}</span></div></div>`);
+      }
+    }
+    const hc = el('div', 'card flush');
+    hc['innerHTML'] = `<div class="card-h"><h3>${I.zap} Hooks</h3><span class="r"></span></div><div class="card-b health">${hookRows.join('') || '<p class="dim" style="margin:0;font-size:13px">Aucun hook dans ce workspace.</p>'}</div>`;
+    const he = btn('Éditer', 'btn-sm btn-ghost');
+    he.addEventListener('click', () => modalHooks(w.id, () => wsRefreshPanels(['config'])));
+    hc.querySelector('.r').appendChild(he);
+    right.replaceChildren(pc, hc);
+  })();
+}
 
-  const skillsCard = el('div', 'card ws-card');
-  skillsCard.innerHTML = `<div class="card-header"><h3 class="card-title">${I.sparkle} Skills</h3></div>`;
-  const skillsList = el('div', 'stack');
-  skillsCard.appendChild(skillsList);
-  trio.appendChild(skillsCard);
-  loadWsSkills(w.id, skillsList);
+/* ---- Onglet Extensions : MCPs / Skills + agents & commandes / Plugins */
+function mountWsExtensionsTab(w, panel) {
+  const grid = el('div', 'three');
+  const mk = (icon, title) => {
+    const card = el('div', 'card flush');
+    card['innerHTML'] = `<div class="card-h"><h3>${icon} ${escapeHtml(title)}</h3><span class="r"></span></div><div class="card-b"><div class="xlist"></div></div>`;
+    grid.appendChild(card);
+    return { card, r: card.querySelector('.card-h .r'), list: card.querySelector('.xlist'), body: card.querySelector('.card-b') };
+  };
+  const mcps = mk(I.cpu, 'MCPs');
+  const nAct = ((STATE.wsMcps || {})[w.id] || { active: [] }).active.length;
+  mcps.r['innerHTML'] = `<span class="pill mute">${nAct} sur ${(STATE.mcps || []).length}</span>`;
+  renderWsMCPs(w.id, mcps.list);
+  const skills = mk(I.sparkle, 'Skills');
+  loadWsSkills(w.id, skills.list);
+  skills.body.appendChild(el('div', 'xsub', 'Agents et commandes'));
+  const items = el('div', 'stack');
+  skills.body.appendChild(items);
+  loadFileItems(w.id, items);
+  const plugins = mk(I.plug, 'Plugins');
+  loadWsPlugins(w.id, plugins.list);
+  panel.el.appendChild(grid);
+}
 
-  const pluginsCard = el('div', 'card ws-card');
-  pluginsCard.innerHTML = `<div class="card-header"><h3 class="card-title">${I.plug} Plugins</h3></div>`;
-  const pluginsList = el('div', 'stack');
-  pluginsCard.appendChild(pluginsList);
-  trio.appendChild(pluginsCard);
-  loadWsPlugins(w.id, pluginsList);
+/* ---- Onglet Sessions : tableau (date, 1er message, messages, tokens) */
+function mountWsSessionsTab(w, panel) {
+  const host = el('div');
+  panel.el.appendChild(host);
+  loadSessions(w.id, host);
+}
 
-  page.appendChild(trio);
-
-  // ── Sessions (full width, 2 columns sur grand écran) ──
-  const bottom = el('div', 'ws-bottom');
-
-  const sessBlock = el('div');
-  sessBlock.appendChild(el('div', 'section-label', '<span class="num">D.</span> Sessions récentes'));
-  const sessHost = el('div', 'session-list');
-  sessBlock.appendChild(sessHost);
-  loadSessions(w.id, sessHost);
-  bottom.appendChild(sessBlock);
-
-  const filesBlock = el('div');
-  filesBlock.appendChild(el('div', 'section-label', '<span class="num">E.</span> Agents & commandes'));
-  const fileItems = el('div', 'stack');
-  filesBlock.appendChild(fileItems);
-  loadFileItems(w.id, fileItems);
-  bottom.appendChild(filesBlock);
-
-  page.appendChild(bottom);
-
-  // ── Section E : Fichiers du workspace (explorateur + éditeur) ──
-  const fsHost = el('div');
-  page.appendChild(fsHost);
-  renderWsFileExplorer(w.id, fsHost);
-
-  c.appendChild(page);
+/* ---- Onglet Fichiers : explorateur + editeur (etat local preserve) -- */
+function mountWsFilesTab(w, panel) {
+  renderWsFileExplorer(w.id, panel.el, panel);
 }
 
 /* ================================================================
-   WORKSPACE OVERLAYS (Modules optionnels sur la page workspace detail)
+   MODULES OPTIONNELS (overlays) -- onglet Configuration
    ================================================================
-   Permet d'appliquer un overlay (paquet de fichiers, ex.
-   claude-self-improving) sur un workspace existant.
-   Idempotent cote backend : ne reecrit jamais un fichier deja present.
+   Bloc « Auto-amelioration de Claude » (overlay claude-self-improving) et
+   tout autre overlay disponible : etat actif / inactif, ce que le module
+   installe, Activer (modale de bootstrap) ou Re-appliquer (ne copie que
+   les fichiers manquants). Idempotent cote backend.
    ================================================================ */
-async function renderWsOverlays(wsId, host) {
-  host.innerHTML = '';
-  host.appendChild(el('div', 'section-label', '<span class="num">B-bis.</span> Modules optionnels'));
-  const card = el('div', 'card');
-  const list = el('div', 'stack');
-  card.appendChild(list);
-  host.appendChild(card);
+const SELF_IMPROVING_FEATURES = [
+  [I.book, 'Mémoire structurée', '<code>.claude/memory/</code> : hubs architecture, pitfalls, conventions…'],
+  [I.activity, "Pipeline d'amélioration", '<code>ideas</code> → <code>backlog</code> → <code>improvements</code>, + roadmap'],
+  [I.cpu, 'Agents et commandes', 'expert, validateur, auditeur ; <code>/pipeline</code>, <code>/brainstorm</code>, <code>/check-all</code>…'],
+  [I.shield, 'Hooks Python pré-commit', 'em-dash, Co-Authored-By, fichiers protégés'],
+];
 
+async function renderWsOverlays(wsId, host) {
   // Re-fetch l'etat actif/inactif pour ce workspace specifiquement (les
   // STATE.overlays globaux ne portent pas l'info active=true|false).
   let overlays;
@@ -255,41 +586,52 @@ async function renderWsOverlays(wsId, host) {
     const r = await API.get(`/api/workspaces/${wsId}/overlays`);
     overlays = r.overlays || [];
   } catch (e) {
-    list.appendChild(el('div', 'muted', `Impossible de charger les modules : ${escapeHtml(e.message)}`));
+    host.innerHTML = `<section class="card mods"><div class="mod-err">Impossible de charger les modules optionnels : ${escapeHtml(e.message)}</div></section>`;
     return;
   }
-  if (!overlays.length) {
-    list.appendChild(el('div', 'muted', 'Aucun module disponible.'));
-    return;
-  }
+  if (!overlays.length) { host.innerHTML = ''; return; }
+  // Auto-amelioration en tete (module mis en avant).
+  overlays.sort((a, b) => (b.id === SELF_IMPROVING_ID) - (a.id === SELF_IMPROVING_ID));
+  // Etat local (badge en-tete + indicateur accueil) aligne sur la reponse.
+  const act = overlays.filter(o => o.active).map(o => o.id);
+  if (act.length) STATE.overlaysActive[wsId] = act; else delete STATE.overlaysActive[wsId];
+  if (WS_PAGE && WS_PAGE.wsId === wsId) wsRefreshSiBadge();
 
+  const box = el('section', 'card mods');
+  box.setAttribute('aria-label', 'Modules optionnels');
   for (const ov of overlays) {
-    const row = el('div', 'list-row');
-    row.innerHTML = `
-      <div class="list-row-main">
-        <div class="list-row-name">
-          ${escapeHtml(ov.emoji || '🧩')} ${escapeHtml(ov.label || ov.id)}
-          ${ov.active ? '<span class="badge badge-ok" style="margin-left:8px">Activé</span>' : ''}
-        </div>
-        <div class="list-row-desc">${escapeHtml(ov.description || '')}</div>
-        <div class="muted" style="font-size:11px;margin-top:2px">${ov.file_count} fichier${ov.file_count > 1 ? 's' : ''} dans ce module</div>
+    const si = ov.id === SELF_IMPROVING_ID;
+    const n = ov.file_count || 0;
+    const row = el('div', 'mod' + (ov.active ? ' on' : ''));
+    row.dataset.mod = ov.id;
+    row['innerHTML'] = `
+      <span class="mod-ic" aria-hidden="true">${escapeHtml(ov.emoji || '🧩')}</span>
+      <div style="min-width:0">
+        <div class="mod-h"><h3>${escapeHtml(ov.label || ov.id)}</h3>${ov.active ? '<span class="pill ok"><span class="sdot"></span>Actif</span>' : '<span class="pill mute">Inactif</span>'}</div>
+        <p>${si ? "Claude tient une mémoire de projet, trie ses propres idées d'amélioration et vérifie son travail avant chaque commit." : escapeHtml(ov.description || '')}</p>
+        ${si && ov.active ? '<button type="button" class="mod-more" aria-expanded="false">Ce que le module installe ' + I.right + '</button>' : ''}
+        ${si ? `<ul class="mod-feat">${SELF_IMPROVING_FEATURES.map(([ic, t, d]) => `<li><span class="fi">${ic}</span><span><b>${escapeHtml(t)}</b>${d}</span></li>`).join('')}</ul>
+        <div class="mod-foot">${I.sparkle}<span>Après activation : lancer Claude et dire « bootstrap le projet ». N'écrase aucun fichier existant.</span></div>` : ''}
       </div>
-    `;
-    const actionLabel = ov.active ? 'Ré-appliquer (compléter les fichiers manquants)' : 'Activer';
-    const actionCls = ov.active ? 'btn-sm btn-ghost' : 'btn-sm btn-primary';
-    const actionIcon = ov.active ? I.refresh : I.plus;
-    const applyBtn = btn(actionLabel, actionCls, actionIcon);
+      <div class="mod-act"><small>${n} fichier${n > 1 ? 's' : ''}${ov.active ? '' : ', idempotent'}</small></div>`;
+    const actions = row.querySelector('.mod-act');
+    const applyBtn = ov.active ? btn('Ré-appliquer', 'btn-sm', I.refresh) : btn('Activer', 'btn-primary', I.plus);
     applyBtn.title = ov.active
-      ? `Ré-applique l'overlay : ne copie que les fichiers absents, n'écrase rien.`
-      : `Copie ${ov.file_count} fichier(s) dans ce workspace (idempotent).`;
+      ? "Ré-applique le module : ne copie que les fichiers absents, n'écrase rien."
+      : `Copie ${n} fichier(s) dans ce workspace (idempotent, n'écrase rien).`;
+    if (!ov.active) applyBtn.setAttribute('aria-label', `Activer ${ov.label || ov.id}`);
     // Le clic ouvre une modale de bootstrap qui collecte mode / langue /
-    // auteur / profondeur AVANT d'appliquer (cf. P3). Le POST porte ces
-    // choix ; le backend filtre les fichiers (mode-gating + profondeur),
-    // ecrit settings.local.json (validate_author) et pre-coche overview.md.
+    // auteur / profondeur AVANT d'appliquer (cf. P3).
     applyBtn.addEventListener('click', () => modalApplyOverlay(wsId, ov, host));
-    row.appendChild(applyBtn);
-    list.appendChild(row);
+    actions.prepend(applyBtn);
+    const more = row.querySelector('.mod-more');
+    if (more) more.addEventListener('click', () => {
+      row.classList.toggle('open');
+      more.setAttribute('aria-expanded', String(row.classList.contains('open')));
+    });
+    box.appendChild(row);
   }
+  host.replaceChildren(box);
 }
 
 // Modale de bootstrap d'un overlay : mode projet, langue, convention
@@ -382,7 +724,16 @@ function modalApplyOverlay(wsId, ov, host) {
         toastOk(`Module appliqué · ${parts.join(', ')}`);
       }
       close();
-      renderWsOverlays(wsId, host);  // refresh badges
+      renderWsOverlays(wsId, host);  // refresh badges + etat (en-tete, accueil)
+      // Le module a pu creer / completer CLAUDE.md : l'onglet Memoire est
+      // remonte s'il n'est pas en cours d'edition, sinon on previent (un
+      // enregistrement ecraserait le fragment ajoute).
+      const touchedMd = [...(r.copied || []), ...(r.appended || [])].some(f => /(^|[\\/])CLAUDE\.md$/i.test(String(f)));
+      if (touchedMd && WS_PAGE && WS_PAGE.wsId === wsId) {
+        const mem = WS_PAGE.panels.memoire;
+        if (mem && mem.mounted && mem.isDirty()) toast("CLAUDE.md a été complété par le module : enregistre ou annule tes modifications de l'onglet Mémoire, puis recharge la page pour voir l'ajout.", 'info', 9000);
+        else wsRefreshPanels(['memoire']);
+      }
     } catch (e) { toastErr(e.message); }
   }));
 }
@@ -394,15 +745,15 @@ function modalApplyOverlay(wsId, ov, host) {
 // Point d'entrée : monte l'explorateur dans `host`. État local porté
 // par l'objet `state` pour ne pas polluer STATE global. Tous les fetches
 // passent par /api/workspaces/<id>/fs/* (cf. server.py).
-async function renderWsFileExplorer(wsId, host) {
+async function renderWsFileExplorer(wsId, host, panel = null) {
   const section = el('div', 'ws-fs-section');
 
   // Header : titre + bouton Nouveau fichier
-  const sectionLabel = el('div', 'section-label', '<span class="num">F.</span> Fichiers du workspace');
+  const sectionLabel = el('div', 'section-label', 'Fichiers du workspace');
   const headerRow = el('div', 'ws-fs-header');
   const newBtn = btn('Nouveau fichier', 'btn-sm btn-ghost', I.plus);
   newBtn.title = 'Créer un fichier (les dossiers parents sont créés automatiquement)';
-  newBtn.addEventListener('click', () => promptNewWsFile(wsId));
+  newBtn.addEventListener('click', () => promptNewWsFile(wsId, state));
   headerRow.append(sectionLabel, newBtn);
 
   // Toolbar : recherche
@@ -434,6 +785,9 @@ async function renderWsFileExplorer(wsId, host) {
     dirtyDot: null,
     rootEntries: null, // cache pour restaurer après search
   };
+  // Onglet Fichiers : un fichier modifie non sauvegarde protege l'onglet
+  // (transplante tel quel si la page workspace est re-rendue).
+  if (panel) panel.isDirty = () => !!state.dirty;
 
   // Rendu initial : éditeur vide + arbre racine
   renderWsFsEmpty(state);
@@ -540,7 +894,9 @@ async function openWsFsFileInEditor(state, path, rowEl) {
       toast(r.reason ? `Binaire (${r.reason})` : 'Fichier binaire non éditable', 'info');
       return;
     }
-    state.openFile = { path, content: r.content || '', mtime: r.mtime, encoding: r.encoding };
+    // masked : fichier a secrets (.mcp.json, .env*) servi masque et en lecture
+    // seule par le serveur (sauvegarder la version masquee ecraserait les secrets).
+    state.openFile = { path, content: r.content || '', mtime: r.mtime, encoding: r.encoding, masked: !!r.masked };
     state.dirty = false;
     renderWsFsEditor(state);
     document.querySelectorAll('.ws-fs-tree-row.is-open').forEach(e => e.classList.remove('is-open'));
@@ -562,18 +918,54 @@ function renderWsFsEditor(state) {
   dirtyDot.textContent = state.dirty ? '• modifié' : '';
   header.append(titleSpan, dirtyDot);
 
-  const ta = document.createElement('textarea');
-  ta.className = 'ws-fs-editor-textarea mono';
-  ta.value = state.openFile.content;
-  ta.spellcheck = false;
-  ta.addEventListener('input', () => {
-    state.dirty = (ta.value !== state.openFile.content);
+  // Fichier .json : editeur JSON (validation en direct, Tab = indentation).
+  // Autres fichiers : zone de texte simple. `state.textarea` expose dans les
+  // deux cas une propriete .value (lue par saveWsFsCurrentFile).
+  const masked = !!state.openFile.masked;
+  const isJson = !masked && /\.json$/i.test(state.openFile.path);
+  let ta;
+  let editor = null;
+  let saveBtn = null;
+  const refreshDirty = () => {
+    state.dirty = (state.textarea.value !== state.openFile.content);
     dirtyDot.textContent = state.dirty ? '• modifié' : '';
-  });
-  ta.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveWsFsCurrentFile(state); }
-  });
-  state.textarea = ta;
+    if (typeof wsUpdateDirtyDots === 'function') wsUpdateDirtyDots();
+  };
+  if (isJson) {
+    editor = createJsonEditor({
+      value: state.openFile.content, fill: true, ariaLabel: `Contenu de ${state.openFile.path}`,
+      onChange: () => refreshDirty(),
+      onSave: () => saveWsFsCurrentFile(state),
+      onValidChange: (ok) => { if (saveBtn) { saveBtn.disabled = !ok; saveBtn.title = ok ? 'Ctrl+S' : 'Corrige le JSON pour pouvoir sauvegarder'; } },
+    });
+    ta = editor.el;
+    state.textarea = { get value() { return editor.getValue(); }, set value(v) { editor.setValue(v); } };
+    // Base de comparaison normalisee (BOM retire, fins de ligne LF) pour que
+    // l'ouverture seule ne compte pas comme une modification.
+    state.openFile.content = editor.getValue();
+  } else if (/\.(md|markdown)$/i.test(state.openFile.path)) {
+    // Markdown : editeur colore (goutiere + coloration), meme contrat .value.
+    const md = createMdEditor({
+      value: state.openFile.content, readOnly: masked, ariaLabel: `Contenu de ${state.openFile.path}`,
+      onChange: () => refreshDirty(),
+      onSave: () => saveWsFsCurrentFile(state),
+    });
+    ta = md.el;
+    state.textarea = md.textarea;
+    state.openFile.content = md.getValue();
+  } else {
+    ta = document.createElement('textarea');
+    ta.className = 'ws-fs-editor-textarea mono';
+    ta.value = state.openFile.content;
+    ta.spellcheck = false;
+    ta.readOnly = masked;
+    ta.addEventListener('input', refreshDirty);
+    ta.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveWsFsCurrentFile(state); }
+    });
+    state.textarea = ta;
+  }
+  state.editor = editor;
   state.dirtyDot = dirtyDot;
 
   const footer = el('div', 'ws-fs-editor-footer');
@@ -588,14 +980,23 @@ function renderWsFsEditor(state) {
   const cancelBtn = btn('Annuler', 'btn-sm btn-ghost');
   cancelBtn.addEventListener('click', () => {
     if (!state.dirty) return;
-    ta.value = state.openFile.content;
+    state.textarea.value = state.openFile.content;
+    // Editeur JSON : state.textarea est un accesseur {value}, pas un EventTarget.
+    if (typeof state.textarea.dispatchEvent === 'function') state.textarea.dispatchEvent(new Event('input'));
     state.dirty = false;
     dirtyDot.textContent = '';
+    if (typeof wsUpdateDirtyDots === 'function') wsUpdateDirtyDots();
   });
-  const saveBtn = btn('Sauvegarder', 'btn-sm btn-primary', I.check);
+  saveBtn = btn('Sauvegarder', 'btn-sm btn-primary', I.check);
   saveBtn.title = 'Ctrl+S';
   saveBtn.addEventListener('click', () => saveWsFsCurrentFile(state));
   footer.append(deleteBtn, hint, cancelBtn, saveBtn);
+  if (editor) saveBtn.disabled = !editor.isValid();
+  if (masked) {
+    saveBtn.disabled = true;
+    saveBtn.title = 'Lecture seule : secrets masqués';
+    hint.textContent = 'Secrets masqués - lecture seule (modifie le registre MCP ou les variables d’environnement)';
+  }
 
   pane.append(header, ta, footer);
 }
@@ -636,6 +1037,7 @@ function renderWsFsEmpty(state) {
 async function saveWsFsCurrentFile(state) {
   if (!state.openFile) return;
   if (!state.dirty) { toast('Rien à sauvegarder', 'info'); return; }
+  if (state.editor && !state.editor.validate().ok) { toastErr("JSON invalide : corrige-le avant de sauvegarder"); return; }
   try {
     const r = await API.post(`/api/workspaces/${state.wsId}/fs/file`, {
       path: state.openFile.path,
@@ -645,6 +1047,7 @@ async function saveWsFsCurrentFile(state) {
     state.openFile.mtime = r.mtime;
     state.dirty = false;
     if (state.dirtyDot) state.dirtyDot.textContent = '';
+    if (typeof wsUpdateDirtyDots === 'function') wsUpdateDirtyDots();
     toastOk(`Sauvegardé : ${state.openFile.path}`);
   } catch (e) {
     toastErr(e.message);
@@ -680,7 +1083,7 @@ async function doWsFsSearch(state, query) {
   }
 }
 
-function promptNewWsFile(wsId) {
+function promptNewWsFile(wsId, fsState = null) {
   const body = el('div');
   const hint = el('p', 'muted');
   hint.style.cssText = 'margin-top:0;font-size:13px';
@@ -706,8 +1109,11 @@ function promptNewWsFile(wsId) {
       await API.post(`/api/workspaces/${wsId}/fs/file`, { path, content: '' });
       toastOk(`Créé : ${path}`);
       close();
-      // Rafraîchit l'arbre via re-render de la page
-      STATE.loading = true; route();
+      // Rafraîchit l'arbre en place (l'éditeur ouvert est préservé).
+      if (fsState && fsState.treePane && fsState.treePane.isConnected) {
+        fsState.treePane.innerHTML = '';
+        await loadWsFsSubtree(fsState, fsState.treePane, '');
+      } else { STATE.loading = true; route(); }
     } catch (e) { toastErr(e.message); }
   });
   setTimeout(() => input.focus(), 50);
@@ -717,31 +1123,59 @@ async function loadSessions(wsId, host) {
   host.innerHTML = '<div class="dim" style="font-size:12px">Chargement…</div>';
   try {
     const r = await API.get(`/api/workspaces/${wsId}/sessions`);
-    const sessions = (r.sessions || []).slice(0, 5);
+    const all = r.sessions || [];
+    const sessions = all.slice(0, 50);
     if (!sessions.length) {
-      host.innerHTML = '<div class="empty"><div class="empty-title">Aucune session</div><p class="muted">Lance Claude Code dans ce workspace pour commencer.</p></div>';
+      host.innerHTML = '<div class="card home-empty">Aucune session pour ce workspace. </div>';
+      const w = STATE.workspaces.find(x => x.id === wsId);
+      if (w) {
+        const launch = btn('Lancer Claude Code', 'btn-sm btn-primary', I.play);
+        launch.addEventListener('click', () => doLaunch(w, launch));
+        host.firstElementChild.appendChild(launch);
+      }
       return;
     }
-    host.innerHTML = '';
-    for (const s of sessions) {
-      const row = el('div', 'session-row');
+    const running = sessionState(wsId) === 'running';
+    const w = STATE.workspaces.find(x => x.id === wsId);
+    const tbl = el('div', 'card tbl sess-list');
+    tbl.setAttribute('role', 'table');
+    tbl.setAttribute('aria-label', 'Sessions du workspace');
+    tbl.innerHTML = `<div class="tr h" role="row"><span role="columnheader">Date</span><span role="columnheader">Premier message</span><span class="num" role="columnheader">Messages</span><span class="num" role="columnheader">Tokens sortie</span><span role="columnheader"><span class="sr-only">Actions</span></span></div>`;
+    sessions.forEach((s, i) => {
+      // La plus recente porte la session en cours (le detecteur ne dit pas
+      // quel fichier .jsonl est ouvert : heuristique affichee comme telle).
+      const cur = i === 0 && running;
+      const row = el('div', 'tr' + (cur ? ' cur' : ''));
+      row.setAttribute('role', 'row');
       row.tabIndex = 0;
-      row.setAttribute('role', 'button');
-      row.setAttribute('aria-label', 'Ouvrir la session');
+      row.setAttribute('aria-label', `Ouvrir la session du ${fmtDateTime(s.mtime)}`);
       row.innerHTML = `
-        <div class="session-info">
-          <div class="session-msg">${escapeHtml(s.first_message || '(vide)')}</div>
-          <div class="session-meta">${fmtDate(s.mtime)} · ${s.messages} msg · ${fmtNum(s.input_tokens || 0)} in / ${fmtNum(s.output_tokens || 0)} out</div>
-        </div>
-        <span class="badge">${escapeHtml(s.file.slice(0, 8))}</span>
-      `;
-      row.addEventListener('click', () => modalSession(wsId, s.file));
+        <span class="tab-num" role="cell" title="${escapeHtml(s.mtime || '')}">${escapeHtml(fmtDateTime(s.mtime))}</span>
+        <span class="sess-first" role="cell">${cur ? '<span class="pill ok" style="margin-right:8px"><span class="sdot live"></span>en cours</span>' : ''}${escapeHtml(s.first_message || '(vide)')}<small class="dim mono">${escapeHtml(s.file.slice(0, 8))}</small></span>
+        <span class="num" role="cell">${fmtNum(s.messages || 0)}</span>
+        <span class="num" role="cell" title="${fmtNum(s.output_tokens || 0)} (entrée : ${fmtNum(s.input_tokens || 0)})">${escapeHtml(fmtCompact(s.output_tokens || 0))}</span>
+        <div class="ra" role="cell"></div>`;
+      const ra = row.querySelector('.ra');
+      const tail = btn('Suivre', 'btn-sm btn-ghost', I.activity);
+      tail.title = 'Ouvrir la session en suivi live';
+      tail.addEventListener('click', (e) => { e.stopPropagation(); modalSession(wsId, s.file); });
+      ra.appendChild(tail);
+      if (i === 0 && w) {
+        const resume = btn('Reprendre', 'btn-sm', I.ret);
+        resume.title = 'Reprendre la dernière session Claude Code';
+        resume.addEventListener('click', (e) => { e.stopPropagation(); doResume(w, resume); });
+        ra.appendChild(resume);
+      }
+      row.addEventListener('click', (e) => { if (!e.target.closest('button')) modalSession(wsId, s.file); });
       row.addEventListener('keydown', (e) => {
+        if (e.target !== row) return;
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); modalSession(wsId, s.file); }
       });
       attachSessionPreview(row, wsId, s.file);
-      host.appendChild(row);
-    }
+      tbl.appendChild(row);
+    });
+    host.replaceChildren(tbl);
+    if (all.length > sessions.length) host.appendChild(el('p', 'dim', `<span style="font-size:12.5px">${sessions.length} sessions les plus récentes sur ${all.length}.</span>`));
   } catch (e) {
     host.innerHTML = `<div class="error-box">${escapeHtml(e.message)}</div>`;
   }
@@ -962,16 +1396,29 @@ function renderWsMCPs(wsId, host) {
     const detachBtn = btn('', 'btn-sm btn-ghost btn-icon-only', I.x);
     detachBtn.title = 'Détacher de ce workspace';
     detachBtn.addEventListener('click', () => {
-      confirmDialog(`Détacher « ${mcpId} » de ce workspace ?`, async () => {
+      const mcp0 = STATE.mcps.find(x => x.id === mcpId);
+      // Joker "*"/"all" : retirer wsId d'une liste qui ne le contient pas ne
+      // changerait rien. On convertit en liste explicite (tous les autres
+      // workspaces), comme la matrice, après une confirmation qui le dit.
+      const wild = !!(mcp0 && mcpIsWildcard(mcp0));
+      const others = (STATE.workspaces || []).filter(x => x.id !== wsId).length;
+      const msg = wild
+        ? `« ${mcpId} » est attaché à TOUS les workspaces (joker « * »).\n\n`
+          + `Le détacher de ce workspace remplace le joker par la liste explicite des ${others} autre(s) workspace(s). `
+          + `Les workspaces créés plus tard ne l'auront plus automatiquement.`
+        : `Détacher « ${mcpId} » de ce workspace ?`;
+      confirmDialog(msg, async () => {
         const mcp = STATE.mcps.find(x => x.id === mcpId);
         if (!mcp) { toastErr('MCP introuvable dans le registre'); return; }
-        const updated = { ...mcp, workspaces: (mcp.workspaces || []).filter(w => w !== wsId) };
+        const updated = { ...mcp, workspaces: mcpWorkspacesWithout(mcp, wsId, STATE.workspaces) };
         try {
           await API.post('/api/mcps', updated);
-          toastOk(`Détaché : ${mcpId}`);
-          STATE.loading = true; route();
-        } catch (e) { toastErr(e.message); }
-      });
+          toastOk(wild
+            ? `Détaché : ${mcpId} (joker remplacé par ${updated.workspaces.length} workspace(s))`
+            : `Détaché : ${mcpId}`);
+          await wsRefreshPanels(['extensions'], { reload: true });
+        } catch (e) { toastErr(e.message); throw e; }
+      }, { confirmLabel: wild ? 'Remplacer le joker et détacher' : 'Détacher' });
     });
     row.appendChild(detachBtn);
     host.appendChild(row);
@@ -997,7 +1444,9 @@ function modalAttachMcpToWorkspace(wsId) {
   const list = el('div', 'stack');
   list.style.cssText = 'max-height:50vh;overflow-y:auto';
   for (const m of allMcps) {
-    const initial = (m.workspaces || []).includes(wsId);
+    // Joker "*"/"all" = actif ici aussi (même sémantique que la matrice).
+    const initial = mcpActiveOn(m, wsId);
+    const wild = mcpIsWildcard(m);
     const card = el('label', 'list-row');
     card.style.cursor = 'pointer';
     card.dataset.initial = initial ? '1' : '0';
@@ -1005,8 +1454,8 @@ function modalAttachMcpToWorkspace(wsId) {
       <input type="checkbox" data-mcp-id="${escapeHtml(m.id)}" ${initial ? 'checked' : ''} style="margin-right:10px">
       <span class="dot ${m.status === 'désactivé' ? 'dot-err' : 'dot-info'}"></span>
       <div class="list-row-main">
-        <div class="list-row-name mono">${escapeHtml(m.name || m.id)}</div>
-        <div class="list-row-desc">${escapeHtml(m.description || m.transport || '')}</div>
+        <div class="list-row-name mono">${escapeHtml(m.name || m.id)}${wild ? ' <span class="badge">tous les workspaces</span>' : ''}</div>
+        <div class="list-row-desc">${escapeHtml(m.description || m.transport || '')}${wild ? ' -- décocher remplace le joker par la liste explicite des autres workspaces' : ''}</div>
       </div>
     `;
     list.appendChild(card);
@@ -1031,16 +1480,17 @@ function modalAttachMcpToWorkspace(wsId) {
     for (const ch of changes) {
       const mcp = allMcps.find(m => m.id === ch.mcpId);
       if (!mcp) { errs++; continue; }
-      const wsSet = new Set(mcp.workspaces || []);
-      if (ch.attach) wsSet.add(wsId); else wsSet.delete(wsId);
-      const updated = { ...mcp, workspaces: Array.from(wsSet) };
+      let next;
+      if (ch.attach) next = Array.from(new Set([...(mcp.workspaces || []), wsId]));
+      else next = mcpWorkspacesWithout(mcp, wsId, STATE.workspaces);
+      const updated = { ...mcp, workspaces: next };
       try { await API.post('/api/mcps', updated); }
       catch (e) { errs++; console.warn('[attach-mcp] update échoué pour', ch.mcpId, ':', e.message); }
     }
     if (errs) toastErr(`${errs} erreur(s) — voir console`);
     else toastOk(`${changes.length} MCP${changes.length > 1 ? 's' : ''} mis à jour`);
     close();
-    STATE.loading = true; route();
+    await wsRefreshPanels(['extensions'], { reload: true });
   });
 }
 
@@ -1076,9 +1526,9 @@ async function loadWsSkills(wsId, host) {
       rem.title = 'Retirer';
       rem.addEventListener('click', () => {
         confirmDialog('Retirer ce skill du workspace ?', async () => {
-          try { await API.del(`/api/skills/workspace:${wsId}/${s.id}`); toastOk('Skill retiré'); route(); }
+          try { await API.del(`/api/skills/workspace:${wsId}/${s.id}`); toastOk('Skill retiré'); wsRefreshPanels(['extensions']); }
           catch (e) { toastErr(e.message); }
-        }, { danger: true });
+        }, { danger: true, confirmLabel: 'Retirer' });
       });
       row.appendChild(editBtn2); row.appendChild(rem);
       host.appendChild(row);
@@ -1095,7 +1545,7 @@ async function loadWsSkills(wsId, host) {
         `;
         const copy = btn('+ ici', 'btn-sm', I.copy);
         copy.addEventListener('click', async () => {
-          try { await API.post('/api/skills/copy', { name: s.id, workspace: wsId }); toastOk('Skill copié'); route(); }
+          try { await API.post('/api/skills/copy', { name: s.id, workspace: wsId }); toastOk('Skill copié'); wsRefreshPanels(['extensions']); }
           catch (e) { toastErr(e.message); }
         });
         row.appendChild(copy);
@@ -1156,12 +1606,11 @@ async function loadWsPlugins(wsId, host) {
 async function loadFileItems(wsId, host) {
   host.innerHTML = '';
   for (const kind of ['agents', 'commands']) {
-    const block = el('div', 'card');
-    block.style.padding = 'var(--sp-3)';
-    block.innerHTML = `<div class="card-header" style="margin-bottom:var(--sp-2)"><h4 class="card-title" style="font-size:12.5px;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-dim);font-family:var(--font-mono)">${kind}</h4></div>`;
-    const list = el('div', 'stack');
+    const block = el('div', 'xblock');
+    block.innerHTML = `<div class="xblock-h">${kind === 'agents' ? 'Agents' : 'Commandes'}</div>`;
+    const list = el('div', 'xlist');
     block.appendChild(list);
-    const add = btn('+ Nouveau', 'btn-sm btn-ghost');
+    const add = btn(kind === 'agents' ? 'Nouvel agent' : 'Nouvelle commande', 'btn-sm btn-ghost', I.plus);
     add.addEventListener('click', () => modalEditFileItem(kind, `workspace:${wsId}`, null));
     block.appendChild(add);
     host.appendChild(block);
@@ -1199,11 +1648,10 @@ async function loadFileItems(wsId, host) {
   }
 }
 
-// Éditeur inline de CLAUDE.md sur la page workspace detail (Section A).
-// CLAUDE.md = pièce centrale de la mémoire projet, modifié quotidiennement
-// → place fixe sur la page au lieu d'un modal pour réduire la friction
-// (1 clic en moins par cycle d'édition).
-async function renderWsClaudeMdInline(wsId, host) {
+// Éditeur inline de CLAUDE.md (onglet Mémoire). CLAUDE.md = pièce centrale
+// de la mémoire projet, modifié quotidiennement -> place fixe, pas de modal.
+// `panel` (onglet) : isDirty protege l'edition en cours contre les re-rendus.
+async function renderWsClaudeMdInline(wsId, host, panel = null) {
   host.innerHTML = '<div class="dim ws-claudemd-loading" style="padding:var(--sp-3)">Chargement de CLAUDE.md…</div>';
   let initial = '';
   try {
@@ -1214,63 +1662,47 @@ async function renderWsClaudeMdInline(wsId, host) {
     return;
   }
 
-  const card = el('div', 'ws-claudemd-card');
-
-  // Header : nom du fichier + indicateur modifié
-  const header = el('div', 'ws-claudemd-header');
-  const title = el('div', 'ws-claudemd-title mono');
-  title.textContent = '📄 CLAUDE.md';
-  const dirtyDot = el('span', 'ws-claudemd-dirty');
-  dirtyDot.textContent = '';
-  header.append(title, dirtyDot);
-
-  // Textarea
-  const ta = document.createElement('textarea');
-  ta.className = 'ws-claudemd-textarea mono';
-  ta.value = initial;
-  ta.spellcheck = false;
-  ta.rows = 14;
-
+  const ed = edCard('CLAUDE.md', I.book);
   let dirty = false;
-  ta.addEventListener('input', () => {
-    dirty = (ta.value !== initial);
-    dirtyDot.textContent = dirty ? '• modifié' : '';
-  });
-
-  const saveCurrent = async () => {
-    if (!dirty) { toast('Rien à sauvegarder', 'info'); return; }
-    try {
-      await API.post(`/api/workspaces/${wsId}/file`, { filename: 'CLAUDE.md', content: ta.value });
-      initial = ta.value;
-      dirty = false;
-      dirtyDot.textContent = '';
-      toastOk('CLAUDE.md sauvegardé');
-    } catch (e) { toastErr(e.message); }
-  };
-
-  ta.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveCurrent(); }
-  });
-
-  // Footer
-  const footer = el('div', 'ws-claudemd-footer');
-  const hint = el('span', 'dim ws-claudemd-hint');
-  hint.textContent = 'Ctrl+S pour sauvegarder';
-  const cancelBtn = btn('Annuler', 'btn-sm btn-ghost');
-  cancelBtn.addEventListener('click', () => {
-    if (!dirty) return;
-    ta.value = initial;
-    dirty = false;
-    dirtyDot.textContent = '';
-  });
   const saveBtn = btn('Sauvegarder', 'btn-sm btn-primary', I.check);
   saveBtn.title = 'Ctrl+S';
+  const cancelBtn = btn('Annuler', 'btn-sm btn-ghost');
+  const refresh = () => {
+    dirty = md.getValue() !== initial;
+    ed.vstate.className = 'vstate' + (dirty ? ' dirty' : '');
+    ed.vstate['innerHTML'] = dirty ? `${I.edit}Modifié` : 'Aucune modification';
+    ed.lc.textContent = `${md.lineCount()} lignes`;
+    saveBtn.disabled = !dirty;
+    if (typeof wsUpdateDirtyDots === 'function') wsUpdateDirtyDots();
+  };
+  const saveCurrent = async () => {
+    if (!dirty) { toast('Rien à sauvegarder', 'info'); return; }
+    await withBusy(saveBtn, async () => {
+      try {
+        await API.post(`/api/workspaces/${wsId}/file`, { filename: 'CLAUDE.md', content: md.getValue() });
+        initial = md.getValue();
+        toastOk('CLAUDE.md sauvegardé');
+      } catch (e) { toastErr(e.message); }
+    });
+    refresh();
+  };
+  const md = createMdEditor({ value: initial, ariaLabel: 'Contenu de CLAUDE.md', onChange: () => refresh(), onSave: saveCurrent });
+  initial = md.getValue();
   saveBtn.addEventListener('click', saveCurrent);
-  footer.append(hint, cancelBtn, saveBtn);
-
-  card.append(header, ta, footer);
-  host.innerHTML = '';
-  host.appendChild(card);
+  cancelBtn.addEventListener('click', () => { if (dirty) { md.setValue(initial); refresh(); } });
+  const openBtn = btn('', 'btn-sm btn-ghost btn-icon-only', I.ext);
+  openBtn.title = "Ouvrir CLAUDE.md dans l'éditeur externe";
+  openBtn.setAttribute('aria-label', "Ouvrir CLAUDE.md dans l'éditeur externe");
+  openBtn.addEventListener('click', async () => {
+    try { const r = await API.post('/api/open', { target: `workspace-claude-md:${wsId}` }); toastOk(r.message || 'Ouvert'); }
+    catch (e) { toastErr(e.message); }
+  });
+  ed.bar.appendChild(openBtn);
+  ed.foot.append(cancelBtn, saveBtn);
+  ed.slot.replaceWith(md.el);
+  if (panel) panel.isDirty = () => dirty;
+  host.replaceChildren(ed.card);
+  refresh();
 }
 
 async function openWsFile(wsId, filename) {
@@ -1280,15 +1712,30 @@ async function openWsFile(wsId, filename) {
   const content = (data.files || {})[filename] || '';
   const body = el('div');
   body.innerHTML = `<div class="dim" style="font-size:11.5px;margin-bottom:6px">${escapeHtml(data.path || '')}/${escapeHtml(filename)}</div>`;
-  const ta = el('textarea', 'textarea textarea-code');
-  ta.rows = 18; ta.value = content || '';
-  body.appendChild(ta);
   const cancel = btn('Annuler', 'btn-ghost');
   const save = btn('Enregistrer', 'btn-primary');
+  // Un fichier .json s'edite avec l'editeur JSON (validation en direct) ;
+  // tout autre fichier (CLAUDE.md...) reste une zone de texte simple.
+  const isJson = /\.json$/i.test(filename);
+  let ta = null;
+  let editor = null;
+  if (isJson) {
+    editor = createJsonEditor({
+      value: content || '{}', rows: 18, ariaLabel: `Contenu de ${filename}`,
+      onSave: () => { if (!save.disabled) save.click(); },
+      onValidChange: (ok) => { save.disabled = !ok; save.title = ok ? '' : 'Corrige le JSON pour pouvoir enregistrer'; },
+    });
+    body.appendChild(editor.el);
+  } else {
+    ta = el('textarea', 'textarea textarea-code');
+    ta.rows = 18; ta.value = content || '';
+    body.appendChild(ta);
+  }
   const { close } = openModal({ title: filename, body, footer: [cancel, save], wide: true });
   cancel.addEventListener('click', close);
   save.addEventListener('click', () => withBusy(save, async () => {
-    try { await API.post(`/api/workspaces/${wsId}/file`, { filename, content: ta.value }); toastOk('Enregistré'); close(); }
+    if (editor && !editor.validate().ok) { toastErr("JSON invalide : corrige-le avant d'enregistrer"); return; }
+    try { await API.post(`/api/workspaces/${wsId}/file`, { filename, content: editor ? editor.getValue() : ta.value }); toastOk('Enregistré'); close(); }
     catch (e) { toastErr(e.message); }
   }));
 }
@@ -2026,7 +2473,7 @@ async function modalSystemUpdate() {
             setTimeout(() => location.reload(), 1200);
           } catch (e) { toastErr(e.message); resetBtn.disabled = false; resetBtn.innerHTML = `${I.refresh}<span>Réessayer</span>`; }
         },
-        { danger: true }
+        { danger: true, confirmLabel: 'Réinitialiser' }
       );
     });
     resetBox.appendChild(resetBtn);
@@ -2173,7 +2620,7 @@ async function modalSystemUpdate() {
                 setTimeout(() => location.reload(), 1500);
               } catch (e) { toastErr(e.message); }
             },
-            { danger: true }
+            { danger: true, confirmLabel: "Forcer l'alignement" }
           );
         });
         resetBox.appendChild(resetBtn);
@@ -2290,7 +2737,7 @@ async function modalGlobalConflicts() {
               await refresh();
             } catch (e) { toastErr(e.message); }
           },
-          { danger: true }
+          { danger: true, confirmLabel: 'Retirer' }
         ));
         item.appendChild(removeBtn);
         list.appendChild(item);
@@ -2345,7 +2792,7 @@ async function modalGlobalConflicts() {
               await refresh();
             } catch (e) { toastErr(e.message); }
           },
-          { danger: true }
+          { danger: true, confirmLabel: 'Retirer' }
         ));
         actions.append(migrate, remove);
         item.appendChild(actions);
@@ -2809,7 +3256,7 @@ function modalImportMCPs() {
   const body = el('div');
   body.innerHTML = `
     <p class="muted" style="margin-top:0">Colle un objet MCP, un tableau, ou la section <code>mcpServers</code> d'un fichier Claude.</p>
-    <div class="field"><label class="field-label">JSON</label><textarea class="textarea" name="raw" rows="12" placeholder='{"mcpServers": {...}}'></textarea></div>
+    <div class="field"><label class="field-label" for="import-mcps-json-ta">JSON</label><div data-editor-host></div></div>
     <div class="field"><label class="field-label">Workspaces cibles (optionnel — surchage)</label><input class="input mono" name="ws" placeholder="dev,homeassistant ou *"></div>
     <div class="field" style="border-top:1px solid var(--border);padding-top:var(--sp-3)">
       <label class="field-label">Exporter le registre</label>
@@ -2822,6 +3269,14 @@ function modalImportMCPs() {
   `;
   const cancel = btn('Annuler', 'btn-ghost');
   const imp = btn('Importer', 'btn-primary', I.download);
+  // Editeur JSON maison. Ici le champ peut etre vide tant qu'on n'a rien
+  // colle : Importer n'est desactive que si le texte saisi est invalide.
+  const editor = createJsonEditor({
+    value: '', rows: 14, id: 'import-mcps-json', allowEmpty: true, ariaLabel: 'JSON des MCPs à importer',
+    onSave: () => { if (!imp.disabled) imp.click(); },
+    onValidChange: (ok) => { imp.disabled = !ok; imp.title = ok ? '' : 'Colle un JSON valide pour pouvoir importer'; },
+  });
+  body.querySelector('[data-editor-host]').appendChild(editor.el);
   const { close } = openModal({ title: 'Importer / exporter des MCPs', body, footer: [cancel, imp], wide: true });
   cancel.addEventListener('click', close);
 
@@ -2832,7 +3287,7 @@ function modalImportMCPs() {
     return JSON.stringify(r, null, 2);
   }
   body.querySelector('[data-act=export-fill]').addEventListener('click', async () => {
-    try { body.querySelector('[name=raw]').value = await fetchExport(); toastOk('Registre exporté dans le champ'); }
+    try { editor.setValue(await fetchExport(), { silent: false }); toastOk('Registre exporté dans le champ'); }
     catch (e) { toastErr(e.message); }
   });
   body.querySelector('[data-act=export-copy]').addEventListener('click', async () => {
@@ -2843,9 +3298,9 @@ function modalImportMCPs() {
     } catch (e) { toastErr('Copie impossible : ' + e.message); }
   });
   imp.addEventListener('click', async () => {
-    let obj;
-    try { obj = JSON.parse(body.querySelector('[name=raw]').value); }
-    catch (e) { toastErr('JSON invalide : ' + e.message); return; }
+    const check = editor.validate();
+    if (!check.ok) { toastErr(`JSON invalide, ligne ${check.line} : ${check.msg}`); return; }
+    const obj = check.value;
     const ws = body.querySelector('[name=ws]').value.split(',').map(s => s.trim()).filter(Boolean);
     if (ws.length) obj.workspaces = ws;
     try {
@@ -3028,23 +3483,29 @@ function modalNewWorkspace() {
   // Section "Modules optionnels" : checkboxes des overlays disponibles.
   // L'overlay est applique APRES le template de base (idempotent, ne
   // touche pas aux fichiers deja generes par le template).
-  const overlays = STATE.overlays || [];
+  const overlays = (STATE.overlays || []).slice()
+    .sort((a, b) => (b.id === SELF_IMPROVING_ID) - (a.id === SELF_IMPROVING_ID));
   const overlaysSection = overlays.length ? `
     <div class="field">
-      <label class="field-label">Modules optionnels</label>
+      <label class="field-label" id="ov-pick-label">Modules optionnels</label>
       <div class="muted" style="font-size:12px;margin-bottom:6px">
-        Paquets de fichiers appliqués par-dessus le template choisi. N'écrasent jamais un fichier déjà présent.
+        Appliqués par-dessus le template choisi. N'écrasent jamais un fichier déjà présent ; activables aussi plus tard depuis l'onglet Configuration du workspace.
       </div>
-      <div class="stack" style="gap:6px" data-overlays-host>
-        ${overlays.map(o => `
-          <label class="checkbox-row" style="display:flex;gap:8px;align-items:flex-start;cursor:pointer">
-            <input type="checkbox" name="overlay" value="${escapeHtml(o.id)}" style="margin-top:3px">
-            <div>
-              <div style="font-weight:500">${escapeHtml(o.emoji || '🧩')} ${escapeHtml(o.label || o.id)}</div>
-              <div class="muted" style="font-size:12px">${escapeHtml(o.description || '')}</div>
-            </div>
-          </label>
-        `).join('')}
+      <div class="ov-pick" role="group" aria-labelledby="ov-pick-label" data-overlays-host>
+        ${overlays.map(o => {
+          const si = o.id === SELF_IMPROVING_ID;
+          return `
+          <label class="ov-opt${si ? ' featured' : ''}">
+            <input type="checkbox" name="overlay" value="${escapeHtml(o.id)}">
+            <span class="ov-e" aria-hidden="true">${escapeHtml(o.emoji || '🧩')}</span>
+            <span style="min-width:0">
+              <b>${escapeHtml(o.label || o.id)}${si ? '<span class="pill accent ov-tag">Recommandé</span>' : ''}</b>
+              <span class="ov-d" style="display:block">${si
+                ? "Mémoire structurée (.claude/memory), pipeline ideas → backlog → improvements, agents et commandes (/pipeline, /check-all…), hooks Python pré-commit. Après création : lancer Claude et dire « bootstrap le projet »."
+                : escapeHtml(o.description || '')}</span>
+            </span>
+          </label>`;
+        }).join('')}
       </div>
     </div>
   ` : '';
@@ -3192,35 +3653,7 @@ function modalDeleteWorkspace(w) {
   });
 }
 
-function modalEditSettings(wsId) {
-  (async () => {
-    let data;
-    try { data = await API.get(`/api/workspaces/${wsId}/settings`); }
-    catch (e) { toastErr(e.message); return; }
-    const body = el('div');
-    body.innerHTML = `<div class="dim" style="font-size:11.5px;margin-bottom:6px">${escapeHtml(data.path)}</div>`;
-    const ta = el('textarea', 'textarea textarea-code');
-    ta.rows = 16; ta.value = data.content || '{}';
-    body.appendChild(ta);
-    const cancel = btn('Annuler', 'btn-ghost');
-    const save = btn('Enregistrer', 'btn-primary');
-    // Garde anti-perte de saisie (croix/Escape/Annuler demandent confirmation
-    // si la textarea a ete modifiee sans sauvegarde).
-    const guard = makeDirtyGuard();
-    ta.addEventListener('input', guard.markDirty);
-    const { close, requestClose } = openModal({ title: 'settings.json', body, footer: [cancel, save], wide: true, confirmClose: guard.confirmClose });
-    guard.bind(close);
-    cancel.addEventListener('click', requestClose);
-    save.addEventListener('click', () => withBusy(save, async () => {
-      try { JSON.parse(ta.value); }
-      catch (e) { toastErr('JSON invalide : ' + e.message); return; }
-      try { await API.post(`/api/workspaces/${wsId}/settings`, { content: ta.value }); toastOk('Enregistré'); guard.markSaved(); close(); }
-      catch (e) { toastErr(e.message); }
-    }));
-  })();
-}
-
-function modalPermissions(wsId) {
+function modalPermissions(wsId, onSaved = null) {
   (async () => {
     let settings = {};
     try { settings = JSON.parse((await API.get(`/api/workspaces/${wsId}/settings`)).content) || {}; } catch (e) { console.warn(`[permissions] parse settings.json ws=${wsId} échoué :`, e.message); }
@@ -3259,7 +3692,7 @@ function modalPermissions(wsId) {
       const a = body.querySelector('[name=allow]').value.split('\n').map(s => s.trim()).filter(Boolean);
       const d = body.querySelector('[name=deny]').value.split('\n').map(s => s.trim()).filter(Boolean);
       const value = (a.length || d.length) ? { allow: a, deny: d } : null;
-      try { await API.post(`/api/workspaces/${wsId}/settings/permissions`, { value }); toastOk('Enregistré'); close(); }
+      try { await API.post(`/api/workspaces/${wsId}/settings/permissions`, { value }); toastOk('Enregistré'); close(); if (onSaved) onSaved(); }
       catch (e) { toastErr(e.message); }
     };
     save.addEventListener('click', () => withBusy(save, async () => {
@@ -3320,7 +3753,7 @@ function modalHooksErrorsViewer() {
   reload();
 }
 
-function modalHooks(wsId) {
+function modalHooks(wsId, onSaved = null) {
   (async () => {
     let current = {};
     if (wsId) {
@@ -3331,7 +3764,7 @@ function modalHooks(wsId) {
     const body = el('div');
     body.innerHTML = `
       <p class="muted" style="margin-top:0">JSON des hooks Claude Code. ${wsId ? 'Spécifique au workspace.' : 'Configuration globale.'}</p>
-      <div class="field"><textarea class="textarea textarea-code" name="hooks" rows="14">${escapeHtml(JSON.stringify(current, null, 2))}</textarea></div>
+      <div class="field" data-editor-host></div>
     `;
     // Zone de restauration depuis .bak (item D-2). Insérée sous l'éditeur,
     // peuplée async une fois la modale ouverte (n'affiche rien si pas de .bak).
@@ -3343,8 +3776,15 @@ function modalHooks(wsId) {
     const save = btn('Enregistrer', 'btn-primary');
     // Garde anti-perte de saisie.
     const guard = makeDirtyGuard();
-    const textarea = body.querySelector('[name=hooks]');
-    textarea.addEventListener('input', guard.markDirty);
+    // Editeur JSON maison : validation en direct, Enregistrer desactive si invalide.
+    const editor = createJsonEditor({
+      value: JSON.stringify(current, null, 2), rows: 16,
+      ariaLabel: wsId ? `Hooks du workspace ${wsId} (JSON)` : 'Hooks globaux (JSON)',
+      onChange: () => guard.markDirty(),
+      onSave: () => { if (!save.disabled) save.click(); },
+      onValidChange: (ok) => { save.disabled = !ok; save.title = ok ? '' : 'Corrige le JSON pour pouvoir enregistrer'; },
+    });
+    body.querySelector('[data-editor-host]').appendChild(editor.el);
     const { close, requestClose } = openModal({ title: wsId ? `Hooks · ${wsId}` : 'Hooks globaux', body, footer: [cancel, save], wide: true, confirmClose: guard.confirmClose });
     guard.bind(close);
     cancel.addEventListener('click', requestClose);
@@ -3384,22 +3824,22 @@ function modalHooks(wsId) {
             try {
               const resp = await API.post(restoreUrl, {});
               const restored = (resp && resp.hooks) || {};
-              textarea.value = JSON.stringify(restored, null, 2);
+              editor.setValue(JSON.stringify(restored, null, 2));
               guard.markSaved();
               toastOk('Version précédente restaurée');
               close();
             } catch (e) { toastErr(e.message); }
           }),
-          { danger: true }
+          { danger: true, confirmLabel: 'Restaurer' }
         );
       });
       box.appendChild(restoreBtn);
       restoreHost.appendChild(box);
     })();
     save.addEventListener('click', () => withBusy(save, async () => {
-      let hooks;
-      try { hooks = JSON.parse(body.querySelector('[name=hooks]').value); }
-      catch (e) { toastErr('JSON invalide : ' + e.message); return; }
+      const check = editor.validate();
+      if (!check.ok) { toastErr(`JSON invalide, ligne ${check.line} : ${check.msg}`); return; }
+      const hooks = check.value;
       // Miroir front du lint backend (item 3a) : chemin .sh relatif =
       // BLOQUANT (casserait toutes les sessions). Feedback immédiat sans
       // aller-retour réseau ; le backend refuse aussi par sécurité.
@@ -3425,6 +3865,7 @@ function modalHooks(wsId) {
           toastOk('Enregistré');
         }
         guard.markSaved(); close();
+        if (onSaved) onSaved();
       } catch (e) { toastErr(e.message); }
     }));
   })();
@@ -3664,8 +4105,86 @@ function modalEditFileItem(kind, scope, name) {
 /* ================================================================
    COMMAND PALETTE
    ================================================================ */
+/* ================================================================
+   PALETTE Ctrl+K (refonte 2026-10)
+   ----------------------------------------------------------------
+   Index local (aucune requete) : workspaces (etat de session), actions
+   (lancer / reprendre, sync, creer, matrice...), pages, styles, MCPs,
+   skills, templates, aide. Score : sous-chaine (bonus debut de mot) puis
+   initiales (« ha » -> Home Assistant) ; surlignage <mark> ; groupes
+   ordonnes par meilleur score. ARIA : dialog + combobox + listbox/option
+   (aria-activedescendant), focus restaure a la fermeture.
+   ================================================================ */
+function paletteItems() {
+  const items = [];
+  const go = (h) => () => { location.hash = h; };
+  for (const w of STATE.workspaces || []) {
+    const st = sessionState(w.id);
+    items.push({
+      g: 'Workspaces', t: w.label || w.id, d: w.id + (w.description ? '  ' + w.description : ''), gem: w,
+      r: st === 'running' ? '<span class="pill ok"><span class="sdot live"></span>En direct</span>'
+        : st === 'idle' ? '<span class="pill warn">Terminal ouvert</span>' : '',
+      run: go(`#/workspace/${w.id}`),
+    });
+  }
+  for (const w of STATE.workspaces || []) {
+    const st = sessionState(w.id);
+    if (st) items.push({ g: 'Actions', t: 'Reprendre ' + (w.label || w.id), d: 'Reprendre la dernière session Claude Code', ic: I.terminal, hidden: true, run: () => doResume(w, null) });
+    else items.push({ g: 'Actions', t: 'Lancer ' + (w.label || w.id), d: 'Ouvre Claude Code dans ce workspace', ic: I.play, hidden: true, run: () => doLaunch(w, null) });
+  }
+  items.push(
+    { g: 'Actions', t: 'Synchroniser tous les workspaces', d: 'Registre MCP vers chaque .mcp.json', ic: I.refresh, run: async () => {
+      try { const r = await API.post('/api/sync-all', {}); toastOk('Sync terminé pour ' + Object.keys(r.results || {}).length + ' workspace(s)'); warnHandEdited(collectHandEdited(r.results)); }
+      catch (e) { toastErr(e.message); }
+    } },
+    { g: 'Actions', t: 'Nouveau workspace', d: 'Créer depuis un template', ic: I.plus, run: () => modalNewWorkspace() },
+    { g: 'Actions', t: 'Nouveau MCP', d: 'Ajouter un serveur au registre', ic: I.plus, run: () => modalNewMCP() },
+    { g: 'Actions', t: 'Ouvrir la matrice MCPs', d: 'MCP × workspace', ic: I.grid, run: () => { setMcpViewMode('matrix'); if (location.hash === '#/mcps') route(); else location.hash = '#/mcps'; } },
+    { g: 'Actions', t: 'Adopter un workspace existant', d: 'Enregistrer un dossier déjà présent sur le disque', ic: I.folder, hidden: true, run: () => modalRegisterExisting() },
+    { g: 'Actions', t: 'Importer la config Claude', d: 'MCPs et projets de ~/.claude/', ic: I.download, hidden: true, run: () => modalSetupWizard() },
+  );
+  for (const n of NAV_ITEMS) {
+    if (n.section) continue;
+    items.push({ g: 'Aller à', t: n.label, ic: n.icon, k: n.key ? 'g ' + n.key : '', run: go(n.route) });
+  }
+  for (const t of (typeof THEMES !== 'undefined' ? THEMES : [])) {
+    items.push({ g: 'Style', t: 'Style : ' + t.label, d: t.desc, ic: I.palette, hidden: true, run: () => applyTheme(t.id) });
+  }
+  for (const m of STATE.mcps || []) {
+    items.push({ g: 'MCPs', t: m.name || m.id, d: `${m.id}  ${m.transport || 'stdio'}`, ic: (m.transport === 'http' || m.transport === 'sse') ? I.ext : I.terminal, hidden: true,
+      run: () => { STATE.filter.mcp = m.id; if (location.hash === '#/mcps') route(); else location.hash = '#/mcps'; } });
+  }
+  for (const s of STATE.skills || []) {
+    items.push({ g: 'Skills', t: s.name || s.id, d: s.description || '', ic: I.sparkle, hidden: true, run: go('#/skills') });
+  }
+  for (const t of STATE.templates || []) {
+    items.push({ g: 'Templates', t: t.label || t.id, d: t.description || t.id, ic: I.layers, hidden: true, run: go('#/templates') });
+  }
+  return items;
+}
+
+// Score d'un libelle : null si pas de correspondance, sinon {s, h} (html surligne).
+function paletteScore(t, q) {
+  if (!q) return { s: 1, h: escapeHtml(t) };
+  const tl = t.toLowerCase();
+  const i = tl.indexOf(q);
+  if (i >= 0) {
+    const start = i === 0 || /[\s\-_:./]/.test(tl[i - 1]);
+    return { s: 100 - Math.min(i, 60) + (start ? 20 : 0), h: escapeHtml(t.slice(0, i)) + '<mark>' + escapeHtml(t.slice(i, i + q.length)) + '</mark>' + escapeHtml(t.slice(i + q.length)) };
+  }
+  // Initiales : « ha » trouve « Home Assistant ».
+  const words = [...t.matchAll(/[^\s\-_]+/g)];
+  if (q.length >= 2 && words.length >= q.length && words.slice(0, q.length).every((w, k) => w[0][0].toLowerCase() === q[k])) {
+    let h = ''; let last = 0;
+    words.slice(0, q.length).forEach(w => { h += escapeHtml(t.slice(last, w.index)) + '<mark>' + escapeHtml(w[0][0]) + '</mark>'; last = w.index + 1; });
+    return { s: 120, h: h + escapeHtml(t.slice(last)) };
+  }
+  return null;
+}
+
 function openPalette() {
   const root = $('#palette-root');
+  if (root.querySelector('.palette')) { root.querySelector('input').focus(); return; }
   root.innerHTML = '';
   const overlay = el('div', 'palette-overlay');
   const palette = el('div', 'palette');
@@ -3673,89 +4192,85 @@ function openPalette() {
   palette.setAttribute('aria-modal', 'true');
   palette.setAttribute('aria-label', 'Recherche et actions rapides');
   palette.innerHTML = `
-    <input class="palette-input" type="text" placeholder="Recherche · workspaces · MCPs · skills · templates · aide…" />
-    <div class="palette-list"></div>
-    <div class="palette-hint"><span><kbd>↑</kbd> <kbd>↓</kbd> naviguer</span><span><kbd>↵</kbd> ouvrir</span><span><kbd>Esc</kbd> fermer</span></div>
-  `;
+    <div class="pal-in">${I.search}<input class="palette-input" type="text" role="combobox" aria-expanded="true" aria-controls="pal-list" aria-autocomplete="list" aria-label="Rechercher un workspace, un MCP, une action, un style" placeholder="Workspace, MCP, action, style…" autocomplete="off" spellcheck="false"><kbd class="k">Échap</kbd></div>
+    <div class="pal-list palette-list" id="pal-list" role="listbox" aria-label="Résultats"></div>
+    <div class="pal-foot palette-hint"><span><kbd class="k">↑</kbd><kbd class="k">↓</kbd> naviguer</span><span><kbd class="k">Entrée</kbd> exécuter</span><span><kbd class="k">Échap</kbd> fermer</span><span style="margin-left:auto"><kbd class="k">g</kbd> puis <kbd class="k">h</kbd>/<kbd class="k">m</kbd>… pour naviguer partout</span></div>`;
   overlay.appendChild(palette);
   root.appendChild(overlay);
   const input = palette.querySelector('input');
-  const list = palette.querySelector('.palette-list');
-  let active = 0; let results = [];
+  const list = palette.querySelector('.pal-list');
+  const all = paletteItems();
+  let res = [];
+  let sel = 0;
 
-  // Sauvegarde du focus precedent pour le restaurer a la fermeture (le
-  // declencheur est en general le bouton #open-palette).
+  // Sauvegarde du focus precedent pour le restaurer a la fermeture.
   const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const close = () => {
     root.innerHTML = '';
-    document.removeEventListener('keydown', onKey);
+    document.removeEventListener('keydown', onKey, true);
     const restore = (previouslyFocused && document.body.contains(previouslyFocused))
-      ? previouslyFocused : $('#open-palette');
+      ? previouslyFocused : $('#topbar-search');
     if (restore) { try { restore.focus(); } catch { /* noop */ } }
   };
-  const goto = (r) => {
-    if (r.route) { location.hash = r.route; }
-    else if (r.kind === 'action') { r.action(); }
-    close();
-  };
-  const render = () => {
-    list.innerHTML = '';
-    if (!results.length) {
-      list.innerHTML = '<div class="palette-empty">Aucun résultat</div>';
+  const runItem = (it) => { close(); if (it) it.run(); };
+
+  const draw = () => {
+    const q = input.value.trim().toLowerCase();
+    let scored = all.map(it => {
+      if (!q && it.hidden) return null;
+      const r = paletteScore(it.t, q) || (q.length >= 3 && (it.d || '').toLowerCase().includes(q) ? { s: 1, h: escapeHtml(it.t) } : null);
+      return r ? { ...it, ...r } : null;
+    }).filter(Boolean);
+    if (q && typeof helpPaletteEntries === 'function') {
+      for (const h of helpPaletteEntries(q)) scored.push({ g: 'Aide', t: h.label, h: escapeHtml(h.label), s: 2, ic: I.book, run: () => { location.hash = h.route; } });
+    }
+    const best = {};
+    scored.forEach(r => { best[r.g] = Math.max(best[r.g] || 0, r.s); });
+    const order = q ? Object.keys(best).sort((a, b) => best[b] - best[a]) : ['Workspaces', 'Actions', 'Aller à'];
+    res = order.flatMap(g => scored.filter(r => r.g === g).sort((a, b) => b.s - a.s).slice(0, q ? 8 : 6));
+    sel = Math.min(sel, Math.max(0, res.length - 1));
+    if (!res.length) {
+      list['innerHTML'] = `<div class="pal-empty" role="presentation">Rien ne correspond à « ${escapeHtml(input.value)} ».</div>`;
+      input.removeAttribute('aria-activedescendant');
       return;
     }
-    let activeEl = null;
-    results.forEach((r, i) => {
-      const item = el('div', 'palette-item' + (i === active ? ' active' : ''));
-      item.innerHTML = `<span class="kind">${escapeHtml(r.kind)}</span><span class="label">${escapeHtml(r.label)}</span>`;
-      item.addEventListener('click', () => goto(r));
-      list.appendChild(item);
-      if (i === active) activeEl = item;
+    let g = null; let html = '';
+    res.forEach((it, i) => {
+      if (it.g !== g) { g = it.g; html += `<div class="pal-g" role="presentation">${escapeHtml(g)}</div>`; }
+      html += `<div class="pi" role="option" id="pal-opt-${i}" data-i="${i}" aria-selected="${i === sel}">`
+        + (it.gem ? wsGem(it.gem) : `<span class="pic">${it.ic || ''}</span>`)
+        + `<b>${it.h}</b>${it.d ? `<span class="pd">${escapeHtml(it.d)}</span>` : ''}`
+        + `<span class="pr">${it.r || ''}${it.k ? `<kbd class="k">${escapeHtml(it.k)}</kbd>` : ''}<span class="ret" aria-hidden="true">${I.ret}</span></span></div>`;
     });
-    // Garde l'item actif dans le viewport lors de la navigation clavier.
-    if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+    list['innerHTML'] = html;
+    input.setAttribute('aria-activedescendant', 'pal-opt-' + sel);
   };
-  const search = debounce(async (q) => {
-    if (!q) {
-      results = [
-        { kind: 'page', label: 'Accueil', route: '#/' },
-        { kind: 'page', label: 'MCPs', route: '#/mcps' },
-        { kind: 'page', label: 'Plugins', route: '#/plugins' },
-        { kind: 'page', label: 'Templates', route: '#/templates' },
-        { kind: 'page', label: 'Outils', route: '#/tools' },
-        { kind: 'page', label: 'Aide', route: '#/aide' },
-        { kind: 'action', label: 'Nouveau workspace', action: () => modalNewWorkspace() },
-        { kind: 'action', label: 'Nouveau MCP', action: () => modalNewMCP() },
-        { kind: 'action', label: 'Sync tous les workspaces', action: async () => { try { await API.post('/api/sync-all', {}); toastOk('Sync OK'); } catch (e) { toastErr(e.message); } } },
-      ];
-      active = 0; render(); return;
-    }
-    // Entrées d'aide (lot F item 2) : recherche locale dans les topics
-    // d'aide, fusionnée avec la recherche serveur. Calculée hors try pour
-    // rester disponible même si /api/search échoue (offline, etc.).
-    const helpHits = (typeof helpPaletteEntries === 'function') ? helpPaletteEntries(q) : [];
-    try {
-      const r = await API.get(`/api/search?q=${encodeURIComponent(q)}`);
-      results = (r.results || []).map(x => ({ kind: x.kind, label: x.label || x.id, route: x.route }));
-    } catch { results = []; }
-    // L'aide vient en fin de liste : la recherche globale (workspaces, MCPs…)
-    // reste prioritaire, l'aide complète sans la noyer.
-    results = results.concat(helpHits);
-    active = 0; render();
-  }, 120);
+  const move = (d) => {
+    if (!res.length) return;
+    sel = (sel + d + res.length) % res.length;
+    list.querySelectorAll('.pi').forEach(p => p.setAttribute('aria-selected', String(+p.dataset.i === sel)));
+    const elSel = list.querySelector('#pal-opt-' + sel);
+    if (elSel) elSel.scrollIntoView({ block: 'nearest' });
+    input.setAttribute('aria-activedescendant', 'pal-opt-' + sel);
+  };
 
-  input.addEventListener('input', () => search(input.value));
-  search('');
-
+  input.addEventListener('input', () => { sel = 0; draw(); });
   const onKey = (e) => {
-    if (e.key === 'Escape') return close();
-    if (e.key === 'ArrowDown') { active = Math.min(active + 1, results.length - 1); render(); e.preventDefault(); }
-    if (e.key === 'ArrowUp') { active = Math.max(active - 1, 0); render(); e.preventDefault(); }
-    if (e.key === 'Enter' && results[active]) { goto(results[active]); }
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+    else if (e.key === 'Enter') { e.preventDefault(); runItem(res[sel]); }
+    else if (e.key === 'Tab') { e.preventDefault(); input.focus(); }
   };
-  document.addEventListener('keydown', onKey);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  setTimeout(() => input.focus(), 50);
+  document.addEventListener('keydown', onKey, true);
+  list.addEventListener('mousemove', (e) => {
+    const p = e.target.closest('.pi');
+    if (p && +p.dataset.i !== sel) { sel = +p.dataset.i; move(0); }
+  });
+  list.addEventListener('click', (e) => { const p = e.target.closest('.pi'); if (p) runItem(res[+p.dataset.i]); });
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) close(); });
+  draw();
+  input.focus();
 }
 
 /* ================================================================
@@ -3768,7 +4283,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') e.target.blur();
     return;
   }
-  if (e.key === '/' || (e.key === 'k' && (e.metaKey || e.ctrlKey))) {
+  if (e.key === '/' || (e.key === 'k' && (e.metaKey || e.ctrlKey) && !e.altKey)) {
     e.preventDefault(); openPalette(); return;
   }
   // Raccourcis simple-touche n/m/s retirés : ils se déclenchaient sur
@@ -3799,7 +4314,7 @@ const TOURS = {
       title: '📁 Workspaces — tes projets Claude',
       body: `<p>Chaque workspace = un projet Claude Code (un dossier avec son <code class="mono">CLAUDE.md</code>, ses MCPs scopés, ses skills).</p>
         <p>D'ici, tu lances <em>claude</em> directement dans le bon dossier d'un clic.</p>`,
-      target: '.workspace-grid, .empty', navigate: '#/',
+      target: '#ws-host, .empty', navigate: '#/',
     },
     {
       title: '➕ Créer un workspace',
@@ -3831,13 +4346,13 @@ const TOURS = {
       target: '.page', navigate: '#/templates',
     },
     {
-      title: '🛡️ Sanity check + Journal sur la home',
-      body: `<p>De retour à l'accueil. La colonne droite contient :</p>
+      title: '🛡️ Santé + Journal sur la home',
+      body: `<p>De retour à l'accueil. La colonne Activité contient :</p>
         <ul style="margin:6px 0;padding-left:18px;font-size:13px">
-          <li><strong>Sanity check</strong> : signale les configs MCP cassées ou desync.</li>
+          <li><strong>Santé</strong> : signale les configs MCP cassées, désynchronisées ou inutilisées.</li>
           <li><strong>Journal</strong> : tes notes rapides projet par projet.</li>
         </ul>`,
-      target: '.home-grid > div:nth-child(2)', navigate: '#/',
+      target: '.rail', navigate: '#/',
     },
     {
       title: '🎯 Tu sais l\'essentiel',

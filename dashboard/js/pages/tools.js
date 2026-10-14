@@ -384,27 +384,7 @@ DB_PASSWORD=mon_mot_de_passe</pre>
 // serait pas posé et le serveur renverrait 403. Toujours déclenché par un clic
 // utilisateur explicite, jamais automatiquement.
 async function downloadEnvPlainBackup() {
-  const r = await fetch('/api/env/export-plain', { headers: { 'X-Nebula-XHR': '1' } });
-  if (!r.ok) {
-    let msg = `HTTP ${r.status}`;
-    try { const j = await r.json(); if (j.error) msg = j.error; } catch { /* corps non-JSON */ }
-    throw new Error(msg);
-  }
-  const blob = await r.blob();
-  // Nom de fichier depuis Content-Disposition, fallback raisonnable.
-  let filename = 'env.local.clair.txt';
-  const cd = r.headers.get('content-disposition') || '';
-  const m = cd.match(/filename="?([^"]+)"?/);
-  if (m) filename = m[1];
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Libère l'URL objet après un court délai (laisse le temps au download).
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  await API.download('GET', '/api/env/export-plain', 'env.local.clair.txt');
 }
 
 // Modale d'activation du chiffrement DPAPI avec filet de sécurité intégré :

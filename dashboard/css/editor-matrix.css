@@ -1,0 +1,329 @@
+/* ================================================================
+   Nebula - Editeur JSON + Matrice MCP x workspace
+   ----------------------------------------------------------------
+   Charge APRES app.css. N'utilise QUE les variables du design system
+   (--bg, --surface-*, --border*, --text*, --accent*, --ok, --warn, --err,
+   --info, --font-mono, --r-*, --sp-*, --d-*, --ease) : aucune couleur
+   codee en dur, pour rester valide dans tous les themes (existants et a
+   venir). Les teintes derivees passent par color-mix() sur ces variables.
+
+   Contenu :
+   1. Editeur JSON (js/json-editor.js)       .jse*
+   2. Modales empilees / confirmation        .confirm-text
+   3. Bascule Cartes | Matrice               .mx-view
+   4. Matrice MCP x workspace                .mx*  (js/pages/mcps-matrix.js)
+   ================================================================ */
+
+/* === 1. EDITEUR JSON =========================================== */
+.jse { display: flex; flex-direction: column; gap: var(--sp-2); min-width: 0; }
+
+.jse-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--sp-3); min-height: 30px;
+}
+.jse-status {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  font-size: 12px; font-weight: 500; color: var(--text-muted);
+}
+.jse-status[data-state="err"] { color: var(--err); }
+.jse-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ok); flex: none;
+}
+.jse-status[data-state="empty"] .jse-dot { background: var(--text-dim); }
+.jse-status[data-state="err"] .jse-dot { background: var(--err); }
+.jse-count { color: var(--text-dim); font-weight: 400; }
+
+.jse-ed {
+  position: relative; display: flex;
+  min-height: 120px; max-height: 80vh;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  overflow: hidden;
+  resize: vertical;
+  transition: border-color var(--d-fast) var(--ease), box-shadow var(--d-fast) var(--ease);
+}
+.jse-ed:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.jse-ed:has(.jse-ta[aria-invalid="true"]) { border-color: var(--err); }
+
+/* Mode « fill » : l'editeur occupe la hauteur disponible de son parent flex
+   (explorateur de fichiers du workspace). */
+.jse-fill { flex: 1; min-height: 0; }
+.jse-fill .jse-ed { flex: 1; min-height: 240px; max-height: none; resize: none; }
+/* Editeur de fichier des modales Templates / Skills (mountFileEditor). */
+.tpl-pane > .jse { padding: var(--sp-2) var(--sp-3); }
+
+/* Goutiere : numeros de ligne, decales en transform par le JS. */
+.jse-gut {
+  position: relative; flex: none; overflow: hidden;
+  width: calc(var(--jse-digits, 2) * 1ch + 22px);
+  background: var(--surface-2);
+  border-right: 1px solid var(--border);
+  color: var(--text-dim);
+  font-family: var(--font-mono); font-size: 12.5px;
+  line-height: var(--jse-lh, 20px);
+  text-align: right;
+  user-select: none;
+}
+.jse-gut-in { position: absolute; top: 0; left: 0; right: 0; padding-right: 10px; will-change: transform; }
+.jse-gut-in > div { height: var(--jse-lh, 20px); font-variant-numeric: tabular-nums; }
+.jse-gut-in > div.bad { color: var(--err); font-weight: 700; }
+
+.jse-pane { position: relative; flex: 1; min-width: 0; }
+
+/* La textarea et le <pre> partagent EXACTEMENT la meme typographie : toute
+   divergence (ligatures, crenage, interligne) decalerait le curseur. */
+.jse-ta, .jse-hl-in {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: var(--jse-lh, 20px);
+  letter-spacing: 0;
+  font-weight: 400;
+  font-variant-ligatures: none;
+  font-feature-settings: normal;
+  font-kerning: none;
+  text-rendering: auto;
+  tab-size: 2;
+  white-space: pre;
+  word-spacing: 0;
+}
+.jse-hl { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.jse-hl-in {
+  position: absolute; top: 0; left: 0; margin: 0;
+  padding: 0 var(--jse-pad-x, 12px);
+  color: var(--text);
+  background: none; border: 0;
+  will-change: transform;
+}
+.jse-ta {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  margin: 0; padding: var(--jse-pad-y, 10px) var(--jse-pad-x, 12px);
+  border: 0; outline: none; resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  overflow: auto;
+  box-shadow: none;
+}
+.jse-ta:focus { box-shadow: none; border: 0; }
+.jse-ta::selection { background: color-mix(in srgb, var(--accent) 38%, transparent); color: transparent; }
+
+.jse-errline {
+  display: none; position: absolute; left: 0; right: 0; top: 0;
+  height: var(--jse-lh, 20px);
+  background: var(--err-soft);
+  box-shadow: inset 3px 0 0 var(--err);
+  pointer-events: none;
+}
+
+/* Jetons. Chaines : melange --ok / --text pour tenir AA aussi sur fond clair. */
+/* Couleurs de syntaxe : tokens --syn-* (redefinis par theme, defauts
+   derives des couleurs du theme, cf. app.css :root). */
+.jse-k { color: var(--syn-key); }
+.jse-s { color: var(--syn-str); }
+.jse-n { color: var(--syn-num); }
+.jse-b { color: var(--syn-kw); }
+.jse-p { color: var(--syn-punc); }
+
+.jse-msg {
+  min-height: 20px; font-size: 12.5px; color: var(--err); font-weight: 500;
+  visibility: hidden;
+}
+.jse-msg.show { visibility: visible; }
+/* Mode non bloquant (createJsonEditor({blocking:false}), templates/skills a
+   placeholders {{...}}) : diagnostic en couleur d'avertissement. */
+.jse-status[data-state="warn"] { color: var(--warn); }
+.jse-status[data-state="warn"] .jse-dot { background: var(--warn); }
+.jse-nonblocking .jse-msg { color: var(--warn); }
+.jse-nonblocking .jse-errline { background: var(--warn-soft); box-shadow: inset 3px 0 0 var(--warn); }
+.jse-hint { font-size: 11.5px; color: var(--text-dim); }
+.jse-hint kbd, .jse-hint-kbd {
+  font-family: var(--font-mono); font-size: 10.5px;
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text-muted);
+}
+/* Annonce lecteur d'ecran : masquee visuellement, lue via role="status". */
+.jse-sr, .mx-sr {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+/* Mode contraste renforce : on revele le texte natif de la textarea et on
+   masque la couche coloree (sinon texte invisible ou double). */
+@media (forced-colors: active) {
+  .jse-ta { color: CanvasText; caret-color: CanvasText; }
+  .jse-hl { display: none; }
+  .jse-ed { border-color: CanvasText; }
+}
+
+/* === 2. CONFIRMATION (retours a la ligne) ====================== */
+.confirm-text { white-space: pre-line; overflow-wrap: anywhere; }
+
+/* === 3. BASCULE CARTES | MATRICE =============================== */
+.mx-view { margin-left: auto; }
+.mx-view button { display: inline-flex; align-items: center; gap: 6px; }
+.mx-view button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mx-sort { max-width: 190px; }
+
+/* === 4. MATRICE MCP x WORKSPACE ================================ */
+.mx-wrap { display: flex; flex-direction: column; gap: var(--sp-3); }
+.mx-legend {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-4);
+  font-size: 12px; color: var(--text-muted);
+}
+.mx-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.mx-legend .mx-cell { pointer-events: none; width: 16px; height: 16px; }
+.mx-legend .mx-cell::after { width: 4px; height: 8px; }
+
+.mx-scroll {
+  position: relative; overflow: auto;
+  scroll-padding: 150px 280px 44px 280px;
+  max-height: calc(100vh - 300px); min-height: 240px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+.mx {
+  border-collapse: separate; border-spacing: 0;
+  min-width: 100%; width: max-content;
+  font-size: 13px;
+}
+.mx th, .mx td { padding: 0; border-bottom: 1px solid var(--border); background: var(--surface-1); }
+.mx tbody tr:last-child > * { border-bottom: 0; }
+
+/* En-tetes de colonnes : etiquettes verticales, collantes en haut. */
+.mx thead th {
+  position: sticky; top: 0; z-index: 3;
+  height: 148px; vertical-align: bottom; text-align: center;
+  border-bottom: 1px solid var(--border-strong);
+  font-weight: 500; color: var(--text-muted);
+}
+.mx-colhead { min-width: 40px; max-width: 40px; width: 40px; }
+.mx-colhead > span {
+  display: inline-block; padding: var(--sp-2) 0;
+  writing-mode: vertical-rl; transform: rotate(180deg);
+  max-height: 146px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono); font-size: 11.5px;
+}
+.mx-corner {
+  position: sticky; left: 0; z-index: 5 !important;
+  min-width: 270px; max-width: 270px; text-align: left !important;
+  padding: var(--sp-3) var(--sp-4) !important;
+  font-size: 12px; color: var(--text-dim) !important;
+}
+.mx-corner strong { color: var(--text-muted); font-weight: 600; }
+
+/* En-tetes de lignes : collantes a gauche. */
+.mx-rowhead {
+  position: sticky; left: 0; z-index: 2;
+  min-width: 270px; max-width: 270px; text-align: left; font-weight: 400;
+  border-right: 1px solid var(--border);
+}
+.mx-rh { display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-2) 0 var(--sp-4); height: 40px; }
+.mx-status { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+.mx-status[data-s="off"] { background: var(--text-dim); }
+.mx-status[data-s="warn"] { background: var(--warn); }
+.mx-name {
+  flex: 1; min-width: 0; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mx-rh .badge { flex: none; }
+.mx-rcount {
+  flex: none; min-width: 20px; text-align: right;
+  font-variant-numeric: tabular-nums; font-size: 12px; color: var(--text-dim);
+}
+.mx-edit { width: 26px; height: 26px; flex: none; opacity: .55; }
+.mx-edit svg { width: 14px; height: 14px; }
+.mx tr:hover .mx-edit, .mx tr:focus-within .mx-edit, .mx-edit:focus-visible { opacity: 1; }
+.mx-edit:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Cases. */
+.mx-c { text-align: center; height: 40px; min-width: 40px; }
+.mx-cell {
+  position: relative; width: 24px; height: 24px;
+  border-radius: var(--r-sm);
+  border: 1.5px solid var(--border-strong);
+  background: transparent; color: var(--text-on-accent);
+  cursor: pointer; padding: 0; vertical-align: middle;
+  transition: background var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease);
+}
+.mx-cell:hover { border-color: var(--accent); }
+.mx-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mx-cell[aria-pressed="true"] { background: var(--accent-strong); border-color: var(--accent-strong); }
+.mx-cell[aria-pressed="true"]::after {
+  content: ""; position: absolute; left: 50%; top: 46%;
+  width: 6px; height: 11px;
+  border: solid currentColor; border-width: 0 2px 2px 0;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+/* Modification en attente (differe de l'etat enregistre) : anneau pointille. */
+.mx-cell.is-pending { outline: 2px dashed var(--warn); outline-offset: 2px; }
+.mx-cell.is-fail { outline: 2px solid var(--err); outline-offset: 2px; }
+.mx-cell:disabled { cursor: progress; opacity: .6; }
+
+/* Survol en croix (ligne + colonne), jamais seul indicateur : l'etat est
+   aussi porte par la case pleine + coche et par aria-pressed. */
+.mx tr.is-hot > th, .mx tr.is-hot > td,
+.mx th.is-hotc, .mx td.is-hotc {
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-1));
+}
+
+/* Groupes (utilises / sans workspace). */
+.mx-group > th {
+  position: static; text-align: left; height: 30px;
+  padding: 0 var(--sp-4); background: var(--surface-2);
+  font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--text-dim);
+}
+.mx-group > th > span { position: sticky; left: var(--sp-4); }
+
+/* Pied de colonne : totaux. */
+.mx tfoot td, .mx tfoot th {
+  position: sticky; bottom: 0; z-index: 3;
+  height: 36px; text-align: center;
+  border-top: 1px solid var(--border-strong); border-bottom: 0;
+  font-size: 12px; font-weight: 600; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.mx tfoot th { left: 0; z-index: 5; text-align: left; padding-left: var(--sp-4); color: var(--text-dim); font-weight: 500; }
+
+.mx-empty { padding: var(--sp-8); text-align: center; color: var(--text-muted); }
+
+/* Bandeau flottant « N modifications en attente ». */
+.mx-bar {
+  position: fixed; left: 50%; bottom: var(--sp-6); z-index: 90;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: var(--sp-3);
+  max-width: calc(100vw - 2 * var(--sp-4));
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+  font-size: 13px; color: var(--text);
+  animation: mx-bar-in var(--d-norm) var(--ease);
+}
+.mx-bar[data-state="error"] { border-color: var(--err); }
+.mx-bar-msg { min-width: 0; }
+.mx-bar-msg small { display: block; color: var(--text-muted); font-size: 12px; }
+.mx-bar[data-state="error"] .mx-bar-msg strong { color: var(--err); }
+@keyframes mx-bar-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .mx-bar { animation: none; }
+}
+@media (max-width: 720px) {
+  .mx-corner, .mx-rowhead { min-width: 190px; max-width: 190px; }
+  .mx-rh .badge { display: none; }
+}
+@media (forced-colors: active) {
+  .mx-cell { border-color: ButtonText; }
+  .mx-cell[aria-pressed="true"] { background: Highlight; border-color: Highlight; color: HighlightText; }
+  .mx-cell.is-pending { outline-color: Highlight; }
+}

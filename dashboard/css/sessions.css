@@ -1,0 +1,34 @@
+/* ================================================================
+   Sessions actives : etat running vs idle (« Terminal ouvert »)
+   ----------------------------------------------------------------
+   Les marqueurs sont generes par liveMarker() (js/router.js) dans un
+   wrapper display:contents pour ne pas alterer la mise en page des
+   dots existants (.featured-live, .ws-row-live, .ws-title-live,
+   .workspace-live-dot). L'etat idle = dot gris fixe (pas de pulse)
+   + badge discret.
+   ================================================================ */
+.ws-live-wrap,
+.ws-session-actions { display: contents; }
+
+.featured-live.is-idle,
+.ws-row-live.is-idle,
+.ws-title-live.is-idle,
+.workspace-live-dot.is-idle {
+  animation: none;
+  background: var(--text-dim, #888);
+  color: var(--text-dim, #888);
+  box-shadow: none;
+}
+
+.ws-idle-badge {
+  display: inline-flex; align-items: center;
+  margin-left: 6px; padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  font-size: 10.5px; font-weight: 500; line-height: 1.5;
+  color: var(--text-muted, #999);
+  white-space: nowrap; vertical-align: middle;
+}
+/* Sur la card grille, le dot est en position absolue : le badge, lui,
+   suit le flux (avant la rangee d'actions). */
+.workspace-card > .ws-live-wrap > .ws-idle-badge { margin: 0; align-self: flex-start; }

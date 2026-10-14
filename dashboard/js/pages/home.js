@@ -1,41 +1,68 @@
 /* ================================================================
-   Nebula - Page Home (Accueil)
+   Nebula - Page Home (Accueil) -- refonte 2026-10
    ----------------------------------------------------------------
-   renderHome : KPI row + bandeau quickstart + grid (workspaces, sanity, journal).
+   renderHome : en-tete (phrase de synthese) + KPI + « En cours » (cartes
+   running / « Terminal ouvert ») + tableau ou grille des workspaces
+   (colonne Etat, tris, bascule memorisee) + colonne Activite (dernieres
+   sessions, Sante, Journal).
    buildHomeQuickstart : bandeau d'onboarding affiche tant que la
    checklist 6/6 n'est pas complete.
-   workspaceCard : card d'un workspace (dot live, actions Lancer/Stop/Detail).
-   loadSanity : panneau de sanity check (registre vs .mcp.json par workspace).
-   loadJournal : 8 dernieres entrees du journal.
+   liveCard / workspaceRow / workspaceCard : re-rendus cibles par le
+   polling des sessions (router.js refreshSessionNodes, [data-ws-card]).
+   loadSanity : bloc Sante (sanity-check serveur + controles calcules
+   cote client depuis STATE : workspaces inconnus, MCPs inutilises).
+   loadJournal : dernieres entrees du journal.
 
-   Dependances : STATE, API, safe, escapeHtml, fmtDate, el, btn, I.*,
-   setBreadcrumbs, setTopbarActions, toastOk, toastErr, confirmDialog, route.
+   Dependances : STATE, API, safe, escapeHtml, fmt*, el, btn, I.*, wsGem,
+   setBreadcrumbs, setTopbarActions, toastOk, toastErr, confirmDialog, route,
+   wsStateMarker, sessionState, sessionSince (router.js).
    Forward-refs (resolus au runtime via global scope) : modalNewWorkspace,
    modalSetupWizard, modalRegisterExisting, resetOnboarded, startFirstRunWizard.
 
-   Ref : CM-2 batch 5, refactor 2026-05-13.
+   Ref : CM-2 batch 5, refactor 2026-05-13 ; refonte graphique 2026-10.
    ================================================================ */
 'use strict';
 
-// Collecte les ids de workspaces dont le .mcp.json avait été édité à la main
-// (drapeau `hand_edited` posé par sync_workspace_mcps). `results` = map
-// {ws_id: {hand_edited?, ...}} renvoyée par /api/sync-all.
+// Collecte les workspaces dont le .mcp.json avait été édité à la main
+// (drapeau `hand_edited`) ou contient des serveurs hors registre conservés
+// (`preserved`), tels que renvoyés par sync_workspace_mcps. `results` = map
+// {ws_id: {hand_edited?, preserved?, ...}} renvoyée par /api/sync-all.
+// Retourne [{ws, handEdited, preserved: [...]}].
 function collectHandEdited(results) {
   return Object.entries(results || {})
-    .filter(([, r]) => r && r.hand_edited)
-    .map(([ws]) => ws);
+    .map(([ws, r]) => syncNotice(ws, r))
+    .filter(Boolean);
 }
 
-// Avertit (non bloquant) que des .mcp.json ont été modifiés hors Nebula et
-// viennent d'être remplacés par la régénération depuis le registre. Le registre
-// est la source de vérité : il faut éditer le registre, pas le fichier.
-function warnHandEdited(wsIds) {
-  if (!wsIds || !wsIds.length) return;
-  const list = wsIds.join(', ');
-  toast(
-    `.mcp.json modifié hors Nebula (${list}) -- édite le registre, pas le fichier ; ta modif manuelle a été remplacée.`,
-    'info', 8000
-  );
+// Normalise la réponse d'une sync unitaire (POST /sync-mcps) ; null si rien
+// à signaler.
+function syncNotice(ws, r) {
+  if (!r) return null;
+  const preserved = Array.isArray(r.preserved) ? r.preserved : [];
+  if (!r.hand_edited && !preserved.length) return null;
+  return { ws, handEdited: !!r.hand_edited, preserved };
+}
+
+// Avertit (non bloquant) après une sync. La sync est NON destructive : les
+// serveurs ajoutés à la main (hors registre) sont conservés tels quels ; seuls
+// les serveurs gérés par Nebula sont régénérés depuis le registre (source de
+// vérité). `notices` = sortie de collectHandEdited / [syncNotice(...)].
+function warnHandEdited(notices) {
+  const list = (notices || []).filter(Boolean);
+  if (!list.length) return;
+  const parts = list.map(n => {
+    const kept = n.preserved.length
+      ? `serveurs hors registre conservés : ${n.preserved.join(', ')}`
+      : 'aucun serveur hors registre';
+    return n.handEdited
+      ? `${n.ws} (modifié hors Nebula ; serveurs Nebula régénérés depuis le registre, ${kept})`
+      : `${n.ws} (${kept})`;
+  });
+  const anyEdited = list.some(n => n.handEdited);
+  const tail = anyEdited
+    ? ' -- pour changer un serveur Nebula, édite le registre, pas le fichier.'
+    : '';
+  toast(`.mcp.json : ${parts.join(' ; ')}${tail}`, 'info', 10000);
 }
 
 // Bandeau "Mise en route" sur Home -- affiche tant que la checklist n'est pas complete.
@@ -69,7 +96,7 @@ function buildHomeQuickstart() {
   card['innerHTML'] = `
     <div class="home-quickstart-head">
       <div>
-        <div class="home-quickstart-title">🚀 Mise en route — ${doneCount} / ${steps.length}</div>
+        <div class="home-quickstart-title">🚀 Mise en route : ${doneCount} / ${steps.length}</div>
         <div class="home-quickstart-sub">Continue la configuration : <strong>${escapeHtml(nextStep.label)}</strong></div>
       </div>
       <div class="home-quickstart-actions"></div>
@@ -90,6 +117,27 @@ function buildHomeQuickstart() {
   return card;
 }
 
+// --- Etat de session (rang de tri) -------------------------------------
+const _homeStateRank = (id) => {
+  const st = sessionState(id);
+  return st === 'running' ? 0 : st === 'idle' ? 1 : 2;
+};
+const _wsStats = (id) => (STATE.stats || {})[id] || {};
+const _wsMcpIds = (id) => ((STATE.wsMcps || {})[id] || { active: [] }).active || [];
+const _isWild = (m) => { const w = m.workspaces || []; return w.includes('*') || w.includes('all'); };
+
+// Phrase de synthese de l'en-tete (texte, valeurs echappees).
+function homeSentence() {
+  const ids = Object.keys(STATE.activeSessions || {}).filter(id => STATE.workspaces.some(w => w.id === id));
+  const running = ids.filter(id => sessionState(id) === 'running').length;
+  const idle = ids.length - running;
+  const nW = STATE.workspaces.length;
+  const nM = STATE.mcps.length;
+  return `${nW} workspace${nW > 1 ? 's' : ''}, ${nM} MCP${nM > 1 ? 's' : ''}. `
+    + (running ? `<b>${running === 1 ? 'Une session tourne' : running + ' sessions tournent'}</b>` : 'Aucune session ne tourne')
+    + (idle ? `, ${idle === 1 ? 'un terminal est resté ouvert' : idle + ' terminaux sont restés ouverts'}.` : '.');
+}
+
 async function renderHome() {
   // Bug #14 : capture du jeton de rendu (voir _routeToken, js/router.js).
   // renderHome await des fetchs (stats + sanity) avant d'attacher la page
@@ -99,99 +147,100 @@ async function renderHome() {
   setBreadcrumbs([{ label: 'Accueil' }]);
   const newWsBtn = btn('Nouveau workspace', 'btn-primary', I.plus);
   newWsBtn.addEventListener('click', () => modalNewWorkspace());
-  const importBtn = btn('Importer config', 'btn', I.download);
+  const importBtn = btn('Importer', 'btn', I.download);
   importBtn.title = 'Importer MCPs et workspaces depuis ~/.claude/';
   importBtn.addEventListener('click', () => modalSetupWizard());
-  const registerBtn = btn('Adopter un workspace existant', 'btn', I.folder);
+  const registerBtn = btn('Adopter', 'btn', I.folder);
   registerBtn.title = 'Adopter un dossier Claude Code existant -- inspection puis enregistrement, sans toucher au contenu';
+  registerBtn.setAttribute('aria-label', 'Adopter un workspace existant');
   registerBtn.addEventListener('click', () => modalRegisterExisting());
   const syncAllBtn = btn('Sync tous', 'btn', I.refresh);
-  syncAllBtn.addEventListener('click', async () => {
-    syncAllBtn.disabled = true;
+  syncAllBtn.title = 'Synchronise le registre MCP vers le .mcp.json de chaque workspace';
+  syncAllBtn.addEventListener('click', () => withBusy(syncAllBtn, async () => {
     try {
       const r = await API.post('/api/sync-all', {});
       toastOk('Sync terminé pour ' + Object.keys(r.results || {}).length + ' workspace(s)');
       warnHandEdited(collectHandEdited(r.results));
     }
     catch (e) { toastErr(e.message); }
-    finally { syncAllBtn.disabled = false; }
-  });
-  setTopbarActions([registerBtn, importBtn, syncAllBtn, newWsBtn]);
+  }));
+  setTopbarActions([syncAllBtn, importBtn, registerBtn, newWsBtn]);
 
   const c = $('#content');
-  c['innerHTML'] = '';
   const page = el('div', 'page');
 
-  page.appendChild(el('div', 'page-header', `
+  const head = el('div', 'page-header rise');
+  head['innerHTML'] = `
     <div class="page-header-text">
-      <div class="page-eyebrow"><span class="index">00.</span><span>Accueil</span></div>
-      <h1 class="page-title">Nebula</h1>
-      <p class="page-subtitle">Pilotage des workspaces, MCPs, plugins et skills Claude Code.</p>
-    </div>
-  `));
+      <h1 class="page-title">Accueil</h1>
+      <p class="page-subtitle" data-home-sentence>${homeSentence()}</p>
+    </div>`;
+  page.appendChild(head);
   mountHelpLink(page, 'premiers-pas', 'vue d\'ensemble de Nebula');
 
   const quickstart = buildHomeQuickstart();
   if (quickstart) page.appendChild(quickstart);
 
   // Stats + sanity en parallèle : la sanity alimente les badges « désync »
-  // des workspace cards (lot E item 1a). On stocke l'ensemble des ids désync
-  // dans STATE pour que workspaceCard() le lise sans refaire d'appel réseau.
-  const [stats, sanity] = await Promise.all([
-    safe('/api/stats', {}),
-    safe('/api/sanity-check', { findings: [] }),
+  // (lot E item 1a) et le bloc Santé. stats === null = echec de /api/stats
+  // (distinct de « 0 session ») : le KPI l'affiche au lieu d'un 0 trompeur.
+  const [statsRaw, sanity] = await Promise.all([
+    API.get('/api/stats').catch(() => null),
+    safe('/api/sanity-check', null),
   ]);
-  STATE.stats = stats;
-  STATE.sanityDesync = new Set((sanity.findings || []).map(f => f.workspace));
+  if (statsRaw) STATE.stats = statsRaw;
+  const stats = STATE.stats || {};
+  STATE.sanityDesync = new Set(((sanity && sanity.findings) || []).map(f => f.workspace));
   const wsCount = STATE.workspaces.length;
-  const mcpCount = STATE.mcps.filter(m => m.status !== 'désactivé').length;
   const pluginCount = STATE.plugins.count || Object.keys(STATE.plugins.enabled || {}).length;
   const totalSessions = Object.values(stats).reduce((s, x) => s + (x.sessions || 0), 0);
+  const totalMsgs = Object.values(stats).reduce((s, x) => s + (x.messages || 0), 0);
+  const activeWs = STATE.workspaces.filter(w => (_wsStats(w.id).messages || 0) > 0).length;
+  const orphans = STATE.mcps.filter(m => !(m.workspaces || []).length);
+  const disabled = STATE.mcps.filter(m => m.status === 'désactivé').length;
+  const nSkills = (STATE.skills || []).length;
 
-  // Sparklines en bas-droite des KPIs : decoratifs (pas de serie temporelle
-  // honnete cote backend), polylignes statiques reprises tel quel du prototype
-  // valide. SVG en preserveAspectRatio=none pour s'etirer dans 90x38 px.
-  const kpis = el('div', 'kpi-row');
-  kpis['innerHTML'] = `
-    <div class="kpi-card" data-index="01.">
-      <div class="kpi-label">Workspaces</div>
-      <div class="kpi-value tabular">${wsCount}</div>
-      <div class="kpi-detail"><span class="dot dot-ok"></span>${totalSessions} session${totalSessions > 1 ? 's' : ''} cumulées</div>
-      <svg class="kpi-spark" viewBox="0 0 90 38" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,30 15,28 30,24 45,25 60,18 75,14 90,8" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </div>
-    <div class="kpi-card" data-index="02.">
-      <div class="kpi-label">MCPs actifs</div>
-      <div class="kpi-value tabular">${mcpCount}</div>
-      <div class="kpi-detail">${STATE.mcps.length} dans le registre</div>
-      <svg class="kpi-spark" viewBox="0 0 90 38" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,20 15,22 30,18 45,20 60,16 75,18 90,12" fill="none" stroke="var(--ok)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </div>
-    <div class="kpi-card" data-index="03.">
-      <div class="kpi-label">Plugins</div>
-      <div class="kpi-value tabular">${pluginCount}</div>
-      <div class="kpi-detail">${STATE.skills.length} skill${STATE.skills.length > 1 ? 's' : ''} global</div>
-      <svg class="kpi-spark" viewBox="0 0 90 38" preserveAspectRatio="none" aria-hidden="true"><polyline points="0,32 15,26 30,28 45,20 60,22 75,12 90,10" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-    </div>
-  `;
+  const kpi = (i, icon, n, label, trend, cls, count = true) => `
+    <div class="card kpi rise" style="--i:${i}"><span class="ic">${icon}</span>
+      <div style="min-width:0"><div class="k-n"><b class="tab-num" ${count ? `data-count="${n}"` : ''}>${count ? fmtNum(n) : escapeHtml(String(n))}</b><span class="k-l">${escapeHtml(label)}</span></div>
+      <span class="k-t ${cls}">${escapeHtml(trend)}</span></div></div>`;
+  const kpis = el('section', 'kpis');
+  kpis.setAttribute('aria-label', 'Indicateurs');
+  kpis['innerHTML'] =
+    kpi(1, I.folder, wsCount, 'workspaces', statsRaw ? `${totalSessions} session${totalSessions > 1 ? 's' : ''} cumulée${totalSessions > 1 ? 's' : ''}` : 'Statistiques indisponibles', statsRaw ? '' : 'err')
+    + kpi(2, I.box, STATE.mcps.length, 'MCPs', orphans.length ? `${orphans.length} sans workspace` : (disabled ? `${disabled} désactivé${disabled > 1 ? 's' : ''}` : 'tous utilisés'), orphans.length ? 'warn' : (disabled ? '' : 'ok'))
+    + kpi(3, I.plug, pluginCount, pluginCount > 1 ? 'plugins' : 'plugin', `${nSkills} skill${nSkills > 1 ? 's' : ''} global${nSkills > 1 ? 'aux' : ''}`, '')
+    + kpi(4, I.message, statsRaw ? totalMsgs : '-', 'messages', statsRaw ? `${activeWs} workspace${activeWs > 1 ? 's' : ''} actif${activeWs > 1 ? 's' : ''}` : 'Statistiques indisponibles', statsRaw ? '' : 'err', !!statsRaw);
   page.appendChild(kpis);
 
-  // --- Section « En cours » (workspaces avec session Claude Code active) ---
-  // Source de verite : STATE.activeSessions (sessions lancees depuis Nebula).
-  // Affichee uniquement s'il y a au moins une session vivante -- sinon la home
-  // reste epuree. Grandes cards a halo + gem + metriques reelles.
-  const activeIds = Object.keys(STATE.activeSessions || {});
-  const liveWs = STATE.workspaces.filter(w => activeIds.includes(w.id));
+  // --- Section « En cours » : running (cartes vives) puis idle (Terminal ouvert).
+  const liveWs = STATE.workspaces.filter(w => sessionState(w.id))
+    .sort((a, b) => (_homeStateRank(a.id) - _homeStateRank(b.id)) || (sessionSince(a.id) > sessionSince(b.id) ? 1 : -1));
   if (liveWs.length) {
-    page.appendChild(el('div', 'section-label',
-      '<span class="num">A.</span> En cours <span class="right">' + liveWs.length + ' session' + (liveWs.length > 1 ? 's' : '') + ' active' + (liveWs.length > 1 ? 's' : '') + '</span>'));
-    const featGrid = el('div', 'featured-grid');
-    for (const w of liveWs) featGrid.appendChild(featuredCard(w));
-    page.appendChild(featGrid);
+    const running = liveWs.filter(w => sessionState(w.id) === 'running').length;
+    const idle = liveWs.length - running;
+    const lbl = el('h2', 'lbl rise');
+    lbl.style.setProperty('--i', 3);
+    lbl['innerHTML'] = `En cours <small>${running} en direct${idle ? `, ${idle} terminal${idle > 1 ? 'aux' : ''} ouvert${idle > 1 ? 's' : ''}` : ''}</small>`;
+    page.appendChild(lbl);
+    const grid = el('section', 'live-grid');
+    grid.setAttribute('aria-label', 'Sessions en cours');
+    let alt = 0;
+    liveWs.forEach((w, i) => {
+      const isRun = sessionState(w.id) === 'running';
+      const card = liveCard(w, isRun && (alt++ % 2 === 1));
+      card.classList.add('rise');
+      card.style.setProperty('--i', 4 + i);
+      grid.appendChild(card);
+    });
+    page.appendChild(grid);
   }
 
-  // --- Section « Tous les workspaces » : grille nebuleuse <-> liste dense ---
-  const allLabelNum = liveWs.length ? 'B.' : 'A.';
+  // --- Colonnes : workspaces | activite
+  const cols = el('div', 'home-cols');
   if (wsCount === 0) {
-    page.appendChild(el('div', 'section-label', `<span class="num">${allLabelNum}</span> Workspaces`));
+    const left = el('section');
+    left.appendChild(el('h2', 'lbl', 'Workspaces'));
     const empty = el('div', 'empty');
     empty['innerHTML'] = `
       <div class="empty-title">Pas encore de workspace dans Nebula</div>
@@ -207,516 +256,517 @@ async function renderHome() {
     b3.addEventListener('click', () => modalNewWorkspace());
     ea.append(b1, b2, b3);
     empty.appendChild(ea);
-    page.appendChild(empty);
+    left.appendChild(empty);
+    cols.appendChild(left);
   } else {
-    page.appendChild(buildWorkspacesBrowser(allLabelNum));
+    cols.appendChild(buildWorkspacesBrowser());
   }
+  cols.appendChild(buildHomeRail(sanity));
+  page.appendChild(cols);
 
-  // --- Sanity check + Journal cote a cote (pleine largeur sous la grille) ---
-  const grid = el('div', 'home-grid home-grid-bottom');
-  const right = el('div', 'stack');
-  const right2 = el('div', 'stack');
-
-  right.appendChild(el('div', 'section-label', '<span class="num">C.</span> Sanity check'));
-  const sanityCard = el('div', 'card sanity-card');
-  sanityCard['innerHTML'] = `<div class="card-header"><h3 class="card-title">${I.shield} Sanity check</h3><button class="icon-btn" data-refresh aria-label="Rafraîchir">${I.refresh}</button></div>`;
-  const sanityBody = el('div');
-  sanityCard.appendChild(sanityBody);
-  right.appendChild(sanityCard);
-  loadSanity(sanityBody);
-  sanityCard.querySelector('[data-refresh]').addEventListener('click', () => loadSanity(sanityBody));
-
-  right2.appendChild(el('div', 'section-label', '<span class="num">D.</span> Journal'));
-  const journalCard = el('div', 'card');
-  journalCard['innerHTML'] = `<div class="card-header"><h3 class="card-title">${I.book} Journal</h3><button class="icon-btn btn-danger" data-clear aria-label="Tout effacer">${I.trash}</button></div>`;
-  const jForm = el('form', 'journal-form');
-  jForm['innerHTML'] = `<textarea class="textarea" placeholder="Note rapide… (Ctrl+Entrée pour valider)" rows="2"></textarea>`;
-  const jSubmit = btn('Enregistrer', 'btn btn-sm', null);
-  jSubmit.style.alignSelf = 'flex-end';
-  jForm.appendChild(jSubmit);
-  jForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const ta = jForm.querySelector('textarea');
-    const t = ta.value.trim();
-    if (!t) return;
-    try {
-      await API.post('/api/journal', { text: t });
-      ta.value = ''; toastOk('Note enregistrée'); loadJournal(jList);
-    } catch (err) { toastErr(err.message); }
-  });
-  jForm.querySelector('textarea').addEventListener('keydown', (e) => {
-    if (e.ctrlKey && e.key === 'Enter') jSubmit.click();
-  });
-  journalCard.appendChild(jForm);
-  const jList = el('div', 'journal-list');
-  journalCard.appendChild(jList);
-  right2.appendChild(journalCard);
-  loadJournal(jList);
-  journalCard.querySelector('[data-clear]').addEventListener('click', () => {
-    confirmDialog('Effacer toutes les entrées du journal ?', async () => {
-      try { await API.del('/api/journal'); loadJournal(jList); toastOk('Journal effacé'); }
-      catch (e) { toastErr(e.message); }
-    }, { danger: true });
-  });
-
-  grid.appendChild(right);
-  grid.appendChild(right2);
-  page.appendChild(grid);
   // Bug #14 : rendu perime (navigation pendant les awaits stats/sanity
   // ci-dessus) -> on n'attache pas la page, #content appartient deja a
   // la route plus recente. Tout ce qui precede n'a touche que des noeuds
   // detaches, donc abandonner ici est sans effet de bord.
   if (routeIsStale(myToken)) return;
-  c.appendChild(page);
+  c.replaceChildren(page);
+  countUp(page);
+  renderRecentWorkspaces();
 }
 
 // ================================================================
-// « En cours » : grande card d'un workspace avec session active.
-// Halo "nebuleuse" derive du nom + gem + dot live + metriques REELLES
-// (MCPs scopes, sessions, derniere activite) + bouton Reprendre + Stop.
-// Pas de sparkline : aucune serie temporelle honnete n'est disponible
-// cote stats (cf. workspace_stats), donc on n'invente rien -- on montre
-// des chiffres reels a la place (contrainte du brief).
+// « En cours » : carte d'un workspace avec session active.
+// running = carte vive (tokens, chrono « depuis » base sur launched_at,
+// Reprendre / Arreter) ; idle = carte neutre « Terminal ouvert » avec
+// Fermer le terminal. Metriques REELLES uniquement (stats + wsMcps).
 // ================================================================
-function featuredCard(w) {
-  const card = el('div', 'featured-card');
+function liveCard(w, alt) {
+  const st = sessionState(w.id) || 'running';
+  const s = _wsStats(w.id);
+  const nMcp = _wsMcpIds(w.id).length;
+  const label = w.label || w.id;
+  const card = el('article', st === 'idle' ? 'idle-card' : 'live-card' + (alt ? ' alt' : ''));
+  card.dataset.wsCard = w.id; card.dataset.wsKind = 'featured';
   card.tabIndex = 0;
-  card.setAttribute('role', 'button');
-  card.setAttribute('aria-label', `Ouvrir le workspace ${w.label || w.id}`);
-  wsGradient(card, w.label || w.id);
-  const stats = STATE.stats[w.id] || {};
-  const mcpsInfo = STATE.wsMcps[w.id] || { active: [] };
-  const last = stats.last ? fmtDate(stats.last) : 'jamais';
-  const sess = stats.sessions || 0;
-  const msgs = stats.messages || 0;
-
-  // Parité avec workspaceCard (lot E) : mêmes badges d'état surfaces depuis
-  // /api/sanity-check (désync) et path_exists (chemin KO). Une session
-  // « En cours » peut quand même afficher un signal critique (path déplacé
-  // pendant la session, registre désync) -- on le remonte au lieu de
-  // cacher le problème dans la grille « Tous » plus bas.
-  const stateBadges = [];
-  if (w.path_exists === false) {
-    stateBadges.push(`<span class="badge badge-err ws-badge-pathko" role="button" tabindex="0" title="Le dossier de ce workspace est introuvable sur le disque : ${escapeHtml(w.path || '(chemin inconnu)')}. Clique pour ouvrir le détail.">⛔ chemin KO</span>`);
+  card.setAttribute('role', 'link');
+  card.setAttribute('aria-label', `${label}, ${st === 'idle' ? 'terminal ouvert' : 'session en cours'} : ouvrir le workspace`);
+  const badges = stateBadgesHtml(w);
+  const plural = (n, a, b) => `${n > 1 ? b : a}`;
+  if (st === 'idle') {
+    const since = sessionSince(w.id);
+    card['innerHTML'] = `
+      <div class="t">${wsGem(w)}<div class="nm">${escapeHtml(label)}<small>${escapeHtml(w.id)}</small></div>
+        <span class="pill warn"><span class="sdot"></span>Terminal ouvert</span></div>
+      <p>Claude Code s'est arrêté mais la fenêtre cmd est encore ouverte${since ? ` depuis <span class="tab-num">${escapeHtml(fmtAgo(since).replace('il y a ', ''))}</span>` : ''}.</p>
+      ${badges ? `<div class="live-badges">${badges}</div>` : ''}
+      <div class="m"><span><b>${fmtNum(s.messages || 0)}</b> messages</span><span><b>${s.sessions || 0}</b> ${plural(s.sessions || 0, 'session', 'sessions')}</span><span><b>${nMcp}</b> ${plural(nMcp, 'MCP', 'MCPs')}</span></div>
+      <div class="row"></div>`;
+  } else {
+    const since = sessionSince(w.id);
+    const segs = [
+      ['cache lu', s.cache_read_tokens || 0, 'var(--seg-1)'],
+      ['cache écrit', s.cache_creation_tokens || 0, 'var(--seg-2)'],
+      ['sortie', s.output_tokens || 0, 'var(--seg-3)'],
+    ];
+    const tot = segs.reduce((a, x) => a + x[1], 0) + (s.input_tokens || 0);
+    card['innerHTML'] = `
+      <div class="t">${wsGem(w)}<div class="nm">${escapeHtml(label)}<small>${escapeHtml(w.id)}</small></div>
+        <span class="lpill"><span class="sdot live"></span>En direct</span></div>
+      ${badges ? `<div class="live-badges">${badges}</div>` : ''}
+      <div class="m"><span><b data-count="${s.messages || 0}">${fmtNum(s.messages || 0)}</b> messages</span><span><b>${s.sessions || 0}</b> ${plural(s.sessions || 0, 'session', 'sessions')}</span><span><b>${nMcp}</b> ${plural(nMcp, 'MCP', 'MCPs')}</span>${since ? `<span>depuis <b class="timer" data-since="${escapeHtml(since)}">${escapeHtml(fmtElapsed(Date.now() - Date.parse(since)))}</b></span>` : ''}</div>
+      ${tot ? `<div class="tok" role="img" aria-label="Répartition des tokens : ${segs.map(x => `${x[0]} ${fmtCompact(x[1])}`).join(', ')}">${segs.map((x, k) => `<i style="--i:${k};width:${Math.max(1.5, x[1] / tot * 100)}%;background:${x[2]}"></i>`).join('')}</div>
+      <div class="tok-l">${segs.map(x => `<span><i style="background:${x[2]}"></i>${x[0]} <b>${escapeHtml(fmtCompact(x[1]))}</b></span>`).join('')}</div>` : ''}
+      <div class="row"></div>`;
   }
-  if ((STATE.sanityDesync instanceof Set) && STATE.sanityDesync.has(w.id)) {
-    stateBadges.push(`<span class="badge badge-warn ws-badge-desync" role="button" tabindex="0" title="Le registre MCP et le .mcp.json de ce workspace divergent. Clique pour ouvrir le détail et synchroniser.">⚠ désync</span>`);
+  const row = card.querySelector('.row');
+  const resume = btn('Reprendre', 'btn-primary btn-sm', st === 'idle' ? I.play : I.terminal);
+  resume.title = 'Reprendre la dernière session Claude Code de ce workspace';
+  resume.addEventListener('click', (e) => { e.stopPropagation(); doResume(w, resume); });
+  const stop = st === 'idle'
+    ? btn('Fermer le terminal', 'btn-sm', I.x)
+    : btn('Arrêter', 'btn-sm btn-ghost-live', I.stop);
+  stop.title = st === 'idle' ? 'Fermer la fenêtre cmd restée ouverte' : 'Arrêter la session Claude Code en cours';
+  stop.addEventListener('click', (e) => { e.stopPropagation(); doStop(w); });
+  row.append(resume, stop);
+  if (st !== 'idle') {
+    const open = document.createElement('a');
+    open.className = 'hint';
+    open.href = `#/workspace/${encodeURIComponent(w.id)}`;
+    open['innerHTML'] = `Ouvrir ${I.right}`;
+    open.addEventListener('click', (e) => e.stopPropagation());
+    row.appendChild(open);
   }
-  const stateBadgesRow = stateBadges.length
-    ? `<div class="workspace-state-badges">${stateBadges.join('')}</div>`
-    : '';
-
-  card['innerHTML'] = `
-    <div class="featured-top">
-      <span class="featured-gem">${escapeHtml(w.emoji || '📁')}</span>
-      <div class="featured-id-block">
-        <div class="featured-name">${escapeHtml(w.label || w.id)}<span class="featured-live" title="Session Claude Code active"></span></div>
-        <div class="featured-id mono">${escapeHtml(w.id)}</div>
-      </div>
-    </div>
-    ${stateBadgesRow}
-    <div class="featured-meta mono">
-      <span>${mcpsInfo.active.length} <span class="u">MCP${mcpsInfo.active.length > 1 ? 's' : ''}</span></span>
-      <span>${sess} <span class="u">sess.</span></span>
-      <span>${fmtNum(msgs)} <span class="u">msg</span></span>
-      <span>${escapeHtml(last)}</span>
-    </div>
-    <div class="featured-actions"></div>
-  `;
-
-  // Navigation clavier sur les badges d'état (parité workspaceCard).
-  for (const b of card.querySelectorAll('.workspace-state-badges [role=button]')) {
-    b.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault(); e.stopPropagation();
-        location.hash = `#/workspace/${w.id}`;
-      }
-    });
-  }
-
-  const actions = card.querySelector('.featured-actions');
-  const resume = btn('Reprendre', 'btn-primary btn-sm', I.play);
-  resume.addEventListener('click', (e) => {
-    e.stopPropagation();
-    withBusy(resume, async () => {
-      try { const r = await API.post(`/api/launch-resume/${w.id}`, {}); toastOk(r.message || 'Reprise…'); STATE.loading = true; setTimeout(route, 400); }
-      catch (err) { toastErr(err.message); }
-    }, { keepBusyOnSuccess: true });
-  });
-  const stopBtn = btn('Stop', 'btn-sm btn-danger-outline', I.x);
-  stopBtn.title = 'Arrêter la session Claude Code en cours';
-  stopBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    confirmDialog(`Arrêter la session Claude Code de « ${w.label || w.id} » ?`, async () => {
-      try {
-        const r = await API.post(`/api/workspaces/${w.id}/stop`, {});
-        if (r.ok) {
-          toastOk(r.message || 'Session arrêtée');
-          if (STATE.activeSessions) delete STATE.activeSessions[w.id];
-          route({ silent: true });
-        } else { toastErr(r.message || 'Échec'); }
-      } catch (err) { toastErr(err.message); }
-    }, { danger: true });
-  });
-  actions.append(resume, stopBtn);
-
-  card.addEventListener('click', () => { location.hash = `#/workspace/${w.id}`; });
-  card.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); location.hash = `#/workspace/${w.id}`; }
-  });
+  bindOpenWorkspace(card, w);
+  bindStateBadges(card, w);
   return card;
 }
 
+// Navigation vers le detail : clic n'importe ou (hors boutons / liens) +
+// Entree / Espace quand l'element lui-meme a le focus.
+function bindOpenWorkspace(node, w) {
+  node.addEventListener('click', (e) => {
+    if (e.target.closest('button, a, input, label, select, textarea')) return;
+    location.hash = `#/workspace/${w.id}`;
+  });
+  node.addEventListener('keydown', (e) => {
+    if (e.target !== node) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); location.hash = `#/workspace/${w.id}`; }
+  });
+}
+
+// Lot E item 1 : badges d'etat conditionnels surfaces depuis des donnees
+// deja chargees (sanity-check, path_exists). Ils LIENT vers le detail.
+function stateBadgesHtml(w) {
+  const out = [];
+  if (w.path_exists === false) {
+    out.push(`<span class="badge badge-err ws-badge-pathko" role="button" tabindex="0" title="Le dossier de ce workspace est introuvable sur le disque : ${escapeHtml(w.path || '(chemin inconnu)')}. Clique pour ouvrir le détail.">⛔ chemin KO</span>`);
+  }
+  if ((STATE.sanityDesync instanceof Set) && STATE.sanityDesync.has(w.id)) {
+    out.push(`<span class="badge badge-warn ws-badge-desync" role="button" tabindex="0" title="Le registre MCP et le .mcp.json de ce workspace divergent. Clique pour ouvrir le détail et synchroniser.">⚠ désync</span>`);
+  }
+  return out.join('');
+}
+function bindStateBadges(node, w) {
+  for (const b of node.querySelectorAll('.ws-badge-pathko, .ws-badge-desync')) {
+    const go = (e) => { e.preventDefault(); e.stopPropagation(); location.hash = `#/workspace/${w.id}`; };
+    b.addEventListener('click', go);
+    b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') go(e); });
+  }
+}
+
+// --- Actions de session partagees (cartes, lignes, grille) ---------------
+function doResume(w, button) {
+  return withBusy(button, async () => {
+    try { const r = await API.post(`/api/launch-resume/${w.id}`, {}); toastOk(r.message || 'Reprise…'); STATE.loading = true; setTimeout(route, 400); }
+    catch (err) { toastErr(err.message); }
+  }, { keepBusyOnSuccess: true });
+}
+function doLaunch(w, button) {
+  return withBusy(button, async () => {
+    try { const r = await API.post(`/api/launch/${w.id}`, {}); toastOk(r.message || 'Lancé'); STATE.loading = true; setTimeout(route, 400); }
+    catch (err) { toastErr(err.message); }
+  }, { keepBusyOnSuccess: true });
+}
+function doStop(w) {
+  const idle = sessionState(w.id) === 'idle';
+  const label = w.label || w.id;
+  confirmDialog(idle
+    ? `Fermer la fenêtre cmd restée ouverte pour « ${label} » ? Claude Code n'y tourne plus.`
+    : `Arrêter la session Claude Code de « ${label} » ?`, async () => {
+    try {
+      const r = await API.post(`/api/workspaces/${w.id}/stop`, {});
+      if (r.ok) {
+        toastOk(r.message || (idle ? 'Terminal fermé' : 'Session arrêtée'));
+        // RM-1 v2 : mutation locale + silent route
+        if (STATE.activeSessions) delete STATE.activeSessions[w.id];
+        route({ silent: true });
+      } else { toastErr(r.message || 'Échec'); }
+    } catch (err) { toastErr(err.message); }
+  }, { danger: true, confirmLabel: idle ? 'Fermer le terminal' : 'Arrêter' });
+}
+
+// Boutons d'action d'une ligne / carte selon l'etat de session.
+function wsRowActions(w) {
+  const st = sessionState(w.id);
+  const label = w.label || w.id;
+  const out = [];
+  if (st) {
+    const resume = btn('Reprendre', 'btn-sm', st === 'idle' ? I.play : I.terminal);
+    resume.addEventListener('click', (e) => { e.stopPropagation(); doResume(w, resume); });
+    const stop = btn('', 'btn-sm btn-icon-only btn-danger-outline', st === 'idle' ? I.x : I.stop);
+    stop.title = st === 'idle' ? 'Fermer la fenêtre cmd' : 'Arrêter la session';
+    stop.setAttribute('aria-label', st === 'idle' ? `Fermer le terminal de ${label}` : `Arrêter la session de ${label}`);
+    stop.addEventListener('click', (e) => { e.stopPropagation(); doStop(w); });
+    out.push(resume, stop);
+  } else {
+    if ((_wsStats(w.id).sessions || 0) > 0) {
+      const resume = btn('', 'btn-sm btn-icon-only btn-ghost', I.ret);
+      resume.title = 'Reprendre la dernière session';
+      resume.setAttribute('aria-label', `Reprendre la dernière session de ${label}`);
+      resume.addEventListener('click', (e) => { e.stopPropagation(); doResume(w, resume); });
+      out.push(resume);
+    }
+    const launch = btn('Lancer', 'btn-sm launch', I.play);
+    launch.setAttribute('aria-label', `Lancer Claude Code dans ${label}`);
+    launch.addEventListener('click', (e) => { e.stopPropagation(); doLaunch(w, launch); });
+    out.push(launch);
+  }
+  return out;
+}
+
+function _mcpChips(id) {
+  const ids = _wsMcpIds(id);
+  if (!ids.length) return '<span class="dim">aucun</span>';
+  return `<span class="chip">${escapeHtml(ids[0])}</span>${ids.length > 1 ? `<span class="chip more" title="${escapeHtml(ids.slice(1).join(', '))}">+${ids.length - 1}</span>` : ''}`;
+}
+
 // ================================================================
-// Navigateur « Tous les workspaces » : barre d'outils (recherche / tri /
-// bascule grille<->liste) + grille nebuleuse + liste dense. La grille
-// reutilise workspaceCard() (badges lot E, dot live, Lancer/Stop) ;
-// la liste dense est une vue compacte read-through.
-// Le choix grille/liste est persiste en localStorage (cle nebula-ws-view).
+// Navigateur « Tous les workspaces » : recherche + tri (segmented et
+// en-tetes de colonnes) + bascule liste <-> grille memorisee
+// (localStorage nebula-ws-view / nebula-ws-sort).
 // ================================================================
-function buildWorkspacesBrowser(labelNum) {
-  const wrap = el('div', 'ws-browser');
+function buildWorkspacesBrowser() {
+  const wrap = el('section', 'ws-browser');
+  wrap.setAttribute('aria-labelledby', 'h-all-ws');
+  let view = 'list';
+  let sort = 'recent';
+  try { const v = localStorage.getItem('nebula-ws-view'); if (v === 'list' || v === 'grid') view = v; } catch {}
+  try { const v = localStorage.getItem('nebula-ws-sort'); if (['recent', 'name', 'sessions'].includes(v)) sort = v; } catch {}
 
-  // En-tete de section avec barre d'outils a droite.
-  const head = el('div', 'section-label ws-browser-head');
-  head['innerHTML'] = `<span class="num">${labelNum}</span> Tous les workspaces <span class="right" data-ws-count></span>`;
-  const tools = el('div', 'ws-tools');
+  const head = el('h2', 'lbl rise');
+  head.id = 'h-all-ws';
+  head.style.setProperty('--i', 7);
+  head['innerHTML'] = `Tous les workspaces <small data-ws-count>${STATE.workspaces.length}</small>
+    <span class="r home-tools">
+      <span class="search-field">${I.search}<input class="input" type="search" placeholder="Filtrer…" aria-label="Filtrer les workspaces"></span>
+      <span class="seg" role="group" aria-label="Tri" data-seg="sort"><span class="thumb"></span>
+        <button type="button" data-v="recent" aria-pressed="${sort === 'recent'}">Récents</button><button type="button" data-v="name" aria-pressed="${sort === 'name'}">Nom</button><button type="button" data-v="sessions" aria-pressed="${sort === 'sessions'}">Sessions</button></span>
+      <span class="seg" role="group" aria-label="Affichage" data-seg="view"><span class="thumb"></span>
+        <button type="button" data-v="list" aria-pressed="${view === 'list'}" aria-label="Liste" title="Liste">${I.list}</button><button type="button" data-v="grid" aria-pressed="${view === 'grid'}" aria-label="Grille" title="Grille">${I.grid}</button></span>
+    </span>`;
+  const host = el('div', 'rise');
+  host.id = 'ws-host';
+  host.style.setProperty('--i', 8);
+  wrap.append(head, host);
+  const search = head.querySelector('input');
+  const sortSeg = head.querySelector('[data-seg="sort"]');
+  const viewSeg = head.querySelector('[data-seg="view"]');
 
-  const searchWrap = el('div', 'ws-search');
-  const search = document.createElement('input');
-  search.type = 'search';
-  search.className = 'input input-search';
-  search.placeholder = 'Filtrer les workspaces…';
-  search.setAttribute('aria-label', 'Filtrer les workspaces');
-  searchWrap.appendChild(search);
+  const setSort = (v) => {
+    sort = v;
+    try { localStorage.setItem('nebula-ws-sort', v); } catch {}
+    sortSeg.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === v)));
+    placeSegThumb(sortSeg);
+    draw();
+  };
 
-  const sort = document.createElement('select');
-  sort.className = 'select ws-sort';
-  sort.setAttribute('aria-label', 'Trier les workspaces');
-  sort['innerHTML'] = `
-    <option value="recent">Récents</option>
-    <option value="name">Nom</option>
-    <option value="sessions">Sessions</option>
-  `;
-
-  // Bascule grille / liste (deux boutons aria-pressed).
-  const toggle = el('div', 'ws-view-toggle');
-  toggle.setAttribute('role', 'group');
-  toggle.setAttribute('aria-label', 'Affichage');
-  const gridBtn = document.createElement('button');
-  gridBtn.type = 'button'; gridBtn.className = 'ws-view-btn'; gridBtn.dataset.view = 'grid';
-  gridBtn.title = 'Grille'; gridBtn.setAttribute('aria-label', 'Affichage grille');
-  gridBtn['innerHTML'] = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>`;
-  const listBtn = document.createElement('button');
-  listBtn.type = 'button'; listBtn.className = 'ws-view-btn'; listBtn.dataset.view = 'list';
-  listBtn.title = 'Liste dense'; listBtn.setAttribute('aria-label', 'Affichage liste dense');
-  listBtn['innerHTML'] = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg>`;
-  toggle.append(gridBtn, listBtn);
-
-  tools.append(searchWrap, sort, toggle);
-  head.appendChild(tools);
-  wrap.appendChild(head);
-
-  // Conteneurs des deux vues.
-  const gridView = el('div', 'workspace-grid nebula-grid');
-  const listView = el('div', 'ws-list');
-  listView.hidden = true;
-  listView['innerHTML'] = `<div class="ws-list-head">
-      <span>Workspace</span><span>MCPs</span><span>Sessions</span><span>Activité</span>
-    </div>`;
-  wrap.append(gridView, listView);
-
-  // Etat courant (lu depuis localStorage pour la vue).
-  let currentView = 'grid';
-  try { const v = localStorage.getItem('nebula-ws-view'); if (v === 'list' || v === 'grid') currentView = v; } catch {}
-
-  const apply = () => {
+  const draw = (animate) => {
     const q = search.value.trim().toLowerCase();
-    const sortBy = sort.value;
     let list = STATE.workspaces.slice();
     if (q) list = list.filter(w => (`${w.label || ''} ${w.id} ${w.description || ''}`).toLowerCase().includes(q));
+    const last = (id) => _wsStats(id).last || '';
     list.sort((a, b) => {
-      const sa = STATE.stats[a.id] || {}, sb = STATE.stats[b.id] || {};
-      if (sortBy === 'name') return (a.label || a.id).localeCompare(b.label || b.id, 'fr');
-      if (sortBy === 'sessions') return (sb.sessions || 0) - (sa.sessions || 0);
-      // recent : derniere activite descendante (jamais = tout en bas)
-      const ta = sa.last ? Date.parse(sa.last) : 0;
-      const tb = sb.last ? Date.parse(sb.last) : 0;
-      return tb - ta;
+      if (sort === 'name') return (a.label || a.id).localeCompare(b.label || b.id, 'fr');
+      if (sort === 'sessions') return (_wsStats(b.id).sessions || 0) - (_wsStats(a.id).sessions || 0);
+      // recent : sessions en cours d'abord, puis derniere activite (jamais = en bas)
+      return (_homeStateRank(a.id) - _homeStateRank(b.id))
+        || (last(b.id) > last(a.id) ? 1 : last(b.id) < last(a.id) ? -1 : (a.label || a.id).localeCompare(b.label || b.id, 'fr'));
     });
-
-    gridView['innerHTML'] = '';
-    // Vide la liste en conservant l'en-tete.
-    Array.from(listView.querySelectorAll('.ws-row')).forEach(r => r.remove());
-
+    head.querySelector('[data-ws-count]').textContent = q ? `${list.length} sur ${STATE.workspaces.length}` : String(STATE.workspaces.length);
     if (!list.length) {
-      const none = el('div', 'ws-browser-empty muted');
-      none.textContent = q ? 'Aucun workspace ne correspond à ce filtre.' : 'Aucun workspace.';
-      gridView.appendChild(none);
-    } else {
-      for (const w of list) {
-        gridView.appendChild(workspaceCard(w));
-        listView.appendChild(workspaceRow(w));
-      }
+      host['innerHTML'] = `<div class="card home-empty">Aucun workspace ne correspond à « ${escapeHtml(search.value.trim())} ». </div>`;
+      const clr = btn('Effacer le filtre', 'btn-sm');
+      clr.addEventListener('click', () => { search.value = ''; draw(); search.focus(); });
+      host.firstElementChild.appendChild(clr);
+      return;
     }
-    head.querySelector('[data-ws-count]').textContent = `${list.length}${q ? ' / ' + STATE.workspaces.length : ''} workspace${list.length > 1 ? 's' : ''}`;
+    if (view === 'grid') {
+      const grid = el('div', 'ws-grid');
+      for (const w of list) grid.appendChild(workspaceCard(w));
+      host.replaceChildren(grid);
+    } else {
+      const tbl = el('div', 'card tbl');
+      tbl.setAttribute('role', 'table');
+      tbl.setAttribute('aria-label', 'Workspaces');
+      const hdr = el('div', 'tr h');
+      hdr.setAttribute('role', 'row');
+      const sortBtn = (v, txt) => `<button type="button" data-sort="${v}" ${sort === v ? `aria-sort="${v === 'name' ? 'ascending' : 'descending'}"` : ''} title="Trier par ${txt.toLowerCase()}">${txt}${sort === v ? I.down : ''}</button>`;
+      hdr['innerHTML'] = `<span role="columnheader">${sortBtn('name', 'Workspace')}</span><span role="columnheader">État</span><span role="columnheader">MCPs</span><span class="num" role="columnheader">${sortBtn('sessions', 'Sessions')}</span><span role="columnheader">${sortBtn('recent', 'Activité')}</span><span role="columnheader"><span class="sr-only">Actions</span></span>`;
+      hdr.querySelectorAll('svg').forEach(s => { s.style.width = '12px'; s.style.height = '12px'; });
+      hdr.addEventListener('click', (e) => { const b = e.target.closest('[data-sort]'); if (b && b.dataset.sort !== sort) setSort(b.dataset.sort); });
+      tbl.appendChild(hdr);
+      for (const w of list) tbl.appendChild(workspaceRow(w));
+      host.replaceChildren(tbl);
+    }
+    if (animate && motionOK()) { host.classList.remove('fade-in'); void host.offsetWidth; host.classList.add('fade-in'); }
   };
 
-  const setView = (v) => {
-    currentView = v;
-    gridView.hidden = (v !== 'grid');
-    listView.hidden = (v !== 'list');
-    gridBtn.classList.toggle('is-active', v === 'grid');
-    listBtn.classList.toggle('is-active', v === 'list');
-    gridBtn.setAttribute('aria-pressed', String(v === 'grid'));
-    listBtn.setAttribute('aria-pressed', String(v === 'list'));
-    try { localStorage.setItem('nebula-ws-view', v); } catch {}
-  };
-
-  search.addEventListener('input', debounce(apply, 120));
-  sort.addEventListener('change', apply);
-  gridBtn.addEventListener('click', () => setView('grid'));
-  listBtn.addEventListener('click', () => setView('list'));
-
-  setView(currentView);
-  apply();
+  search.addEventListener('input', debounce(() => draw(), 120));
+  bindSeg(sortSeg, setSort);
+  bindSeg(viewSeg, (v) => { view = v; try { localStorage.setItem('nebula-ws-view', v); } catch {} draw(true); });
+  draw();
   return wrap;
 }
 
-// Rangee dense d'un workspace (vue liste). Clic -> detail. Gem a degrade
-// nebuleuse, metriques reelles.
+// Ligne du tableau (vue liste). Cible du re-rendu cible par le polling
+// des sessions (router.js) : [data-ws-card][data-ws-kind=row].
 function workspaceRow(w) {
-  const stats = STATE.stats[w.id] || {};
-  const mcpsInfo = STATE.wsMcps[w.id] || { active: [] };
-  const last = stats.last ? fmtDate(stats.last) : 'jamais';
-  const isActive = !!(STATE.activeSessions || {})[w.id];
-  const row = el('div', 'ws-row');
+  const s = _wsStats(w.id);
+  const row = el('div', 'tr');
+  row.dataset.wsCard = w.id; row.dataset.wsKind = 'row';
+  row.setAttribute('role', 'row');
   row.tabIndex = 0;
-  row.setAttribute('role', 'button');
   row.setAttribute('aria-label', `Ouvrir le workspace ${w.label || w.id}`);
+  const badges = stateBadgesHtml(w);
   row['innerHTML'] = `
-    <span class="ws-row-name">
-      <span class="ws-row-gem">${escapeHtml(w.emoji || '📁')}</span>
-      <span class="ws-row-text">
-        <span class="ws-row-label">${escapeHtml(w.label || w.id)}${isActive ? '<span class="ws-row-live" title="Session active"></span>' : ''}</span>
-        <span class="ws-row-id mono">${escapeHtml(w.id)}</span>
-      </span>
-    </span>
-    <span class="ws-row-cell mono">${mcpsInfo.active.length}</span>
-    <span class="ws-row-cell mono">${stats.sessions || 0}</span>
-    <span class="ws-row-cell mono dim">${escapeHtml(last)}</span>
-  `;
-  const gem = row.querySelector('.ws-row-gem');
-  wsGradient(gem, w.label || w.id);
-  row.addEventListener('click', () => { location.hash = `#/workspace/${w.id}`; });
-  row.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); location.hash = `#/workspace/${w.id}`; }
-  });
+    <div class="wn" role="cell">${wsGem(w)}<div><b><span class="lbt">${escapeHtml(w.label || w.id)}</span>${selfImprovingMark(w.id)}${badges ? `<span class="row-badges">${badges}</span>` : ''}</b><small>${escapeHtml(w.id)}</small></div></div>
+    <span role="cell">${wsStateMarker(w.id, 'cell')}</span>
+    <div class="chips" role="cell">${_mcpChips(w.id)}</div>
+    <span class="num" role="cell">${s.sessions || 0}</span>
+    <span class="muted" role="cell" title="${escapeHtml(s.last ? fmtDateTime(s.last) : 'Aucune session')}">${escapeHtml(fmtAgo(s.last))}</span>
+    <div class="ra" role="cell"></div>`;
+  row.querySelector('.ra').append(...wsRowActions(w));
+  bindOpenWorkspace(row, w);
+  bindStateBadges(row, w);
   return row;
 }
 
+// Carte de la vue grille : [data-ws-card][data-ws-kind=card].
 function workspaceCard(w) {
-  const card = el('div', 'workspace-card');
+  const s = _wsStats(w.id);
+  const nMcp = _wsMcpIds(w.id).length;
+  const card = el('article', 'card wcard');
+  card.dataset.wsCard = w.id; card.dataset.wsKind = 'card';
   card.tabIndex = 0;
-  card.setAttribute('role', 'button');
+  card.setAttribute('role', 'link');
   card.setAttribute('aria-label', `Ouvrir le workspace ${w.label || w.id}`);
-  // Degrade "nebuleuse" unique derive du nom (halo radial + accent du gem,
-  // cf. CSS .workspace-card). Seule couleur generee autorisee par le brief.
-  wsGradient(card, w.label || w.id);
-  const stats = STATE.stats[w.id] || {};
-  const mcpsInfo = STATE.wsMcps[w.id] || { active: [] };
-  const last = stats.last ? fmtDate(stats.last) : 'jamais';
-
-  // Lot E item 1 : badges d'état conditionnels surfacés depuis des données
-  // déjà chargées (sanity-check, path_exists du registre). Cliquables vers la
-  // vue/action concernée -- ils LIENT, ne réimplémentent rien.
-  //   1a désync MCP  : workspace présent dans les findings de sanity-check.
-  //   1b chemin KO   : w.path_exists === false (champ ajouté à /api/workspaces).
-  const stateBadges = [];
-  // Chemin KO en premier : c'est le plus bloquant (le dossier n'existe pas).
-  if (w.path_exists === false) {
-    stateBadges.push(`<span class="badge badge-err ws-badge-pathko" role="button" tabindex="0" title="Le dossier de ce workspace est introuvable sur le disque : ${escapeHtml(w.path || '(chemin inconnu)')}. Clique pour ouvrir le détail.">⛔ chemin KO</span>`);
-  }
-  if ((STATE.sanityDesync instanceof Set) && STATE.sanityDesync.has(w.id)) {
-    stateBadges.push(`<span class="badge badge-warn ws-badge-desync" role="button" tabindex="0" title="Le registre MCP et le .mcp.json de ce workspace divergent. Clique pour ouvrir le détail et synchroniser.">⚠ désync</span>`);
-  }
-  const stateBadgesRow = stateBadges.length
-    ? `<div class="workspace-state-badges">${stateBadges.join('')}</div>`
-    : '';
-
+  const badges = stateBadgesHtml(w);
   card['innerHTML'] = `
-    <div class="workspace-card-header">
-      <span class="workspace-emoji">${escapeHtml(w.emoji || '📁')}</span>
-      <div style="flex:1;min-width:0">
-        <h3 class="workspace-name">${escapeHtml(w.label || w.id)}</h3>
-        <div class="workspace-id mono">${escapeHtml(w.id)}</div>
-      </div>
-    </div>
-    ${stateBadgesRow}
-    <p class="workspace-desc">${escapeHtml(w.description || '—')}</p>
-    <div class="workspace-meta">
-      <span class="workspace-meta-item">${I.cpu}<span>${mcpsInfo.active.length} MCP${mcpsInfo.active.length > 1 ? 's' : ''}</span></span>
-      <span class="workspace-meta-item">${I.message}<span>${stats.sessions || 0} session${(stats.sessions || 0) > 1 ? 's' : ''}</span></span>
-      <span class="workspace-meta-item">${I.history}<span>${last}</span></span>
-    </div>
-  `;
-
-  // Badges d'état : navigation clavier vers le détail (le click souris remonte
-  // déjà au handler de la card via propagation). On garde le même flux que le
-  // clic sur la card -- le détail expose le panneau de sync / le chemin.
-  for (const b of card.querySelectorAll('.workspace-state-badges [role=button]')) {
-    b.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault(); e.stopPropagation();
-        location.hash = `#/workspace/${w.id}`;
-      }
-    });
-  }
-
-  const isActive = !!(STATE.activeSessions || {})[w.id];
-  if (isActive) {
-    const liveDot = el('span', 'workspace-live-dot');
-    liveDot.title = 'Session Claude Code active';
-    card.appendChild(liveDot);
-  }
-
-  const actions = el('div', 'workspace-actions');
-  if (isActive) {
-    const stopBtn = btn('Stop', 'btn-sm btn-danger-outline', I.x);
-    stopBtn.title = 'Arrêter la session Claude Code en cours';
-    stopBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      confirmDialog(`Arrêter la session Claude Code de « ${w.label || w.id} » ?`, async () => {
-        try {
-          const r = await API.post(`/api/workspaces/${w.id}/stop`, {});
-          if (r.ok) {
-            toastOk(r.message || 'Session arrêtée');
-            // RM-1 v2 : mutation locale + silent route
-            if (STATE.activeSessions) delete STATE.activeSessions[w.id];
-            route({ silent: true });
-          }
-          else { toastErr(r.message || 'Échec'); }
-        } catch (err) { toastErr(err.message); }
-      }, { danger: true });
-    });
-    actions.appendChild(stopBtn);
-  } else {
-    const launch = btn('Lancer', 'btn-primary btn-sm', I.play);
-    launch.addEventListener('click', (e) => {
-      e.stopPropagation();
-      withBusy(launch, async () => {
-        try { const r = await API.post(`/api/launch/${w.id}`, {}); toastOk(r.message || 'Lancé'); STATE.loading = true; setTimeout(route, 400); }
-        catch (err) { toastErr(err.message); }
-      }, { keepBusyOnSuccess: true });
-    });
-    actions.appendChild(launch);
-  }
-  const detail = btn('Détail', 'btn-sm', I.right);
-  detail.addEventListener('click', (e) => { e.stopPropagation(); location.hash = `#/workspace/${w.id}`; });
-  actions.appendChild(detail);
-  card.appendChild(actions);
-  card.addEventListener('click', () => { location.hash = `#/workspace/${w.id}`; });
-  card.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); location.hash = `#/workspace/${w.id}`; }
-  });
+    <div class="top">${wsGem(w)}<div class="wn"><div><b><span class="lbt">${escapeHtml(w.label || w.id)}</span>${selfImprovingMark(w.id)}</b><small>${escapeHtml(w.id)}</small></div></div></div>
+    ${badges ? `<div class="workspace-state-badges">${badges}</div>` : ''}
+    <p>${w.description ? escapeHtml(w.description) : '<span class="dim">Pas de description</span>'}</p>
+    <div class="meta"><span>${wsStateMarker(w.id, 'cell')}</span><span>${nMcp} MCP${nMcp > 1 ? 's' : ''}</span><span>${s.sessions || 0} sess.</span><span>${escapeHtml(fmtAgo(s.last))}</span></div>
+    <div class="ra"></div>`;
+  card.querySelector('.ra').append(...wsRowActions(w));
+  bindOpenWorkspace(card, w);
+  bindStateBadges(card, w);
   return card;
 }
 
+// ================================================================
+// Colonne Activite : dernieres sessions, Sante, Journal.
+// ================================================================
+function buildHomeRail(sanity) {
+  const rail = el('aside', 'rail');
+  rail.setAttribute('aria-label', 'Activité et santé');
+  const h = el('h2', 'lbl rise', 'Activité');
+  h.style.setProperty('--i', 9);
+  rail.appendChild(h);
+
+  // Dernieres sessions (stats.last)
+  const feedCard = el('section', 'card flush rise');
+  feedCard.style.setProperty('--i', 9);
+  const recent = STATE.workspaces.filter(w => _wsStats(w.id).last)
+    .sort((a, b) => (_wsStats(b.id).last > _wsStats(a.id).last ? 1 : -1)).slice(0, 6);
+  feedCard['innerHTML'] = `<div class="card-h"><h3>Dernières sessions</h3></div><div class="card-b">${recent.length
+    ? `<ul class="feed">${recent.map(w => {
+        const s = _wsStats(w.id);
+        return `<li><a href="#/workspace/${encodeURIComponent(w.id)}">${wsGem(w)}<div style="min-width:0"><b>${escapeHtml(w.label || w.id)}</b><small>${fmtNum(s.messages || 0)} messages</small></div><time datetime="${escapeHtml(s.last)}" title="${escapeHtml(fmtDateTime(s.last))}">${sessionState(w.id) ? wsStateMarker(w.id, 'pill') : escapeHtml(fmtAgo(s.last))}</time></a></li>`;
+      }).join('')}</ul>`
+    : '<p class="dim" style="margin:0;font-size:13px">Aucune session pour le moment.</p>'}</div>`;
+  rail.appendChild(feedCard);
+
+  // Sante
+  const healthCard = el('section', 'card flush rise sanity-card');
+  healthCard.style.setProperty('--i', 10);
+  healthCard['innerHTML'] = `<div class="card-h"><h3>Santé</h3><span class="r"></span></div>`;
+  const refresh = btn('', 'btn-sm btn-ghost btn-icon-only', I.refresh);
+  refresh.title = 'Relancer la vérification';
+  refresh.setAttribute('aria-label', 'Relancer la vérification');
+  healthCard.querySelector('.r').appendChild(refresh);
+  const healthBody = el('div', 'card-b health');
+  healthCard.appendChild(healthBody);
+  rail.appendChild(healthCard);
+  renderHealth(healthBody, sanity);
+  refresh.addEventListener('click', () => loadSanity(healthBody));
+
+  // Journal
+  const journalCard = el('section', 'card flush journal rise');
+  journalCard.style.setProperty('--i', 11);
+  journalCard['innerHTML'] = `<div class="card-h"><h3>Journal</h3><span class="r"></span></div>`;
+  const clear = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
+  clear.title = 'Tout effacer';
+  clear.setAttribute('aria-label', 'Effacer tout le journal');
+  journalCard.querySelector('.r').appendChild(clear);
+  const jBody = el('div', 'card-b');
+  const jForm = el('form', 'journal-form');
+  jForm['innerHTML'] = `<label class="sr-only" for="journal-note">Nouvelle note</label><textarea id="journal-note" rows="2" placeholder="Note rapide sur ce que tu fais…"></textarea>
+    <div class="jf"><span><kbd class="k">Ctrl</kbd> <kbd class="k">Entrée</kbd> pour ajouter</span></div>`;
+  const jSubmit = btn('Ajouter', 'btn-sm');
+  jSubmit.type = 'submit';
+  jForm.querySelector('.jf').appendChild(jSubmit);
+  const jList = el('ul', 'jlist');
+  jBody.append(jForm, jList);
+  journalCard.appendChild(jBody);
+  rail.appendChild(journalCard);
+  jForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const ta = jForm.querySelector('textarea');
+    const t = ta.value.trim();
+    if (!t) { ta.focus(); return; }
+    await withBusy(jSubmit, async () => {
+      try {
+        await API.post('/api/journal', { text: t });
+        ta.value = ''; toastOk('Note enregistrée'); loadJournal(jList);
+      } catch (err) { toastErr(err.message); }
+    });
+  });
+  jForm.querySelector('textarea').addEventListener('keydown', (e) => {
+    if (e.ctrlKey && !e.altKey && e.key === 'Enter') { e.preventDefault(); jSubmit.click(); }
+  });
+  clear.addEventListener('click', () => {
+    confirmDialog('Effacer toutes les entrées du journal ?', async () => {
+      try { await API.del('/api/journal'); loadJournal(jList); toastOk('Journal effacé'); }
+      catch (e) { toastErr(e.message); }
+    }, { danger: true, confirmLabel: 'Tout effacer' });
+  });
+  loadJournal(jList);
+  return rail;
+}
+
 async function loadSanity(host) {
-  host['innerHTML'] = '<div style="padding:var(--sp-3);color:var(--text-dim);font-size:12px">Vérification…</div>';
+  host['innerHTML'] = '<div class="dim" style="font-size:12.5px">Vérification…</div>';
   try {
     const r = await API.get('/api/sanity-check');
-    if (!r.findings.length && Object.keys(r.missing_env || {}).length === 0) {
-      host['innerHTML'] = `<div class="sanity-empty">${I.success}<div>Tout est en ordre.</div></div>`;
-      return;
-    }
-    const list = el('div', 'sanity-list');
-
-    // « Tout synchroniser » si plusieurs workspaces désync (réutilise
-    // /api/sync-all). Placé en tête de liste pour rester découvrable.
-    if (r.findings.length > 1) {
-      const allRow = el('div', 'sanity-item');
-      allRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:var(--sp-2)';
-      const lbl = el('div', 'dim');
-      lbl.style.fontSize = '12px';
-      lbl['innerHTML'] = `<strong>${r.findings.length} workspaces désync</strong> registre ↔ <code class="mono">.mcp.json</code>`;
-      const syncAllBtn = btn('Tout synchroniser', 'btn-sm btn-primary', I.refresh);
-      syncAllBtn.addEventListener('click', () => withBusy(syncAllBtn, async () => {
-        try {
-          const res = await API.post('/api/sync-all', {});
-          toastOk('Sync terminé pour ' + Object.keys(res.results || {}).length + ' workspace(s)');
-          warnHandEdited(collectHandEdited(res.results));
-          loadSanity(host);
-        } catch (e) { toastErr(e.message); }
-      }));
-      allRow.append(lbl, syncAllBtn);
-      list.appendChild(allRow);
-    }
-
-    for (const f of r.findings) {
-      const item = el('div', 'sanity-item');
-      item['innerHTML'] = `
-        <div class="row" style="justify-content:space-between">
-          <strong class="mono" style="font-size:12px">${escapeHtml(f.workspace)}</strong>
-          <span class="badge badge-warn">désync</span>
-        </div>
-        ${f.missing_sync.length ? `<div class="dim">à sync : <span class="mono">${f.missing_sync.map(escapeHtml).join(', ')}</span></div>` : ''}
-        ${f.stale.length ? `<div class="dim">obsolètes : <span class="mono">${f.stale.map(escapeHtml).join(', ')}</span></div>` : ''}
-      `;
-      // Bouton de réparation 1-clic : sync ce workspace précis
-      // (POST /api/workspaces/<id>/sync-mcps), puis rafraîchit le panneau.
-      const actionRow = el('div');
-      actionRow.style.cssText = 'display:flex;justify-content:flex-end;margin-top:var(--sp-2)';
-      const syncBtn = btn('Sync ce workspace', 'btn-sm', I.refresh);
-      syncBtn.title = "Synchronise le registre MCP vers le .mcp.json de ce workspace";
-      syncBtn.addEventListener('click', () => withBusy(syncBtn, async () => {
-        try {
-          const res = await API.post(`/api/workspaces/${f.workspace}/sync-mcps`, {});
-          toastOk('« ' + f.workspace + ' » synchronisé');
-          // Avertit si le .mcp.json avait été édité à la main : le registre est
-          // la source de vérité, la modif manuelle vient d'être remplacée.
-          if (res && res.hand_edited) warnHandEdited([f.workspace]);
-          loadSanity(host);
-        } catch (e) { toastErr(e.message); }
-      }));
-      actionRow.appendChild(syncBtn);
-      item.appendChild(actionRow);
-      list.appendChild(item);
-    }
-    for (const [mcpId, vars] of Object.entries(r.missing_env || {})) {
-      const item = el('div', 'sanity-item err');
-      item['innerHTML'] = `
-        <div class="row" style="justify-content:space-between">
-          <strong class="mono" style="font-size:12px">${escapeHtml(mcpId)}</strong>
-          <span class="badge badge-err">env manquant</span>
-        </div>
-        <div class="dim">${vars.map(escapeHtml).join(', ')}</div>
-      `;
-      list.appendChild(item);
-    }
-    host['innerHTML'] = '';
-    host.appendChild(list);
+    STATE.sanityDesync = new Set((r.findings || []).map(f => f.workspace));
+    renderHealth(host, r);
   } catch (e) {
     host['innerHTML'] = `<div class="error-box">${escapeHtml(e.message)}</div>`;
+  }
+}
+
+// Bloc Sante : sanity-check serveur (desync registre <-> .mcp.json, env
+// manquant, reparation 1 clic) + controles calcules cote client depuis
+// STATE (workspaces references par des MCPs mais inconnus de Nebula, MCPs
+// sans workspace). `r` null = echec du sanity-check.
+function renderHealth(host, r) {
+  host['innerHTML'] = '';
+  const line = (cls, icon, title, desc) => {
+    const d = el('div', 'hl');
+    d['innerHTML'] = `<span class="hi ${cls}">${icon}</span><div><b>${title}</b>${desc ? `<span class="d">${desc}</span>` : ''}</div>`;
+    host.appendChild(d);
+    return d.querySelector('div');
+  };
+  if (!r) {
+    line('err', I.alert, 'Vérification indisponible', 'Le sanity-check n\'a pas répondu. Relance avec le bouton ci-dessus.');
+  } else {
+    const findings = r.findings || [];
+    const missingEnv = Object.entries(r.missing_env || {});
+    if (!findings.length && !missingEnv.length) {
+      line('ok', I.check, 'Registre et .mcp.json alignés', `${STATE.workspaces.length} workspace${STATE.workspaces.length > 1 ? 's' : ''} vérifié${STATE.workspaces.length > 1 ? 's' : ''}, aucune variable d'environnement manquante.`);
+    }
+    if (findings.length) {
+      const box = line('warn', I.refresh, `${findings.length} workspace${findings.length > 1 ? 's' : ''} désynchronisé${findings.length > 1 ? 's' : ''}`, 'Le registre MCP et le .mcp.json divergent.');
+      if (findings.length > 1) {
+        const all = btn('Tout synchroniser', 'btn-sm btn-primary', I.refresh);
+        all.addEventListener('click', () => withBusy(all, async () => {
+          try {
+            const res = await API.post('/api/sync-all', {});
+            toastOk('Sync terminé pour ' + Object.keys(res.results || {}).length + ' workspace(s)');
+            warnHandEdited(collectHandEdited(res.results));
+            loadSanity(host);
+          } catch (e) { toastErr(e.message); }
+        }));
+        box.appendChild(all);
+      }
+      const list = el('div', 'health-list');
+      for (const f of findings.slice(0, 6)) {
+        const it = el('div', 'health-item');
+        const detail = [
+          f.missing_sync && f.missing_sync.length ? `à sync : ${f.missing_sync.join(', ')}` : '',
+          f.stale && f.stale.length ? `obsolètes : ${f.stale.join(', ')}` : '',
+        ].filter(Boolean).join(' · ');
+        it['innerHTML'] = `<div><b class="mono">${escapeHtml(f.workspace)}</b><div class="dim" style="font-size:11.5px">${escapeHtml(detail)}</div></div>`;
+        const sync = btn('', 'btn-sm btn-ghost btn-icon-only', I.refresh);
+        sync.title = 'Synchronise le registre MCP vers le .mcp.json de ce workspace';
+        sync.setAttribute('aria-label', `Synchroniser ${f.workspace}`);
+        sync.addEventListener('click', () => withBusy(sync, async () => {
+          try {
+            const res = await API.post(`/api/workspaces/${f.workspace}/sync-mcps`, {});
+            toastOk('« ' + f.workspace + ' » synchronisé');
+            warnHandEdited([syncNotice(f.workspace, res)]);
+            loadSanity(host);
+          } catch (e) { toastErr(e.message); }
+        }));
+        it.appendChild(sync);
+        list.appendChild(it);
+      }
+      if (findings.length > 6) list.appendChild(el('div', 'dim', `<span style="font-size:12px">+${findings.length - 6} autre(s)</span>`));
+      box.appendChild(list);
+    }
+    for (const [mcpId, vars] of missingEnv) {
+      line('err', I.key, `${escapeHtml(mcpId)} : variable d'env manquante`, `${vars.map(escapeHtml).join(', ')} absente(s) de .env.local.`);
+    }
+  }
+  // Controles cote client (aucune requete).
+  const known = new Set(STATE.workspaces.map(w => w.id));
+  const unknown = new Set();
+  for (const m of STATE.mcps) {
+    if (_isWild(m)) continue;
+    for (const x of (m.workspaces || [])) if (!known.has(x)) unknown.add(x);
+  }
+  if (unknown.size) {
+    const u = [...unknown].sort();
+    const box = line('warn', I.alert, `${u.length} workspace${u.length > 1 ? 's' : ''} inconnu${u.length > 1 ? 's' : ''} référencé${u.length > 1 ? 's' : ''}`, 'Des MCPs ciblent des workspaces absents de Nebula.');
+    const chips = el('div', 'chips');
+    chips['innerHTML'] = u.slice(0, 5).map(x => `<span class="chip">${escapeHtml(x)}</span>`).join('') + (u.length > 5 ? `<span class="chip more" title="${escapeHtml(u.slice(5).join(', '))}">+${u.length - 5}</span>` : '');
+    box.appendChild(chips);
+  }
+  const unused = STATE.mcps.filter(m => !(m.workspaces || []).length);
+  if (unused.length) {
+    const names = unused.map(m => escapeHtml(m.name || m.id));
+    const box = line('warn', I.box, unused.length === 1 ? `${names[0]} n'est utilisé nulle part` : `${unused.length} MCPs ne sont utilisés nulle part`,
+      unused.length === 1 ? '' : names.join(', '));
+    const a = document.createElement('a');
+    a.href = '#/mcps';
+    a.className = 'btn btn-sm btn-ghost';
+    a['innerHTML'] = `${I.grid}<span>Activer depuis la matrice</span>`;
+    a.addEventListener('click', () => { try { setMcpViewMode('matrix'); } catch { /* noop */ } });
+    box.appendChild(a);
   }
 }
 
 async function loadJournal(host) {
-  host['innerHTML'] = '<div class="dim" style="font-size:12px">Chargement…</div>';
+  host['innerHTML'] = '<li class="dim" style="border:0">Chargement…</li>';
   try {
     const r = await API.get('/api/journal');
     const entries = (r.entries || []).slice().reverse().slice(0, 8);
     if (!entries.length) {
-      host['innerHTML'] = '<div class="dim" style="font-size:12px;padding:var(--sp-2)">Aucune entrée pour le moment.</div>';
+      host['innerHTML'] = '<li class="dim" style="border:0;font-size:12.5px">Aucune entrée pour le moment.</li>';
       return;
     }
-    host['innerHTML'] = '';
-    for (const e of entries) {
-      const item = el('div', 'journal-entry');
-      item['innerHTML'] = `<div class="journal-ts">${escapeHtml(e.ts)}</div><div class="journal-text">${escapeHtml(e.text)}</div>`;
-      host.appendChild(item);
-    }
+    host['innerHTML'] = entries.map(e => `<li><time>${escapeHtml(e.ts)}</time>${escapeHtml(e.text)}</li>`).join('');
   } catch (e) {
-    host['innerHTML'] = `<div class="error-box">${escapeHtml(e.message)}</div>`;
+    host['innerHTML'] = `<li class="error-box">${escapeHtml(e.message)}</li>`;
   }
 }

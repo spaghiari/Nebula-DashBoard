@@ -147,18 +147,31 @@ function getFocusables(container) {
     .filter(el => el.getClientRects().length > 0 || el === container);
 }
 
+// Pile des pieges clavier actifs : SEUL le piege du dessus reagit aux
+// touches. Sans cela, ouvrir une modale B au-dessus d'une modale A laissait
+// le piege de A actif : au premier Tab, A detectait un focus « hors de A » et
+// le ramenait de force dans A (piege orphelin).
+const _trapStack = [];
+
 // Installe un focus trap clavier sur un conteneur : Tab/Shift-Tab cyclent
 // entre les focusables, Escape declenche onEscape. Retourne une fonction de
 // desinstallation (a appeler a la fermeture de l'overlay).
 //   const release = createFocusTrap(modal, { onEscape: close });
 //   ... release();
+// Exemption : un element portant [data-no-trap] (ex. l'editeur JSON, ou Tab
+// sert a indenter) garde sa touche Tab -- le piege ne l'intercepte pas.
+// L'element retire l'attribut quand il veut laisser Tab quitter le champ
+// (le piege reprend alors la main et cycle correctement dans la modale).
 function createFocusTrap(container, { onEscape = null } = {}) {
+  const token = {};
   const onKey = (e) => {
+    if (_trapStack[_trapStack.length - 1] !== token) return;
     if (e.key === 'Escape') {
       if (onEscape) { e.preventDefault(); onEscape(); }
       return;
     }
     if (e.key !== 'Tab') return;
+    if (e.target && e.target.closest && e.target.closest('[data-no-trap]')) return;
     const focusables = getFocusables(container);
     if (!focusables.length) { e.preventDefault(); return; }
     const first = focusables[0];
@@ -176,8 +189,13 @@ function createFocusTrap(container, { onEscape = null } = {}) {
       }
     }
   };
+  _trapStack.push(token);
   document.addEventListener('keydown', onKey, true);
-  return () => document.removeEventListener('keydown', onKey, true);
+  return () => {
+    document.removeEventListener('keydown', onKey, true);
+    const i = _trapStack.indexOf(token);
+    if (i >= 0) _trapStack.splice(i, 1);
+  };
 }
 window.getFocusables = getFocusables;
 window.createFocusTrap = createFocusTrap;
@@ -192,22 +210,149 @@ window.FOCUSABLE_SELECTOR = FOCUSABLE_SELECTOR;
 //   guard.bind(close);                 // fournit le close reel au garde
 //   cancel.addEventListener('click', requestClose);
 //   // apres sauvegarde reussie : guard.markSaved(); close();
-function makeDirtyGuard(message = 'Modifications non sauvegardées. Fermer sans enregistrer ?') {
+// Editeurs multi-fichiers (sauvegardes successives sans fermer) : passer
+// `opts.isDirty` (fonction) -- le garde interroge alors cet etat a chaque
+// fermeture au lieu de markDirty/markSaved (qui eux sont definitifs).
+function makeDirtyGuard(message = 'Modifications non sauvegardées. Fermer sans enregistrer ?', opts = {}) {
   let dirty = false;
   let saved = false;
   let realClose = () => {};
+  let confirming = false;   // une confirmation est deja ouverte (anti double ouverture)
+  const probe = (opts && typeof opts.isDirty === 'function') ? opts.isDirty : null;
+  const dirtyNow = () => (probe ? !!probe() : (dirty && !saved));
   return {
     markDirty: () => { dirty = true; },
     markSaved: () => { saved = true; },
     bind: (closeFn) => { realClose = closeFn; },
-    isDirty: () => dirty && !saved,
+    isDirty: dirtyNow,
     // Renvoie true si la fermeture est autorisee immediatement, false sinon
     // (auquel cas une confirmation est ouverte ; oui -> realClose()).
     confirmClose: () => {
-      if (!dirty || saved) return true;
-      confirmDialog(message, () => realClose(), { danger: true });
+      if (!dirtyNow()) return true;
+      if (confirming) return false;
+      confirming = true;
+      // Annuler referme SEULEMENT la confirmation : l'editeur (empile dessous)
+      // est intact, saisie comprise.
+      confirmDialog(message, () => realClose(), {
+        danger: true,
+        confirmLabel: 'Fermer sans enregistrer',
+        cancelLabel: "Revenir à l'édition",
+        onClose: () => { confirming = false; },
+      });
       return false;
     },
   };
 }
 window.makeDirtyGuard = makeDirtyGuard;
+
+/* ================================================================
+   Refonte 2026-10 (prototype nebula-redesign) : helpers d'affichage
+   partages par l'accueil, la page workspace, les MCPs et la palette.
+   ================================================================ */
+
+// Gem d'un workspace : emoji sur une teinte derivee du nom (--h), sans
+// couleur codee en dur (saturation / luminosite / alpha = tokens --gem-*).
+function wsGem(w, cls = '') {
+  const name = (w && (w.label || w.id)) || '';
+  return `<span class="gem ${cls}" style="--h:${nameHue(name)}" aria-hidden="true">${escapeHtml((w && w.emoji) || '📁')}</span>`;
+}
+
+// 1250000 -> « 1,3 M » ; 1,25e9 -> « 1,25 Md ».
+function fmtCompact(n) {
+  n = Number(n) || 0;
+  const f = (v, d) => v.toLocaleString('fr-FR', { maximumFractionDigits: d });
+  if (n >= 1e9) return f(n / 1e9, 2) + ' Md';
+  if (n >= 1e6) return f(n / 1e6, 1) + ' M';
+  if (n >= 1e3) return f(n / 1e3, 1) + ' k';
+  return String(n);
+}
+
+// « il y a 3 j », « hier », « jamais ».
+function fmtAgo(iso) {
+  if (!iso) return 'jamais';
+  const t = Date.parse(iso);
+  if (isNaN(t)) return String(iso);
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 2) return "à l'instant";
+  if (m < 60) return `il y a ${m} min`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `il y a ${h} h`;
+  const d = Math.round(h / 24);
+  return d === 1 ? 'hier' : `il y a ${d} j`;
+}
+
+// « 14 oct., 00:48 »
+function fmtDateTime(iso) {
+  if (!iso) return 'jamais';
+  const d = new Date(iso);
+  if (isNaN(d)) return String(iso);
+  return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) + ', '
+    + d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+}
+
+// Duree ecoulee « 1 h 12 min 23 s » (chronometres « depuis »).
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor(s / 60) % 60;
+  return (h ? h + ' h ' : '') + String(m).padStart(2, '0') + ' min ' + String(s % 60).padStart(2, '0') + ' s';
+}
+
+// Les animations decoratives (compteurs) ne tournent que si l'utilisateur
+// n'a pas demande de mouvement reduit.
+function motionOK() {
+  try { return !matchMedia('(prefers-reduced-motion: reduce)').matches; } catch { return true; }
+}
+
+// Compteurs animes : uniquement les entiers marques data-count (texte seul,
+// pas de reflow de mise en page : largeur tabulaire).
+function countUp(root) {
+  for (const node of (root || document).querySelectorAll('[data-count]')) {
+    const to = Number(node.dataset.count) || 0;
+    if (!motionOK() || to < 2) { node.textContent = fmtNum(to); continue; }
+    const t0 = performance.now();
+    const step = (t) => {
+      const p = Math.min(1, (t - t0) / 900);
+      node.textContent = fmtNum(Math.round(to * (1 - Math.pow(1 - p, 4))));
+      if (p < 1 && node.isConnected) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }
+}
+
+// Segmented control : boutons aria-pressed + pouce glissant (transform/width).
+function placeSegThumb(seg) {
+  if (!seg) return;
+  const on = seg.querySelector('button[aria-pressed="true"]');
+  const th = seg.querySelector('.thumb');
+  if (!on || !th) return;
+  th.style.width = on.offsetWidth + 'px';
+  th.style.transform = `translateX(${on.offsetLeft - 3}px)`;
+}
+function bindSeg(seg, onChange) {
+  if (!seg) return;
+  requestAnimationFrame(() => placeSegThumb(seg));
+  seg.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-v]');
+    if (!b || b.getAttribute('aria-pressed') === 'true') return;
+    seg.querySelectorAll('button[data-v]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    placeSegThumb(seg);
+    onChange(b.dataset.v);
+  });
+}
+// Les pouces se recalent apres un changement de police / taille de fenetre.
+window.addEventListener('resize', debounce(() => document.querySelectorAll('.seg').forEach(placeSegThumb), 80));
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => document.querySelectorAll('.seg').forEach(placeSegThumb));
+
+// Overlay « Auto-amelioration de Claude » actif sur un workspace (donnee
+// /api/overview overlays_active, aucune requete par workspace).
+const SELF_IMPROVING_ID = 'claude-self-improving';
+function wsHasOverlay(wsId, ovId = SELF_IMPROVING_ID) {
+  const m = (typeof STATE !== 'undefined' && STATE.overlaysActive) || {};
+  return (m[wsId] || []).includes(ovId);
+}
+function selfImprovingMark(wsId) {
+  return wsHasOverlay(wsId)
+    ? '<span class="si" title="Auto-amélioration de Claude active" role="img" aria-label="Auto-amélioration active">🧠</span>'
+    : '';
+}

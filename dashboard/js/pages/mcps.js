@@ -35,11 +35,11 @@ async function renderMCPs() {
   c['innerHTML'] = '';
   const page = el('div', 'page');
 
-  page.appendChild(el('div', 'page-header', `
+  const nWs = (STATE.workspaces || []).length;
+  page.appendChild(el('div', 'page-header rise', `
     <div class="page-header-text">
-      <div class="page-eyebrow"><span class="index">01.</span><span>Catalogue</span></div>
       <h1 class="page-title">MCPs</h1>
-      <p class="page-subtitle">Servers Model Context Protocol — synchronisés vers les workspaces.</p>
+      <p class="page-subtitle">${STATE.mcps.length} serveur${STATE.mcps.length > 1 ? 's' : ''} dans le registre, synchronisé${STATE.mcps.length > 1 ? 's' : ''} vers les <span class="mono">.mcp.json</span> de ${nWs} workspace${nWs > 1 ? 's' : ''}.</p>
     </div>
   `));
   mountHelpLink(page, 'mcps', 'les MCPs');
@@ -91,34 +91,86 @@ async function renderMCPs() {
     } catch (e) { console.warn('[conflicts] banner fetch échoué :', e.message); }
   })();
 
-  const toolbar = el('div', 'mcp-toolbar');
-  toolbar['innerHTML'] = `<input class="input input-search" type="search" placeholder="Filtrer par nom, transport, workspace…" />`;
-  const filterStatus = el('select', 'select');
-  filterStatus['innerHTML'] = `<option value="">Tous statuts</option><option>disponible</option><option>à configurer</option><option>désactivé</option>`;
-  filterStatus.style.maxWidth = '180px';
-  toolbar.appendChild(filterStatus);
-  const filterTransport = el('select', 'select');
-  filterTransport['innerHTML'] = `<option value="">Tous transports</option><option>stdio</option><option>http</option><option>sse</option>`;
-  filterTransport.style.maxWidth = '160px';
-  toolbar.appendChild(filterTransport);
-  page.appendChild(toolbar);
+  // Barre de filtres : recherche + puces a compteurs (type / usage, statut)
+  // + bascule Cartes | Matrice (memorisee en localStorage ; Cartes par defaut).
+  const toolbar = el('div', 'mcp-filters rise');
+  toolbar.style.setProperty('--i', 1);
+  toolbar['innerHTML'] = `<span class="search-field">${I.search}<input class="input" type="search" placeholder="Nom, commande, workspace…" aria-label="Filtrer les MCPs"></span>`;
+  const searchInput = toolbar.querySelector('input');
+  // Pre-remplissage depuis la palette (Ctrl+K > un MCP).
+  if (STATE.filter && STATE.filter.mcp) { searchInput.value = STATE.filter.mcp; STATE.filter.mcp = ''; }
+  let typeF = '';   // '' | stdio | http | sse | orphan
+  let statusF = ''; // '' | à configurer | désactivé
+  const typeGroup = el('span', 'mcp-chipgroup');
+  typeGroup.setAttribute('role', 'group');
+  typeGroup.setAttribute('aria-label', 'Filtrer par type');
+  const statusGroup = el('span', 'mcp-chipgroup');
+  statusGroup.setAttribute('role', 'group');
+  statusGroup.setAttribute('aria-label', 'Filtrer par statut');
+  const drawChips = () => {
+    const all = STATE.mcps || [];
+    const tr = (m) => m.transport || 'stdio';
+    const types = [['', 'Tous', all.length], ['stdio', 'stdio', all.filter(m => tr(m) === 'stdio').length],
+      ['http', 'http', all.filter(m => tr(m) === 'http').length], ['sse', 'sse', all.filter(m => tr(m) === 'sse').length],
+      ['orphan', 'Sans workspace', all.filter(m => !(m.workspaces || []).length).length]]
+      .filter(([v, , n]) => !v || v === 'orphan' || n > 0 || v === typeF);
+    typeGroup['innerHTML'] = types.map(([v, l, n]) => `<button class="fchip" type="button" data-type="${v}" aria-pressed="${typeF === v}">${escapeHtml(l)} <b>${n}</b></button>`).join('');
+    const sts = [['disponible', 'Disponibles'], ['à configurer', 'À configurer'], ['désactivé', 'Désactivés']]
+      .map(([v, l]) => [v, l, all.filter(m => m.status === v).length]).filter(([v, , n]) => n > 0 || v === statusF);
+    statusGroup['innerHTML'] = sts.length ? '<span class="fchip-sep" aria-hidden="true"></span>' + sts.map(([v, l, n]) => `<button class="fchip" type="button" data-status="${escapeHtml(v)}" aria-pressed="${statusF === v}" title="Cliquer à nouveau pour retirer le filtre">${escapeHtml(l)} <b>${n}</b></button>`).join('') : '';
+  };
+  typeGroup.addEventListener('click', (e) => { const b = e.target.closest('[data-type]'); if (!b) return; typeF = b.dataset.type; drawChips(); renderList(); });
+  statusGroup.addEventListener('click', (e) => { const b = e.target.closest('[data-status]'); if (!b) return; statusF = statusF === b.dataset.status ? '' : b.dataset.status; drawChips(); renderList(); });
+  toolbar.append(typeGroup, statusGroup, el('span', 'sp'));
 
-  const grid = el('div', 'mcp-grid');
+  let viewMode = mcpViewMode();
+  const sortSel = el('select', 'select mx-sort');
+  sortSel['innerHTML'] = `<option value="name">Tri : nom (A-Z)</option><option value="count">Tri : plus utilisés</option>`;
+  sortSel.value = mcpMatrixSort();
+  sortSel.setAttribute('aria-label', 'Tri de la matrice');
+  toolbar.appendChild(sortSel);
+  const viewToggle = el('span', 'seg mx-view');
+  viewToggle.setAttribute('role', 'group');
+  viewToggle.setAttribute('aria-label', "Mode d'affichage des MCPs");
+  viewToggle['innerHTML'] = `<span class="thumb"></span><button type="button" data-view="cards" aria-pressed="false">${I.grid}Cartes</button><button type="button" data-view="matrix" aria-pressed="false">${I.list}Matrice</button>`;
+  toolbar.appendChild(viewToggle);
+  page.appendChild(toolbar);
+  drawChips();
+
+  const grid = el('div', 'mcp-grid rise');
+  grid.style.setProperty('--i', 2);
   page.appendChild(grid);
+  const matrixHost = el('div', 'mx-host');
+  page.appendChild(matrixHost);
+  let matrix = null;
 
   const renderList = () => {
-    const q = toolbar.querySelector('input').value.trim().toLowerCase();
-    const sf = filterStatus.value;
-    const tf = filterTransport.value;
+    const q = searchInput.value.trim().toLowerCase();
+    const sf = statusF;
+    const tf = typeF;
     const list = STATE.mcps.filter(m => {
       if (sf && m.status !== sf) return false;
-      if (tf && (m.transport || 'stdio') !== tf) return false;
+      if (tf === 'orphan') { if ((m.workspaces || []).length) return false; }
+      else if (tf && (m.transport || 'stdio') !== tf) return false;
       if (q) {
-        const hay = `${m.id} ${m.name || ''} ${m.description || ''} ${(m.workspaces || []).join(' ')} ${m.transport || ''}`.toLowerCase();
+        const cmd = `${m.command || ''} ${(m.args || []).join(' ')} ${m.url || ''}`;
+        const hay = `${m.id} ${m.name || ''} ${m.description || ''} ${(m.workspaces || []).join(' ')} ${m.transport || ''} ${cmd}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     });
+    if (viewMode === 'matrix') {
+      grid.style.display = 'none';
+      matrixHost.style.display = '';
+      if (!matrix) {
+        matrix = createMcpMatrix({ onEdit: (m) => modalNewMCP(m) });
+        matrixHost.appendChild(matrix.el);
+      }
+      matrix.render(list, STATE.workspaces || [], { sort: sortSel.value, all: STATE.mcps });
+      return;
+    }
+    grid.style.display = '';
+    matrixHost.style.display = 'none';
     grid['innerHTML'] = '';
     if (!list.length) {
       const empty = el('div', 'empty');
@@ -133,18 +185,53 @@ async function renderMCPs() {
     }
     for (const m of list) grid.appendChild(mcpCard(m));
   };
-  toolbar.querySelector('input').addEventListener('input', debounce(renderList, 100));
-  filterStatus.addEventListener('change', renderList);
-  filterTransport.addEventListener('change', renderList);
+  searchInput.addEventListener('input', debounce(renderList, 100));
+  sortSel.addEventListener('change', () => { setMcpMatrixSort(sortSel.value); renderList(); });
+
+  const syncViewUi = () => {
+    viewToggle.querySelectorAll('button').forEach(b => {
+      const on = b.dataset.view === viewMode;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    sortSel.style.display = viewMode === 'matrix' ? '' : 'none';
+    requestAnimationFrame(() => placeSegThumb(viewToggle));
+  };
+  const switchView = (mode) => {
+    if (mode === viewMode) return;
+    const go = () => {
+      viewMode = mode;
+      setMcpViewMode(mode);
+      // Le bandeau (ex. echec d'application) n'a pas de sens en vue Cartes.
+      if (mode === 'cards') { const bar = document.getElementById('mx-bar'); if (bar) bar.remove(); }
+      syncViewUi();
+      renderList();
+    };
+    // Passer en Cartes avec des modifications non appliquees : on previent
+    // plutot que de les abandonner en silence (pas de bandeau en vue Cartes).
+    const pending = matrix ? matrix.pendingCount() : 0;
+    if (mode === 'cards' && pending > 0) {
+      confirmDialog(`${pending} modification(s) de la matrice n'ont pas été appliquées.\nPasser en vue Cartes les abandonne.`, () => { matrix.discard(); go(); },
+        { danger: true, confirmLabel: 'Abandonner et passer en Cartes', cancelLabel: 'Rester sur la matrice' });
+      return;
+    }
+    go();
+  };
+  viewToggle.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-view]');
+    if (b) switchView(b.dataset.view);
+  });
+  syncViewUi();
   renderList();
+  if (viewMode !== 'matrix') { const bar = document.getElementById('mx-bar'); if (bar) bar.remove(); }
 
   // Auto-refresh des MCPs toutes les 30s tant que la page est active.
   // Le poller est nettoyé automatiquement via clearPagePollers() au changement de page.
   const liveDot = el('span', 'live-dot');
   liveDot.title = 'Auto-refresh actif (toutes les 30s)';
   liveDot.style.cssText = 'display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--ok);margin-left:8px;vertical-align:middle;animation:pulse 2s ease-in-out infinite';
-  const eyebrow = page.querySelector('.page-eyebrow');
-  if (eyebrow) eyebrow.appendChild(liveDot);
+  const titleEl = page.querySelector('.page-title');
+  if (titleEl) titleEl.appendChild(liveDot);
 
   const pollerId = setInterval(async () => {
     try {
@@ -153,6 +240,7 @@ async function renderMCPs() {
       // Re-render seulement si le contenu a changé (évite reflow inutile)
       if (JSON.stringify(next) !== JSON.stringify(STATE.mcps)) {
         STATE.mcps = next;
+        drawChips();
         renderList();
       }
     } catch { /* silencieux : un blip réseau ne doit pas spammer */ }
@@ -163,23 +251,23 @@ async function renderMCPs() {
 }
 
 function mcpCard(m) {
-  const card = el('div', 'mcp-card');
+  const card = el('article', 'mcp-card');
   // Statut réel calculé par compute_mcp_status (back) : disponible /
   // à configurer / désactivé. « connecté » n'est jamais retourné (pas de
   // test live), donc pas de pastille verte ici — ce serait un faux signal.
   // Lot E item 2 : « désactivé » est un choix VOLONTAIRE -> neutre (gris),
   // pas rouge. Le rouge est réservé aux états réellement cassés (env
   // manquant ci-dessous), pour ne pas mélanger « off » et « KO ».
-  const statusClass = m.status === 'disponible' ? 'badge-info' : m.status === 'désactivé' ? 'badge' : 'badge-warn';
-  const transportColor = m.transport === 'http' ? 'badge-info' : m.transport === 'sse' ? 'badge-accent' : 'badge';
-  const isHttp = m.transport === 'http' || m.transport === 'sse';
+  const statusClass = m.status === 'disponible' ? 'info' : m.status === 'désactivé' ? 'mute' : 'warn';
+  const transport = m.transport || 'stdio';
+  const isHttp = transport === 'http' || transport === 'sse';
   const cmd = isHttp ? (m.url || '—') : (m.command || '—') + (m.args && m.args.length ? ' ' + m.args.join(' ') : '');
   const headerCount = Object.keys(m.headers || {}).length;
   const envCount = Object.keys(m.env || {}).length;
-  const extraBadges = [];
-  if (m.cwd) extraBadges.push(`<span class="badge" title="cwd : ${escapeHtml(m.cwd)}">cwd</span>`);
-  if (headerCount) extraBadges.push(`<span class="badge badge-info" title="${headerCount} header(s)">${headerCount} hdr</span>`);
-  if (envCount) extraBadges.push(`<span class="badge" title="${envCount} variable(s) d'env">${envCount} env</span>`);
+  const chips = [`<span class="chip">${escapeHtml(transport)}</span>`];
+  if (envCount) chips.push(`<span class="chip" title="${envCount} variable(s) d'env">${envCount} env</span>`);
+  if (headerCount) chips.push(`<span class="chip" title="${headerCount} header(s)">${headerCount} hdr</span>`);
+  if (m.cwd) chips.push(`<span class="chip" title="cwd : ${escapeHtml(m.cwd)}">cwd</span>`);
 
   // Lot E item 2 : sous-badge « env manquant » dérivé du même lint que le
   // diagnostic (lintInterpolation, js/lint.js). On compare les ${VAR}
@@ -191,40 +279,41 @@ function mcpCard(m) {
   // precise manque. Si le fichier n'existe pas du tout, le bandeau global en
   // tete de page le signale deja -- inutile de rougir chaque card (bruit).
   const missingBadge = (STATE.envExists && missingEnv.length)
-    ? `<span class="badge badge-err mcp-missing-env" role="button" tabindex="0" title="Variable(s) référencée(s) mais absente(s) de .env.local : ${escapeHtml(missingEnv.join(', '))}. Clique pour diagnostiquer.">env manquant: ${escapeHtml(missingEnv.join(', '))}</span>`
+    ? `<button type="button" class="pill err mcp-missing-env" title="Variable(s) référencée(s) mais absente(s) de .env.local : ${escapeHtml(missingEnv.join(', '))}. Clique pour diagnostiquer.">env manquant : ${escapeHtml(missingEnv.join(', '))}</button>`
     : '';
 
+  // Workspaces : pastilles des workspaces connus, compte des inconnus.
+  const wsList = m.workspaces || [];
+  const wild = wsList.includes('*') || wsList.includes('all');
+  const byId = new Map((STATE.workspaces || []).map(w => [w.id, w]));
+  const known = wsList.filter(x => byId.has(x));
+  const unknown = wsList.filter(x => x !== '*' && x !== 'all' && !byId.has(x));
+  let used;
+  if (wild) used = `<span class="pill accent" title="Actif dans TOUS les workspaces (joker « * »)">★ tous les workspaces</span>`;
+  else if (!wsList.length) used = '<span class="pill warn">Aucun workspace</span>';
+  else {
+    used = (known.length ? `<span class="gem-stack" title="${escapeHtml(known.join(', '))}">${known.slice(0, 5).map(x => wsGem(byId.get(x))).join('')}</span>` : '')
+      + `<span>${known.length} workspace${known.length > 1 ? 's' : ''}${known.length > 5 ? ` (${escapeHtml(known.slice(0, 5).map(x => byId.get(x).label || x).join(', '))}…)` : ''}</span>`
+      + (unknown.length ? `<span class="ghost" title="${escapeHtml(unknown.join(', '))}">+${unknown.length} hors Nebula</span>` : '');
+  }
+
   card['innerHTML'] = `
-    <div class="mcp-card-header">
+    <div class="top">
+      <span class="mi ${isHttp ? 'http' : ''}" aria-hidden="true">${isHttp ? I.ext : I.terminal}</span>
       <div style="min-width:0">
         <h3 class="mcp-name">${escapeHtml(m.name || m.id)}</h3>
-        <div class="dim mono" style="font-size:11px;margin-top:2px">${escapeHtml(m.id)}</div>
+        <div class="msub"><small>${escapeHtml(m.id)}</small>${chips.join('')}</div>
       </div>
-      <div class="mcp-card-badges">
-        <span class="badge ${statusClass}">${escapeHtml(m.status || 'à configurer')}</span>
-        ${missingBadge}
-      </div>
+      <div class="mstate"><span class="pill ${statusClass}">${escapeHtml(m.status || 'à configurer')}</span>${missingBadge}</div>
     </div>
-    ${m.description ? `<p class="mcp-desc">${escapeHtml(m.description)}</p>` : ''}
-    <div class="row" style="gap:6px">
-      <span class="badge ${transportColor}">${escapeHtml(m.transport || 'stdio')}</span>
-      ${extraBadges.join('')}
-      ${(m.workspaces || []).slice(0, 4).map(ws => `<span class="chip">${escapeHtml(ws)}</span>`).join('')}
-      ${(m.workspaces || []).length > 4 ? `<span class="chip">+${(m.workspaces || []).length - 4}</span>` : ''}
-    </div>
+    <p class="mcp-desc ${m.description ? '' : 'none'}">${m.description ? escapeHtml(m.description) : 'Pas de description.'}</p>
+    <div class="used">${used}</div>
     <div class="mcp-cmd" title="${escapeHtml(cmd)}">${escapeHtml(cmd)}</div>
-    ${m.cwd ? `<div class="dim mono" style="font-size:10.5px;padding:2px 8px;background:var(--bg);border-radius:4px;border:1px solid var(--border)" title="working directory">cd: ${escapeHtml(m.cwd)}</div>` : ''}
+    ${m.cwd ? `<div class="dim mono" style="font-size:11px" title="working directory">cd : ${escapeHtml(m.cwd)}</div>` : ''}
   `;
   // Sous-badge « env manquant » cliquable -> ouvre le diagnostic (lot C).
-  // Le badge LIE vers l'action existante, il ne la réimplémente pas.
   const missingEl = card.querySelector('.mcp-missing-env');
-  if (missingEl) {
-    missingEl.style.cursor = 'pointer';
-    missingEl.addEventListener('click', () => modalDiagnoseMCP(m));
-    missingEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); modalDiagnoseMCP(m); }
-    });
-  }
+  if (missingEl) missingEl.addEventListener('click', () => modalDiagnoseMCP(m));
 
   const footer = el('div', 'mcp-card-footer');
   const diag = btn('Diagnostiquer', 'btn-sm btn-ghost', I.activity || I.search);
@@ -234,6 +323,7 @@ function mcpCard(m) {
   ed.addEventListener('click', () => modalNewMCP(m));
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
   rm.title = 'Supprimer';
+  rm.setAttribute('aria-label', `Supprimer ${m.name || m.id}`);
   rm.addEventListener('click', () => confirmDialog(`Supprimer ${m.id} ?`, async () => {
     try {
       await API.del(`/api/mcps/${m.id}`);
@@ -248,7 +338,7 @@ function mcpCard(m) {
       route({ silent: true });
     }
     catch (e) { toastErr(e.message); }
-  }, { danger: true }));
+  }, { danger: true, confirmLabel: 'Supprimer' }));
   footer.append(diag, ed, rm);
   card.appendChild(footer);
   return card;
@@ -676,8 +766,10 @@ function mcpToRecipeTemplate(mcp) {
 
 function modalSaveAsRecipe(mcp) {
   const template = mcpToRecipeTemplate(mcp);
-  // Ouvre l'éditeur en mode "création depuis MCP" : id éditable, pas de delete
-  modalEditRecipe(template, { fromMcp: true, sourceMcpId: mcp.id });
+  // Ouvre l'éditeur en mode "création depuis MCP" : id éditable, pas de delete.
+  // Empilé au-dessus de la modale MCP (restée ouverte) : après enregistrement
+  // on y revient, au lieu d'ouvrir le catalogue de recettes.
+  modalEditRecipe(template, { fromMcp: true, sourceMcpId: mcp.id, onSaved: () => {} });
 }
 
 // ── Éditeur GUI de recette locale ────────────────────────────────────────────
@@ -845,8 +937,10 @@ function modalEditRecipe(existing, opts = {}) {
       const resp = await API.post('/api/mcps/recipes/local', payload);
       toastOk(resp.action === 'created' ? `Recette '${id}' créée` : `Recette '${id}' mise à jour`);
       close();
-      // Re-fetch + re-ouvre la modal de catalogue
-      modalMcpRecipes();
+      // Re-fetch + re-ouvre la modal de catalogue (sauf appelant qui gère
+      // la suite lui-même, ex. « Sauver comme recette » depuis la modale MCP).
+      if (typeof opts.onSaved === 'function') opts.onSaved(resp);
+      else modalMcpRecipes();
     } catch (e) {
       toastErr(e.message);
       save.disabled = false;
@@ -904,7 +998,7 @@ function modalNewMCP(existing = null) {
       </div>
     </div>
     <div data-tab-body="json" hidden>
-      <div class="field"><label class="field-label">JSON complet du MCP</label><textarea class="textarea" name="raw" rows="18"></textarea></div>
+      <div class="field"><label class="field-label" for="mcp-raw-json-ta">JSON complet du MCP</label><div data-editor-host></div></div>
     </div>
   `;
   const updateTransportFields = () => {
@@ -914,13 +1008,39 @@ function modalNewMCP(existing = null) {
   };
   body.querySelector('[name=transport]').addEventListener('change', updateTransportFields);
   updateTransportFields();
-  body.querySelector('[name=raw]').value = JSON.stringify(m, null, 2);
+  // Editeur JSON maison (js/json-editor.js). `jsonTouched` : tant que
+  // l'utilisateur n'y a rien saisi, l'onglet JSON est regenere depuis le
+  // formulaire a chaque ouverture (sinon il affichait un etat perime).
+  const cancel = btn('Annuler', 'btn-ghost');
+  const save = btn(isEdit ? 'Mettre à jour' : 'Créer', 'btn-primary');
+  let jsonTouched = false;
+  let jsonValid = true;
+  const updateSaveState = () => {
+    const onJson = body.querySelector('.tab.active').dataset.tab === 'json';
+    const bad = onJson && !jsonValid;
+    save.disabled = bad;
+    save.title = bad ? 'Corrige le JSON pour pouvoir enregistrer' : '';
+  };
+  // Garde anti-perte : toute saisie (formulaire, cases, JSON brut) rend la
+  // modale « dirty » ; Échap / croix / clic sur le voile / Annuler ouvrent
+  // alors une confirmation empilée (« Revenir à l'édition » la referme seule,
+  // saisie intacte).
+  const guard = makeDirtyGuard('Modifications non enregistrées sur ce MCP. Fermer sans enregistrer ?');
+  body.addEventListener('input', guard.markDirty);
+  body.addEventListener('change', guard.markDirty);
+  const jsonEditor = createJsonEditor({
+    value: JSON.stringify(m, null, 2), rows: 18, id: 'mcp-raw-json', ariaLabel: 'JSON complet du MCP',
+    onChange: () => { jsonTouched = true; guard.markDirty(); },
+    onSave: () => { if (!save.disabled) save.click(); },
+    onValidChange: (ok) => { jsonValid = ok; updateSaveState(); },
+  });
+  body.querySelector('[data-editor-host]').appendChild(jsonEditor.el);
 
   // Construit la liste de checkboxes pour les workspaces ciblés
   const wsHost = body.querySelector('[data-name=workspaces]');
   const currentWs = new Set(m.workspaces || []);
   const allWs = STATE.workspaces || [];
-  const allChecked = currentWs.has('*');
+  const allChecked = currentWs.has('*') || currentWs.has('all');
 
   const wsAllLabel = el('label', 'ws-check ws-check-all');
   wsAllLabel['innerHTML'] = `<input type="checkbox" data-ws-all ${allChecked ? 'checked' : ''}>
@@ -961,26 +1081,47 @@ function modalNewMCP(existing = null) {
       body.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
       body.querySelectorAll('[data-tab-body]').forEach(b => b.hidden = b.dataset.tabBody !== tab.dataset.tab);
+      if (tab.dataset.tab === 'json') {
+        if (!jsonTouched) jsonEditor.setValue(JSON.stringify(readFormPayload(), null, 2));
+        else jsonEditor.refresh();
+      }
+      updateSaveState();
     });
   }
 
-  const cancel = btn('Annuler', 'btn-ghost');
-  const save = btn(isEdit ? 'Mettre à jour' : 'Créer', 'btn-primary');
   const footer = [cancel];
   // En mode édition d'un MCP existant : bouton "Sauver comme recette"
   // permet de transformer une config qui marche en template réutilisable.
   if (isEdit) {
     const saveAsRecipe = btn('Sauver comme recette', 'btn-ghost', I.sparkle);
     saveAsRecipe.title = 'Crée une recette locale (template) à partir de ce MCP — réutilisable pour installer d\'autres instances avec d\'autres credentials';
+    // Part de la SAISIE EN COURS (formulaire ou JSON brut), pas du MCP tel
+    // qu'il était à l'ouverture. La modale MCP reste ouverte (l'éditeur de
+    // recette s'empile dessus) : rien n'est perdu, la garde anti-perte
+    // reste en place pour la fermeture.
     saveAsRecipe.addEventListener('click', () => {
-      close();
-      modalSaveAsRecipe(m);
+      let current;
+      if (body.querySelector('.tab.active').dataset.tab === 'json') {
+        const check = jsonEditor.validate();
+        if (!check.ok) { toastErr(`JSON invalide, ligne ${check.line} : ${check.msg}`); return; }
+        current = check.value;
+        if (!current || typeof current !== 'object' || Array.isArray(current)) {
+          toastErr('Le JSON doit décrire un objet MCP'); return;
+        }
+      } else {
+        current = readFormPayload();
+      }
+      modalSaveAsRecipe({ ...m, ...current, id: current.id || m.id });
     });
     footer.push(saveAsRecipe);
   }
   footer.push(save);
-  const { close } = openModal({ title: isEdit ? `Modifier ${m.id}` : 'Nouveau MCP', body, footer, wide: true });
-  cancel.addEventListener('click', close);
+  const { close, requestClose } = openModal({
+    title: isEdit ? `Modifier ${m.id}` : 'Nouveau MCP', body, footer, wide: true,
+    closeOnBackdrop: true, confirmClose: guard.confirmClose,
+  });
+  guard.bind(close);
+  cancel.addEventListener('click', requestClose);
 
   const parseKV = (text) => {
     const out = {};
@@ -991,37 +1132,43 @@ function modalNewMCP(existing = null) {
     return out;
   };
 
+  // Lit le formulaire (onglet « Formulaire ») et construit le payload MCP.
+  const readFormPayload = () => {
+    const get = (n) => body.querySelector(`[name=${n}]`).value;
+    const argsRaw = get('args').split('\n').map(s => s.trim()).filter(Boolean);
+    // Lit les workspaces depuis les checkboxes : ["*"] si "Tous", sinon liste des ids cochés
+    const wsHost = body.querySelector('[data-name=workspaces]');
+    const wsAllChecked = wsHost.querySelector('[data-ws-all]')?.checked;
+    const wsRaw = wsAllChecked
+      ? ['*']
+      : Array.from(wsHost.querySelectorAll('[data-ws]:checked')).map(cb => cb.dataset.ws);
+    return {
+      id: get('id').trim(),
+      name: get('name').trim() || get('id').trim(),
+      description: get('description').trim(),
+      transport: get('transport'),
+      status: get('status'),
+      command: get('command').trim(),
+      args: argsRaw,
+      cwd: get('cwd').trim(),
+      url: get('url').trim(),
+      headers: parseKV(get('headers')),
+      env: parseKV(get('env')),
+      workspaces: wsRaw,
+      author: get('author').trim(),
+      notes: get('notes').trim(),
+    };
+  };
+
   save.addEventListener('click', async () => {
     let payload;
     const activeTab = body.querySelector('.tab.active').dataset.tab;
     if (activeTab === 'json') {
-      try { payload = JSON.parse(body.querySelector('[name=raw]').value); }
-      catch (e) { toastErr('JSON invalide : ' + e.message); return; }
+      const check = jsonEditor.validate();
+      if (!check.ok) { toastErr(`JSON invalide, ligne ${check.line} : ${check.msg}`); return; }
+      payload = check.value;
     } else {
-      const get = (n) => body.querySelector(`[name=${n}]`).value;
-      const argsRaw = get('args').split('\n').map(s => s.trim()).filter(Boolean);
-      // Lit les workspaces depuis les checkboxes : ["*"] si "Tous", sinon liste des ids cochés
-      const wsHost = body.querySelector('[data-name=workspaces]');
-      const wsAllChecked = wsHost.querySelector('[data-ws-all]')?.checked;
-      const wsRaw = wsAllChecked
-        ? ['*']
-        : Array.from(wsHost.querySelectorAll('[data-ws]:checked')).map(cb => cb.dataset.ws);
-      payload = {
-        id: get('id').trim(),
-        name: get('name').trim() || get('id').trim(),
-        description: get('description').trim(),
-        transport: get('transport'),
-        status: get('status'),
-        command: get('command').trim(),
-        args: argsRaw,
-        cwd: get('cwd').trim(),
-        url: get('url').trim(),
-        headers: parseKV(get('headers')),
-        env: parseKV(get('env')),
-        workspaces: wsRaw,
-        author: get('author').trim(),
-        notes: get('notes').trim(),
-      };
+      payload = readFormPayload();
     }
     // Envoi effectif (factorisé : appelé directement ou après confirmation du lint).
     const doSave = async () => {
@@ -1035,7 +1182,7 @@ function modalNewMCP(existing = null) {
         } else {
           toastOk(`MCP ${verb} et synchronisé vers ${synced.length} workspace(s) : ${synced.slice(0, 3).join(', ')}${synced.length > 3 ? '…' : ''}`);
         }
-        close(); STATE.loading = true; route();
+        guard.markSaved(); close(); STATE.loading = true; route();
       } catch (e) { toastErr(e.message); }
     };
 

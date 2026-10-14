@@ -289,8 +289,18 @@ async function modalEditTemplate(tplId) {
   const body = el('div');
   body['innerHTML'] = `<div class="page-loader"><div class="spinner"></div><span>Chargement du template…</span></div>`;
   const closeBtn = btn('Fermer', 'btn-ghost');
-  const { close } = openModal({ title: `Template · ${tplId}`, body, footer: closeBtn, wide: true });
-  closeBtn.addEventListener('click', close);
+  // Garde anti-perte a la fermeture (croix, Echap, Fermer) : fichier courant
+  // modifie non enregistre OU meta (emoji/label/description) non enregistree.
+  // Etats `dirty` / `metaDirty` declares plus bas, lus au moment de fermer.
+  let dirty = false;
+  let metaDirty = false;
+  const guard = makeDirtyGuard('Modifications non enregistrées dans ce template. Fermer sans enregistrer ?',
+    { isDirty: () => dirty || metaDirty });
+  const { close, requestClose } = openModal({
+    title: `Template · ${tplId}`, body, footer: closeBtn, wide: true, confirmClose: guard.confirmClose,
+  });
+  guard.bind(close);
+  closeBtn.addEventListener('click', requestClose);
 
   let detail;
   try { detail = await API.get(`/api/templates/${tplId}`); }
@@ -320,10 +330,14 @@ async function modalEditTemplate(tplId) {
   `;
 
   // Save meta
+  for (const n of ['emoji', 'label', 'description']) {
+    body.querySelector(`[name=${n}]`).addEventListener('input', () => { metaDirty = true; });
+  }
   body.querySelector('[data-save-meta]').addEventListener('click', async () => {
     const get = n => body.querySelector(`[name=${n}]`).value.trim();
     try {
       await API.post(`/api/templates/${tplId}/meta`, { label: get('label'), description: get('description'), emoji: get('emoji') });
+      metaDirty = false;
       toastOk('Méta enregistrée');
       STATE.loading = true;  // Refresh list later
     } catch (e) { toastErr(e.message); }
@@ -368,9 +382,10 @@ async function modalEditTemplate(tplId) {
   const pane = body.querySelector('.tpl-pane');
   let files = detail.files.slice();
   let currentPath = null;
-  // Garde anti-perte de saisie : passe a true quand l'editeur est modifie,
-  // remis a false au chargement d'un fichier et apres sauvegarde reussie.
-  let dirty = false;
+  // Garde anti-perte de saisie (`dirty`, declare en tete de fonction) : passe
+  // a true quand l'editeur est modifie, remis a false au chargement d'un
+  // fichier et apres sauvegarde reussie.
+  let curEditor = null;   // editeur du fichier courant (mountFileEditor)
 
   const renderTree = () => {
     treeList['innerHTML'] = '';
@@ -394,7 +409,7 @@ async function modalEditTemplate(tplId) {
           try {
             await API.del(`/api/templates/${tplId}/file?path=${encodeURIComponent(f.path)}`);
             files = files.filter(x => x.path !== f.path);
-            if (currentPath === f.path) { currentPath = null; pane['innerHTML'] = '<div class="tpl-pane-empty">Sélectionne un fichier.</div>'; }
+            if (currentPath === f.path) { currentPath = null; dirty = false; pane['innerHTML'] = '<div class="tpl-pane-empty">Sélectionne un fichier.</div>'; }
             renderTree(); toastOk('Supprimé');
           } catch (err) { toastErr(err.message); }
         }, { danger: true });
@@ -409,7 +424,7 @@ async function modalEditTemplate(tplId) {
     if (dirty && path !== currentPath) {
       const ok = await new Promise((resolve) => {
         confirmDialog('Modifications non sauvegardées sur le fichier courant. Changer de fichier sans enregistrer ?',
-          () => resolve(true), { danger: true });
+          () => resolve(true), { danger: true, confirmLabel: 'Changer de fichier' });
       });
       if (!ok) return;
     }
@@ -436,18 +451,27 @@ async function modalEditTemplate(tplId) {
     `;
     const ta = pane.querySelector('textarea');
     ta.value = data.content;
-    ta.focus();
-    ta.addEventListener('input', () => { dirty = true; });
     const saveBtn = pane.querySelector('[data-save-file]');
+    // .json -> editeur JSON non bloquant (placeholders {{...}}) ; Ctrl+S.
+    if (curEditor) curEditor.destroy();
+    const editor = mountFileEditor(ta, path, {
+      onChange: () => { dirty = true; },
+      onSave: () => saveBtn.click(),
+    });
+    curEditor = editor;
+    editor.focus();
     saveBtn.addEventListener('click', () => withBusy(saveBtn, async () => {
       try {
-        const r = await API.post(`/api/templates/${tplId}/file`, { path, content: ta.value });
+        const r = await API.post(`/api/templates/${tplId}/file`, { path, content: editor.getValue() });
         const f = files.find(x => x.path === path);
         if (f) f.size = r.size;
         dirty = false;
         renderTree();
         refreshQuality();
         toastOk('Enregistré');
+        // JSON accepté malgré des placeholders hors guillemets : le serveur
+        // prévient que la copie dans un workspace sera invalide si non remplacé.
+        if (r.warning) toast(r.warning, 'info', 12000);
       } catch (e) { toastErr(e.message); }
     }));
     pane.querySelector('[data-preview-file]').addEventListener('click', async () => {
@@ -455,13 +479,6 @@ async function modalEditTemplate(tplId) {
         const r = await API.get(`/api/templates/${tplId}/preview?path=${encodeURIComponent(path)}`);
         modalPreviewTemplateFile(path, r);
       } catch (e) { toastErr(e.message); }
-    });
-    // Ctrl+S to save
-    ta.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-        e.preventDefault();
-        pane.querySelector('[data-save-file]').click();
-      }
     });
   };
 

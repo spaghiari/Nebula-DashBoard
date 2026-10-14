@@ -1,11 +1,25 @@
 <!DOCTYPE html>
-<html lang="fr" data-theme="dark">
+<html lang="fr">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Nebula — Claude Workspace</title>
+  <!-- Anti-flash : pose data-theme AVANT le premier rendu depuis le cache
+       localStorage. theme.js (applyTheme/THEMES) reste la source de verite :
+       il revalide l'id au chargement et corrige l'attribut si besoin. -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('nebula-theme');
+        if (t && t !== 'nebula' && /^[a-z-]{1,24}$/.test(t)) document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/css/editor-matrix.css">
+  <link rel="stylesheet" href="/css/sessions.css">
+  <link rel="stylesheet" href="/css/redesign.css">
 </head>
 <body>
   <div id="app">
@@ -20,20 +34,24 @@
         </a>
       </div>
       <nav class="sidebar-nav" id="sidebar-nav" aria-label="Navigation principale"></nav>
+      <div class="side-group" id="side-group" hidden><span id="side-group-label">Workspaces récents</span><a href="#/" title="Voir tous les workspaces">Tous</a></div>
+      <nav class="side-ws" id="side-ws" aria-labelledby="side-group-label"></nav>
+      <div class="side-spacer"></div>
       <div class="sidebar-footer">
         <button class="search-trigger" id="open-palette" type="button" aria-label="Ouvrir la recherche">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <span>Recherche</span>
           <kbd>/</kbd>
         </button>
+        <div class="theme-switch" id="theme-switch" role="group" aria-label="Style d'interface"></div>
         <div class="sidebar-profile" id="sidebar-profile">
           <span class="sidebar-profile-avatar" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.5"/><path d="M12 2.5v3.5M12 18v3.5M2.5 12H6M18 12h3.5"/></svg>
           </span>
+          <span class="sdot st-run live" aria-hidden="true"></span>
           <span class="sidebar-profile-text">
             <span class="sidebar-profile-name">Espace local</span>
             <span class="sidebar-profile-status">
-              <span class="dot dot-ok dot-live" aria-hidden="true"></span>
               <span class="mono" id="sidebar-host">127.0.0.1:4777</span>
             </span>
           </span>
@@ -49,12 +67,12 @@
           </button>
           <nav class="breadcrumbs" id="breadcrumbs" aria-label="Fil d'Ariane"></nav>
         </div>
-        <button class="cmdk" id="topbar-search" type="button" aria-label="Rechercher ou exécuter (Ctrl+K ou /)" aria-keyshortcuts="Control+K /">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <span>Rechercher ou exécuter…</span>
-          <kbd>Ctrl K</kbd>
-        </button>
-        <div class="topbar-right">
+        <div class="page-actions" id="page-actions">
+          <button class="cmdk" id="topbar-search" type="button" aria-label="Rechercher ou exécuter (Ctrl+K ou /)" aria-keyshortcuts="Control+K /">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <span>Rechercher ou exécuter</span>
+            <kbd>Ctrl K</kbd>
+          </button>
           <div id="topbar-update-slot"></div>
           <div id="topbar-actions"></div>
         </div>
@@ -90,11 +108,13 @@
   <script src="/js/theme.js"></script>
   <script src="/js/toast.js"></script>
   <script src="/js/modal.js"></script>
+  <script src="/js/json-editor.js"></script>
   <script src="/js/nav.js"></script>
   <!-- Pages : forward-refs vers modal*/render* encore dans app.js
        sont resolus au runtime (post-load, hashchange uniquement). -->
   <script src="/js/pages/home.js"></script>
   <script src="/js/pages/mcps.js"></script>
+  <script src="/js/pages/mcps-matrix.js"></script>
   <script src="/js/pages/tools.js"></script>
   <script src="/js/pages/templates.js"></script>
   <script src="/js/pages/skills.js"></script>

@@ -122,7 +122,7 @@ async function loadInstalledPlugins(host) {
             await API.post('/api/plugins/uninstall-soft', { plugin_id: p.id, remove_files: false });
             toastOk('Désinstallé'); STATE.loading = true; route();
           } catch (e) { toastErr(e.message); }
-        }, { danger: true }));
+        }, { danger: true, confirmLabel: 'Désinstaller' }));
         actions.appendChild(rm);
         tb.appendChild(tr);
       }
