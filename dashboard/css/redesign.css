@@ -323,6 +323,25 @@ kbd { font-family: var(--font-mono); }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .tab-num { font-variant-numeric: tabular-nums; }
 
+/* Hovercard (js/utils.js hcAttrs) : fond --surface-3 (le plus distinct des
+   cartes, 1,14-1,19:1) ; bordure a 45 % du texte = seul dosage >= 3:1
+   (WCAG 1.4.11) dans les 4 styles (mesure : 3,2 doux, 4,4-4,5 sombres) ;
+   ids en --text-muted (>= 5:1, --text-dim tombe a 4,4 en nebula). */
+.hovercard { position: fixed; z-index: 900; min-width: 220px; max-width: 320px; max-height: min(340px, 55vh); overflow-y: auto; padding: 6px 0; background: var(--surface-3); color: var(--text); border: 1px solid color-mix(in srgb, var(--text) 45%, transparent); border-radius: var(--r-md); box-shadow: 0 14px 36px -10px rgba(0, 0, 0, 0.55), 0 3px 8px rgba(0, 0, 0, 0.18); font-size: 12.5px; opacity: 0; transform: translateY(3px); transition: opacity 0.12s ease, transform 0.12s ease; }
+.hovercard.on { opacity: 1; transform: none; }
+.hovercard[hidden] { display: none; }
+.hc-group + .hc-group { border-top: 1px solid var(--border-strong); margin-top: 4px; padding-top: 4px; }
+.hc-title { padding: 5px 12px 4px; font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.hc-title b { font-weight: 600; color: var(--text); margin-left: 2px; }
+.hc-row { display: flex; align-items: center; gap: 9px; padding: 5px 12px; line-height: 1.3; color: var(--text); text-decoration: none; }
+a.hc-row:hover { background: var(--hover); }
+.hc-row .gem { width: 20px; height: 20px; font-size: 11px; border-radius: 6px; flex: none; }
+.hc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hc-id { margin-left: auto; padding-left: 12px; font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.hc-ext { width: 18px; height: 18px; flex: none; border-radius: 5px; border: 1px dashed color-mix(in srgb, var(--text) 45%, transparent); }
+[data-hc] { cursor: default; }
+[data-hc]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 /* === 3. APPARITION ================================================ */
 .page { animation: none; }
 .rise { animation: nb-rise var(--d-slow) var(--ease-out) both; animation-delay: calc(var(--i, 0) * 55ms); }
@@ -1058,5 +1077,5 @@ kbd { font-family: var(--font-mono); }
 @media (prefers-reduced-motion: reduce) {
   .rise, .fade-in, .tok i, .palette, .palette-overlay, .toast, .mx-bar { animation: none !important; }
   .sdot.live::after { display: none; }
-  .nav-ind, .ws-tab-ind, .seg .thumb, .live-card, .mx-cell, .btn { transition: none !important; }
+  .nav-ind, .ws-tab-ind, .seg .thumb, .live-card, .mx-cell, .btn, .hovercard { transition: none !important; }
 }

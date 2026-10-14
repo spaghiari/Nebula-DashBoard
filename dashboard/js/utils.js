@@ -356,3 +356,134 @@ function selfImprovingMark(wsId) {
     ? '<span class="si" title="Auto-amélioration de Claude active" role="img" aria-label="Auto-amélioration active">' + (typeof I !== 'undefined' && I.selfImprove ? I.selfImprove : '') + '</span>'
     : '';
 }
+
+/* ================================================================
+   Hovercard : liste au survol, delimitee et aux couleurs du theme
+   ----------------------------------------------------------------
+   Remplace les `title` natifs (petit cadre clair du systeme, non
+   themable, noms colles a la suite). Declencheur = n'importe quel
+   element portant hcAttrs(groups) ; une seule carte partagee
+   (#hovercard), delegation sur document.
+     groups : [{ title, ws: [ids] }  -> pastille + libelle + id, lien
+               { title, items: [txt] } -> liste simple]
+   Ergonomie : ouverture 200 ms au survol (pas de clignotement en
+   traversant une grille), immediate au focus clavier ; fermeture
+   150 ms (le pointeur peut entrer dans la carte, liens cliquables) ;
+   Echap / defilement / navigation ferment ; appui tactile = bascule ;
+   au-dessous du declencheur, retournee au-dessus si la place manque.
+   ================================================================ */
+function hcAttrs(groups) {
+  const g = (groups || []).filter(x => (x.ws && x.ws.length) || (x.items && x.items.length));
+  return g.length ? ` data-hc="${escapeHtml(JSON.stringify(g))}" tabindex="0"` : '';
+}
+
+const HC = { el: null, trigger: null, openT: 0, closeT: 0 };
+
+function _hcEl() {
+  if (HC.el) return HC.el;
+  const d = document.createElement('div');
+  d.id = 'hovercard';
+  d.className = 'hovercard';
+  d.setAttribute('role', 'tooltip');
+  d.hidden = true;
+  d.addEventListener('pointerenter', () => clearTimeout(HC.closeT));
+  d.addEventListener('pointerleave', () => _hcScheduleClose());
+  d.addEventListener('click', () => hcClose());
+  document.body.appendChild(d);
+  return (HC.el = d);
+}
+
+function _hcRender(groups) {
+  const byId = new Map(((typeof STATE !== 'undefined' && STATE.workspaces) || []).map(w => [w.id, w]));
+  return groups.map(g => {
+    const rows = g.ws
+      ? g.ws.map(id => {
+        const w = byId.get(id);
+        return w
+          ? `<a class="hc-row" href="#/workspace/${encodeURIComponent(id)}" tabindex="-1">${wsGem(w)}<span class="hc-name">${escapeHtml(w.label || id)}</span><span class="hc-id">${escapeHtml(id)}</span></a>`
+          : `<span class="hc-row"><span class="hc-ext" aria-hidden="true"></span><span class="hc-name">${escapeHtml(id)}</span></span>`;
+      })
+      : g.items.map(t => `<span class="hc-row"><span class="hc-ext" aria-hidden="true"></span><span class="hc-name">${escapeHtml(t)}</span></span>`);
+    const n = (g.ws || g.items).length;
+    return `<div class="hc-group"><div class="hc-title">${escapeHtml(g.title)} <b>${n}</b></div>${rows.join('')}</div>`;
+  }).join('');
+}
+
+function _hcPlace(trigger) {
+  const card = HC.el;
+  const r = trigger.getBoundingClientRect();
+  const gap = 6, m = 8;
+  const w = card.offsetWidth, h = card.offsetHeight;
+  const below = window.innerHeight - r.bottom - gap - m;
+  const top = (below >= h || below >= r.top) ? r.bottom + gap : r.top - gap - h;
+  const left = Math.max(m, Math.min(r.left, window.innerWidth - w - m));
+  card.style.top = `${Math.max(m, top)}px`;
+  card.style.left = `${left}px`;
+}
+
+function hcOpen(trigger) {
+  let groups;
+  try { groups = JSON.parse(trigger.dataset.hc || '[]'); } catch { return; }
+  if (!groups.length) return;
+  const card = _hcEl();
+  clearTimeout(HC.closeT);
+  card.innerHTML = _hcRender(groups);
+  card.hidden = false;
+  card.classList.remove('on');
+  _hcPlace(trigger);
+  requestAnimationFrame(() => card.classList.add('on'));
+  if (HC.trigger && HC.trigger !== trigger) HC.trigger.removeAttribute('aria-describedby');
+  HC.trigger = trigger;
+  trigger.setAttribute('aria-describedby', 'hovercard');
+}
+
+function hcClose() {
+  clearTimeout(HC.openT);
+  clearTimeout(HC.closeT);
+  if (HC.trigger) HC.trigger.removeAttribute('aria-describedby');
+  HC.trigger = null;
+  if (HC.el) { HC.el.classList.remove('on'); HC.el.hidden = true; }
+}
+
+function _hcScheduleClose() {
+  clearTimeout(HC.openT);
+  clearTimeout(HC.closeT);
+  HC.closeT = setTimeout(hcClose, 150);
+}
+
+document.addEventListener('pointerover', (e) => {
+  if (e.pointerType === 'touch') return;
+  const t = e.target.closest && e.target.closest('[data-hc]');
+  if (!t) return;
+  clearTimeout(HC.closeT);
+  if (HC.trigger === t) return;
+  clearTimeout(HC.openT);
+  // Une carte est deja ouverte : on passe d'un declencheur a l'autre sans attendre.
+  HC.openT = setTimeout(() => hcOpen(t), HC.trigger ? 0 : 200);
+});
+document.addEventListener('pointerout', (e) => {
+  if (e.pointerType === 'touch') return;
+  const t = e.target.closest && e.target.closest('[data-hc]');
+  if (!t || (e.relatedTarget && t.contains(e.relatedTarget))) return;
+  _hcScheduleClose();
+});
+document.addEventListener('pointerdown', (e) => {
+  const t = e.target.closest && e.target.closest('[data-hc]');
+  if (e.pointerType === 'touch' && t) {
+    if (HC.trigger === t) hcClose(); else hcOpen(t);
+    return;
+  }
+  if (HC.trigger && !(HC.el && HC.el.contains(e.target)) && t !== HC.trigger) hcClose();
+});
+document.addEventListener('focusin', (e) => {
+  const t = e.target.closest && e.target.closest('[data-hc]');
+  if (t) hcOpen(t);
+});
+document.addEventListener('focusout', (e) => {
+  if (HC.trigger && e.target === HC.trigger) _hcScheduleClose();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && HC.trigger) hcClose();
+}, true);
+window.addEventListener('scroll', () => { if (HC.trigger) hcClose(); }, true);
+window.addEventListener('hashchange', hcClose);

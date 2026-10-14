@@ -292,9 +292,10 @@ function mcpCard(m) {
   if (wild) used = `<span class="pill accent" title="Actif dans TOUS les workspaces (joker « * »)">★ tous les workspaces</span>`;
   else if (!wsList.length) used = '<span class="pill warn">Aucun workspace</span>';
   else {
-    used = (known.length ? `<span class="gem-stack" title="${escapeHtml(known.join(', '))}">${known.slice(0, 5).map(x => wsGem(byId.get(x))).join('')}</span>` : '')
+    const hc = hcAttrs([{ title: 'Dans Nebula', ws: known }, { title: 'Hors Nebula', ws: unknown }]);
+    used = (known.length ? `<span class="gem-stack"${hc}>${known.slice(0, 5).map(x => wsGem(byId.get(x))).join('')}</span>` : '')
       + `<span>${known.length} workspace${known.length > 1 ? 's' : ''}${known.length > 5 ? ` (${escapeHtml(known.slice(0, 5).map(x => byId.get(x).label || x).join(', '))}…)` : ''}</span>`
-      + (unknown.length ? `<span class="ghost" title="${escapeHtml(unknown.join(', '))}">+${unknown.length} hors Nebula</span>` : '');
+      + (unknown.length ? `<span class="ghost"${hc}>+${unknown.length} hors Nebula</span>` : '');
   }
 
   card['innerHTML'] = `

@@ -221,7 +221,7 @@ function librarySkillCard(s) {
   if (wsIds.length) {
     const known = wsIds.filter(id => byId.has(id));
     used += (known.length ? `<span class="gem-stack">${known.slice(0, 5).map(id => wsGem(byId.get(id))).join('')}</span>` : '')
-      + `<span class="used-names" title="${escapeHtml(wsNames.join(', '))}">${escapeHtml(wsNames.join(', '))}</span>`;
+      + `<span class="used-names"${hcAttrs([{ title: 'Distribué vers', ws: wsIds }])}>${escapeHtml(wsNames.join(', '))}</span>`;
   }
   if (!used) used = '<span class="ghost">Distribué nulle part</span>';
 

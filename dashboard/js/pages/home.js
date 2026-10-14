@@ -504,7 +504,7 @@ function wsRowActions(w) {
 function _mcpChips(id) {
   const ids = _wsMcpIds(id);
   if (!ids.length) return '<span class="dim">aucun</span>';
-  return `<span class="chip">${escapeHtml(ids[0])}</span>${ids.length > 1 ? `<span class="chip more" title="${escapeHtml(ids.slice(1).join(', '))}">+${ids.length - 1}</span>` : ''}`;
+  return `<span class="chip">${escapeHtml(ids[0])}</span>${ids.length > 1 ? `<span class="chip more"${hcAttrs([{ title: 'Autres MCPs', items: ids.slice(1) }])}>+${ids.length - 1}</span>` : ''}`;
 }
 
 // ================================================================
@@ -806,7 +806,7 @@ function renderHealth(host, r) {
     const u = [...unknown].sort();
     const box = line('warn', I.alert, `${u.length} workspace${u.length > 1 ? 's' : ''} inconnu${u.length > 1 ? 's' : ''} référencé${u.length > 1 ? 's' : ''}`, 'Des MCPs ciblent des workspaces absents de Nebula.');
     const chips = el('div', 'chips');
-    chips['innerHTML'] = u.slice(0, 5).map(x => `<span class="chip">${escapeHtml(x)}</span>`).join('') + (u.length > 5 ? `<span class="chip more" title="${escapeHtml(u.slice(5).join(', '))}">+${u.length - 5}</span>` : '');
+    chips['innerHTML'] = u.slice(0, 5).map(x => `<span class="chip">${escapeHtml(x)}</span>`).join('') + (u.length > 5 ? `<span class="chip more"${hcAttrs([{ title: 'Autres workspaces inconnus', items: u.slice(5) }])}>+${u.length - 5}</span>` : '');
     box.appendChild(chips);
   }
   const unused = STATE.mcps.filter(m => !(m.workspaces || []).length);
