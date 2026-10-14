@@ -38,7 +38,7 @@ Durée : quelques secondes (serveurs HTTP et dépôts git temporaires inclus).
 | `test_config.py` | Variables `NEBULA_*`, hôtes autorisés, garde-fous des fonctions Windows-only |
 | `ui/cdp.py` | Client CDP minimal (WebSocket stdlib) |
 | `ui/test_ui_smoke.py` | Smoke test front headless (facultatif : `NEBULA_UI_TESTS=1` + navigateur trouvé, sinon ignoré) |
-| `gitlab-ci.yml` | CI GitLab minimale, inactive par défaut (voir l'en-tête du fichier pour l'activer) |
+| (`.forgejo/workflows/tests.yml`, racine du dépôt) | CI Forgejo Actions minimale, déclenchement manuel tant qu'aucun runner n'existe (voir l'en-tête du fichier) |
 
 ## Règle
 

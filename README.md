@@ -163,7 +163,7 @@ claude-workspace/
 │   │   ├── api_skills_library.py # Bibliothèque de skills centralisée (magasin)
 │   │   ├── api_ui_state.py      # Persistance thème + onboarding côté serveur
 │   │   └── system_update.py     # Auto-update bulletproof (auto-stash + reset)
-│   ├── tests/                   # Tests unittest stdlib + CI GitLab (cf. tests/README.md)
+│   ├── tests/                   # Tests unittest stdlib (cf. tests/README.md)
 │   └── data/                    # Déplaçable via NEBULA_DATA_DIR (sauf mcp_recipes.json)
 │       ├── workspaces.json      # ← LOCAL, gitignored
 │       ├── ui_state.json        # ← LOCAL, gitignored (thème, onboarded)
@@ -220,7 +220,7 @@ claude-workspace/
 ## 🚀 Installation
 
 ```cmd
-git clone https://git.exemple.lan/erti/claude-dashboard.git C:\claude-workspace
+git clone https://git.exemple.lan/administrateur/Claude-Dashboard.git C:\claude-workspace
 cd C:\claude-workspace
 copy .env.local.example .env.local
 notepad .env.local              :: renseigne tes secrets
@@ -268,7 +268,7 @@ python -m unittest discover -s dashboard/tests
 ```
 
 Stdlib uniquement, en bac à sable (aucune donnée réelle lue ni écrite),
-Windows et Linux. Détail, couverture et CI GitLab (fichier dédié, inactif
+Windows et Linux. Détail, couverture et CI Forgejo (`.forgejo/workflows/tests.yml`, manuelle
 par défaut) : [`dashboard/tests/README.md`](dashboard/tests/README.md).
 
 ---

@@ -1,0 +1,33 @@
+# CI minimale de Nebula (tests stdlib + compilation) pour Forgejo Actions.
+#
+# DÉCLENCHEMENT MANUEL PAR DÉFAUT (onglet Actions > tests > Run workflow) :
+# tant qu'aucun runner n'est enregistré, un déclenchement automatique
+# laisserait des jobs « en attente » à chaque push.
+# Une fois un runner disponible (label `docker`), décommenter `push` et
+# `pull_request` ci-dessous.
+#
+# Image : node:20-bookworm (complète) = node pour actions/checkout + git
+# + python3 (requis par les tests de system_update).
+# Équivalent local : python -m unittest discover -s dashboard/tests
+
+name: tests
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches: [main, 'feature/**']
+  # pull_request:
+
+jobs:
+  tests:
+    runs-on: docker
+    container:
+      image: node:20-bookworm
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 --version && git --version
+      - run: python3 -m compileall -q dashboard/server.py dashboard/dashcore dashboard/tests
+      - run: python3 -m unittest discover -s dashboard/tests -v
