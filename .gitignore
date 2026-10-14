@@ -40,6 +40,10 @@
 
 # Sessions Claude lancées depuis Nebula (PID + date de création, runtime)
 /dashboard/data/active_sessions.json
+
+# Historique quotidien des totaux (sparklines de l'Accueil, runtime)
+/dashboard/data/stats_history.json
+/dashboard/data/stats_history.json.*
 /dashboard/data/*.corrupt-*
 
 # Bibliotheque de skills locale (runtime, contenu personnel)

@@ -1,0 +1,46 @@
+/* ================================================================
+   Barre de navigation horizontale (< 900px) + petites icones du lot C
+   ----------------------------------------------------------------
+   Prototype nebula-redesign : sous 900px la sidebar devient une barre
+   horizontale collante en haut de page (logo, icones de navigation,
+   selecteur de style), au lieu de l'ancien tiroir ouvert par un bouton
+   menu. Les libelles restent dans le DOM (aria-label + title poses par
+   renderSidebar, js/nav.js). Charge APRES css/redesign.css.
+   Variables du design system uniquement (aucune couleur en dur).
+   ================================================================ */
+
+/* Indicateur « Auto-amelioration active » : icone vectorielle (I.selfImprove)
+   dans la pastille .si (ligne / carte) et le badge .pill de l'en-tete. */
+.si { color: var(--accent); }
+.si svg { width: 12px; height: 12px; }
+.pill > svg { width: 13px; height: 13px; flex: none; }
+
+@media (max-width: 900px) {
+  .sidebar {
+    position: sticky; top: 0; left: auto; z-index: 30;
+    width: auto; height: auto; min-height: 0;
+    flex-direction: row; align-items: center; gap: 6px;
+    padding: 8px 12px;
+    border-right: 0; border-bottom: 1px solid var(--border);
+    background: var(--side-bg);
+    box-shadow: none; transition: none;
+    overflow-x: auto; overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .sidebar::-webkit-scrollbar { display: none; }
+  .sidebar-header { margin: 0; flex: none; }
+  .sidebar .brand { padding: 0 6px 0 0; }
+  .sidebar .brand-name, .sidebar .brand-version { display: none; }
+  .sidebar-nav { flex: none; flex-direction: row; gap: 2px; overflow: visible; }
+  .sidebar-nav .nav-link { flex: none; padding: 0 10px; }
+  .sidebar-nav .nav-link > span, .sidebar-nav .nav-link kbd, .sidebar-nav .nav-ind { display: none; }
+  .sidebar .side-group, .sidebar .side-ws, .sidebar .side-spacer, .sidebar .sidebar-profile { display: none; }
+  .sidebar-footer { flex: none; flex-direction: row; align-items: center; margin-left: auto; padding: 0; border-top: 0; }
+  .theme-switch { grid-template-columns: repeat(5, 30px); }
+
+  /* La barre est desormais l'element collant : la topbar ne l'est plus et
+     disparait des que les actions de la page sont dockees (comme sur
+     grand ecran, cf. dockPageActions dans js/router.js). */
+  .topbar.is-docked { display: none; }
+  .topbar:not(.is-docked) { position: static; }
+}

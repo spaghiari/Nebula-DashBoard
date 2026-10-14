@@ -277,6 +277,11 @@ def write_file(ws_id: str, rel_path: str, content: str) -> tuple[int, dict]:
         return 400, {"error": "ne peut pas écrire à la racine du workspace"}
     if target.exists() and target.is_dir():
         return 400, {"error": "cible est un dossier"}
+    # Comportement VOULU (décision 2026-10-14) : seul l'ÉCRASEMENT d'un
+    # `.env*` / `.mcp.json` existant est refusé (son contenu est affiché
+    # masqué, le sauvegarder détruirait les vrais secrets). La CRÉATION d'un
+    # tel fichier encore absent reste autorisée avec un contenu réel : rien à
+    # perdre. Figé par tests/test_files.py.
     if target.exists() and _is_sensitive(target):
         return 403, {"error": (
             f"{target.name} contient des secrets (affichés masqués) : édition depuis "

@@ -2,8 +2,9 @@
    Nebula - Page Help (aide contextuelle + tutoriels)
    ----------------------------------------------------------------
    renderHelp : dispatcher entre Hub et Topic selon le hash.
-   renderHelpHub : grille des topics + sections.
-   renderHelpTopic : detail d'un topic avec nav prev/next.
+   renderHelpHub : cartes des topics (+ titres de sections) et recherche.
+   renderHelpTopic : contenu en carte + colonne (sommaire, CTA), nav
+   prev/next, liens internes #h-<section> interceptes.
    _helpSections : data des sections (long, structure HTML).
    HELP_TOPICS : liste des topics et leur structure.
 
@@ -266,10 +267,10 @@ function _helpSections() {
       </ul>
 
       <h3>Activer / désactiver / désinstaller</h3>
-      <p>Dans la table <em>Installés</em>, le toggle ON/OFF appelle <code class="mono">claude plugin enable/disable</code>. La poubelle désinstalle (avec confirmation).</p>
+      <p>Sur chaque carte de la section <em>Installés</em>, l'interrupteur <em>Activé globalement</em> appelle <code class="mono">claude plugin enable/disable</code>. La poubelle désinstalle (avec confirmation).</p>
 
       <h3>Scope par workspace</h3>
-      <p>Section <strong>B. Scope par workspace</strong> : sélectionne un plugin, vois la liste de tous les workspaces. Pour chacun, 3 états :</p>
+      <p>Section <strong>Scope par workspace</strong> : sélectionne un plugin, vois la liste de tous les workspaces. Pour chacun, 3 états :</p>
       <ul class="help-list">
         <li><strong class="text-ok">Actif</strong> — override local : forcer activé pour ce workspace même si désactivé globalement</li>
         <li><strong class="text-err">Inactif</strong> — override local : forcer désactivé pour ce workspace</li>
@@ -558,7 +559,7 @@ const HELP_TOPIC_CTAS = {
    ================================================================ */
 async function renderHelp() {
   setBreadcrumbs([{ label: 'Aide' }]);
-  const tourBtn = btn('🎯 Visite guidée', 'btn-primary', null);
+  const tourBtn = btn('Visite guidée', 'btn-primary', I.play);
   tourBtn.title = 'Lance un tour interactif en 8 étapes (~2 min)';
   tourBtn.addEventListener('click', () => startTour('main'));
   setTopbarActions([tourBtn]);
@@ -572,15 +573,22 @@ async function renderHelp() {
   return renderHelpHub();
 }
 
+// Titres des sections d'un topic (texte du <h2>), pour les cartes du hub.
+function _helpSectionTitles(topic, sections) {
+  return topic.sections.map(id => {
+    const m = /<h2>[\s\S]*?<span>([\s\S]*?)<\/span><\/h2>/.exec(sections[id] || '');
+    return m ? m[1].replace(/<[^>]+>/g, '').trim() : id;
+  });
+}
+
 function renderHelpHub() {
   const c = $('#content');
   c['innerHTML'] = '';
   const page = el('div', 'page');
-  page.appendChild(el('div', 'page-header', `
+  page.appendChild(el('div', 'page-header rise', `
     <div class="page-header-text">
-      <div class="page-eyebrow"><span class="index">05.</span><span>Documentation</span></div>
       <h1 class="page-title">Aide & guide d'utilisation</h1>
-      <p class="page-subtitle">Choisis un sujet pour en savoir plus. Chaque page est courte et autonome.</p>
+      <p class="page-subtitle">${HELP_TOPICS.length} sujets courts et autonomes. Choisis-en un, ou cherche un mot-clé.</p>
     </div>
   `));
 
@@ -588,34 +596,72 @@ function renderHelpHub() {
   let tourCompleted = false;
   try { tourCompleted = localStorage.getItem('nebula-tour-completed') === '1'; } catch {}
   if (!tourCompleted) {
-    const promo = el('div', 'callout callout-info');
-    promo.style.marginBottom = 'var(--sp-4)';
+    const promo = el('div', 'card help-promo rise');
+    promo.style.setProperty('--i', 1);
     promo['innerHTML'] = `
-      <div>
-        <strong>🎯 Première fois ici ?</strong>
-        <p style="margin:4px 0 0;font-size:12.5px">Lance la <strong>visite guidée interactive</strong> (~2 min) — elle te montre les fonctions essentielles avec spotlight sur l'UI réelle.</p>
+      <span class="help-promo-ic" aria-hidden="true">🎯</span>
+      <div class="help-promo-t">
+        <b>Première fois ici ?</b>
+        <p>Lance la <strong>visite guidée interactive</strong> (~2 min) : elle te montre les fonctions essentielles avec spotlight sur l'UI réelle.</p>
       </div>
     `;
-    const launchBtn = btn('Démarrer la visite', 'btn-primary', null);
-    launchBtn.style.marginTop = '8px';
+    const launchBtn = btn('Démarrer la visite', 'btn-primary', I.play);
     launchBtn.addEventListener('click', () => startTour('main'));
-    promo.querySelector('div').appendChild(launchBtn);
+    promo.appendChild(launchBtn);
     page.appendChild(promo);
   }
 
+  // Recherche locale (meme logique que la palette Ctrl+K : titre, résumé, mots-clés).
+  const toolbar = el('div', 'pg-filters rise');
+  toolbar.style.setProperty('--i', 2);
+  toolbar['innerHTML'] = `<span class="search-field">${I.search}<input class="input" type="search" placeholder="Chiffrement, stash, recette…" aria-label="Chercher un sujet d'aide"></span><span class="sp"></span><span class="pg-count tab-num" aria-live="polite"></span>`;
+  const searchInput = toolbar.querySelector('input');
+  const countEl = toolbar.querySelector('.pg-count');
+  page.appendChild(toolbar);
+
   // Grille de cartes
-  const grid = el('div', 'help-hub-grid');
-  for (const t of HELP_TOPICS) {
-    const card = el('a', 'help-hub-card');
+  const sections = _helpSections();
+  const grid = el('div', 'xgrid help-hub-grid rise');
+  grid.style.setProperty('--i', 3);
+  const cards = HELP_TOPICS.map(t => {
+    const card = el('a', 'xcard help-hub-card');
     card.href = `#/aide/${t.id}`;
+    const titles = _helpSectionTitles(t, sections);
     card['innerHTML'] = `
-      <div class="help-hub-emoji">${t.emoji}</div>
-      <div class="help-hub-title">${escapeHtml(t.title)}</div>
-      <div class="help-hub-summary">${escapeHtml(t.summary)}</div>
+      <div class="top">
+        <span class="xi help-hub-emoji" aria-hidden="true">${t.emoji}</span>
+        <div class="xt">
+          <h3 class="help-hub-title">${escapeHtml(t.title)}</h3>
+          <div class="help-hub-summary">${escapeHtml(t.summary)}</div>
+        </div>
+      </div>
+      <ul class="help-hub-secs">${titles.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>
+      <span class="help-hub-go">Lire ${I.right}</span>
     `;
     grid.appendChild(card);
-  }
+    return [t, card];
+  });
+  const emptyEl = el('div', 'empty');
+  emptyEl.hidden = true;
+  emptyEl['innerHTML'] = '<div class="empty-title">Aucun sujet ne correspond</div><p class="muted">Essaie un autre mot-clé, ou la palette <kbd>Ctrl</kbd>+<kbd>K</kbd>.</p> <button class="btn btn-sm" type="button" data-reset-filters>Tout afficher</button>';
+  emptyEl.querySelector('[data-reset-filters]').addEventListener('click', () => { searchInput.value = ''; apply(); searchInput.focus(); });
+  grid.appendChild(emptyEl);
   page.appendChild(grid);
+
+  const apply = () => {
+    const q = _helpNormalize(searchInput.value).trim();
+    const terms = q.split(/\s+/).filter(Boolean);
+    let n = 0;
+    for (const [t, card] of cards) {
+      const hay = _helpNormalize(`${t.title} ${t.summary} ${t.keywords || ''}`);
+      card.hidden = !terms.every(term => hay.includes(term));
+      if (!card.hidden) n++;
+    }
+    emptyEl.hidden = n > 0;
+    countEl.textContent = `${n} / ${HELP_TOPICS.length}`;
+  };
+  searchInput.addEventListener('input', debounce(apply, 80));
+  apply();
 
   c.appendChild(page);
 }
@@ -629,39 +675,31 @@ function renderHelpTopic(topic) {
   c['innerHTML'] = '';
   const page = el('div', 'page');
 
-  // Header avec bouton retour
-  const header = el('div', 'page-header');
+  // En-tête : lien retour + titre
+  const header = el('div', 'page-header rise');
   header['innerHTML'] = `
     <div class="page-header-text">
-      <div class="page-eyebrow"><a href="#/aide" style="color:inherit;text-decoration:none">← Toutes les aides</a></div>
-      <h1 class="page-title">${topic.emoji} ${escapeHtml(topic.title)}</h1>
+      <div class="page-eyebrow"><a href="#/aide" class="help-back">${I.right}<span>Toutes les aides</span></a></div>
+      <h1 class="page-title"><span class="help-title-ic" aria-hidden="true">${topic.emoji}</span>${escapeHtml(topic.title)}</h1>
       <p class="page-subtitle">${escapeHtml(topic.summary)}</p>
     </div>
   `;
   page.appendChild(header);
 
-  // Contenu : concatène les sections de ce topic
+  const layout = el('div', 'help-layout rise');
+  layout.style.setProperty('--i', 1);
+
+  // Contenu : concatène les sections de ce topic. Chaque section porte un id
+  // `h-<section>` : cible des liens internes (`#h-recipes`) et du sommaire.
   const sections = _helpSections();
-  const content = el('div', 'help-content help-content-single');
+  const main = el('div', 'help-main');
+  const content = el('div', 'card help-content help-content-single');
   let html = '';
   for (const secId of topic.sections) {
-    html += `<section>${sections[secId] || ''}</section>`;
+    html += `<section id="h-${secId}">${sections[secId] || ''}</section>`;
   }
   content['innerHTML'] = html;
-  page.appendChild(content);
-
-  // CTA « → Ouvrir la feature » (lot F item 3) : passerelle directe du texte
-  // vers l'action concernée. Réutilise btn() + I.right, tokenisé via .help-cta.
-  const ctas = HELP_TOPIC_CTAS[topic.id];
-  if (ctas && ctas.length) {
-    const ctaBar = el('div', 'help-cta');
-    for (const cta of ctas) {
-      const b = btn(cta.label, 'btn-primary', I.right);
-      b.addEventListener('click', () => { location.hash = cta.route; });
-      ctaBar.appendChild(b);
-    }
-    page.appendChild(ctaBar);
-  }
+  main.appendChild(content);
 
   // Navigation entre topics (précédent / suivant)
   const idx = HELP_TOPICS.findIndex(t => t.id === topic.id);
@@ -670,9 +708,55 @@ function renderHelpTopic(topic) {
   const nav = el('div', 'help-topic-nav');
   nav['innerHTML'] = `
     ${prev ? `<a href="#/aide/${prev.id}" class="help-nav-link"><span class="dim">← Précédent</span><strong>${prev.emoji} ${escapeHtml(prev.title)}</strong></a>` : '<span></span>'}
-    ${next ? `<a href="#/aide/${next.id}" class="help-nav-link" style="text-align:right"><span class="dim">Suivant →</span><strong>${next.emoji} ${escapeHtml(next.title)}</strong></a>` : '<span></span>'}
+    ${next ? `<a href="#/aide/${next.id}" class="help-nav-link help-nav-next"><span class="dim">Suivant →</span><strong>${next.emoji} ${escapeHtml(next.title)}</strong></a>` : '<span></span>'}
   `;
-  page.appendChild(nav);
+  main.appendChild(nav);
+  layout.appendChild(main);
+
+  // Colonne : sommaire (h2 + h3 du topic) puis CTA « Ouvrir la feature ».
+  const rail = el('aside', 'help-rail');
+  rail.setAttribute('aria-label', 'Sur cette page');
+  const heads = Array.from(content.querySelectorAll('h2, h3'));
+  heads.forEach((h, i) => { if (!h.id) h.id = `h-${topic.id}-${i}`; });
+  const toc = el('div', 'card help-toc-card');
+  toc['innerHTML'] = `<div class="help-rail-h">Sur cette page</div><ul class="help-toc-list">${heads.map(h => `<li class="${h.tagName === 'H2' ? 'l2' : 'l3'}"><button type="button" data-target="${escapeHtml(h.id)}">${escapeHtml(h.textContent.trim())}</button></li>`).join('')}</ul>`;
+  toc.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-target]');
+    if (!b) return;
+    const target = document.getElementById(b.dataset.target);
+    if (target) target.scrollIntoView({ behavior: motionOK() ? 'smooth' : 'auto', block: 'start' });
+  });
+  rail.appendChild(toc);
+
+  // CTA « → Ouvrir la feature » (lot F item 3) : passerelle directe du texte
+  // vers l'action concernée. Réutilise btn() + I.right, tokenisé via .help-cta.
+  const ctas = HELP_TOPIC_CTAS[topic.id];
+  if (ctas && ctas.length) {
+    const ctaBar = el('div', 'card help-cta');
+    ctaBar['innerHTML'] = '<div class="help-rail-h">Passer à l\'action</div>';
+    for (const cta of ctas) {
+      const b = btn(cta.label, 'btn-primary', I.right);
+      b.addEventListener('click', () => { location.hash = cta.route; });
+      ctaBar.appendChild(b);
+    }
+    rail.appendChild(ctaBar);
+  }
+  layout.appendChild(rail);
+  page.appendChild(layout);
+
+  // Liens internes `#h-<section>` : le routeur par hash les prendrait pour une
+  // route. On défile vers la section si elle est dans ce topic, sinon on ouvre
+  // le topic qui la contient.
+  content.addEventListener('click', (e) => {
+    const a = e.target.closest('a[href^="#h-"]');
+    if (!a) return;
+    e.preventDefault();
+    const secId = a.getAttribute('href').slice(3);
+    const here = document.getElementById(`h-${secId}`);
+    if (here) { here.scrollIntoView({ behavior: motionOK() ? 'smooth' : 'auto', block: 'start' }); return; }
+    const owner = HELP_TOPICS.find(t => t.sections.includes(secId));
+    if (owner) location.hash = `#/aide/${owner.id}`;
+  });
 
   c.appendChild(page);
   window.scrollTo({ top: 0, behavior: 'instant' });

@@ -29,12 +29,14 @@ const STATE = {
   stats: {},
   wsMcps: {},      // ws_id -> {active, has_file}
   overlaysActive: {}, // ws_id -> [overlay_id actif] (/api/overview, badge « Auto-amélioration »)
+  homePrefetch: null, // { at, stats, sanity: Promise, history: Promise } pose par loadAll pour renderHome
   loadErrors: {},  // ressource -> message d'erreur du dernier loadAll (cf. js/router.js loadErrorsFor)
   activeSessions: {},  // ws_id -> {pid, launched_at, label} - sessions Claude Code lancees depuis Nebula
   sanity: null,
   journalCount: 0,
   filter: { mcp: '' },
   loading: true,
+  panelsReloading: false, // loadAll de wsRefreshPanels en cours (ne coupe pas la garde de navigation)
   pagePollers: [],   // setInterval ids actifs sur la page courante (cleared a chaque navigation)
   pageTimeouts: [],  // setTimeout ids en attente sur la page courante
   uiState: null,     // {theme, onboarded} charge depuis /api/ui-state au demarrage

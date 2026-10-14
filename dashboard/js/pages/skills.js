@@ -1,8 +1,9 @@
 /* ================================================================
    Nebula - Page Skills (catalogue + library + edition)
    ----------------------------------------------------------------
-   renderSkills : page Skills avec 2 onglets (library + global).
-   librarySkillCard / skillCard : cards des deux sections.
+   renderSkills : bibliotheque en cartes .xcard + filtres (refonte 2026-10,
+   langage de la page MCPs, css/redesign.css section 10).
+   librarySkillCard / skillCard : cartes bibliotheque / skill global.
    modalDistributeSkill : copier un skill library vers N workspaces.
    modalAddSkillFromLibrary : ajouter au workspace courant.
    modalEditSkillFiles : navigateur de fichiers partagé (global/workspace/library).
@@ -20,11 +21,14 @@
    ================================================================ */
 'use strict';
 
+// Icone « envoyer » (Distribuer) : absente du jeu I.*, definie localement.
+const SKILL_SEND_ICON = _icon('<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>');
+
 async function renderSkills() {
   setBreadcrumbs([{ label: 'Skills' }]);
   const newBtn = btn('Nouveau skill', 'btn-primary', I.plus);
   newBtn.addEventListener('click', () => modalNewSkill());
-  const importBtn = btn('Importer GitHub', 'btn-ghost', '📥');
+  const importBtn = btn('Importer GitHub', 'btn', I.download);
   importBtn.title = 'Importer un skill depuis un repo GitHub (méthode manuelle automatisée)';
   importBtn.addEventListener('click', () => modalImportSkillsFromGitHub());
   setTopbarActions([importBtn, newBtn]);
@@ -33,17 +37,20 @@ async function renderSkills() {
   c['innerHTML'] = '';
   const page = el('div', 'page');
 
-  page.appendChild(el('div', 'page-header', `
+  const library = STATE.skillsLibrary || [];
+  const nDist = library.filter(s => (s.distributed_to || []).length).length;
+  const nOut = library.filter(s => (s.outdated_count || 0) > 0).length;
+  page.appendChild(el('div', 'page-header rise', `
     <div class="page-header-text">
-      <div class="page-eyebrow"><span class="index">04.</span><span>Capacités</span></div>
       <h1 class="page-title">Skills</h1>
-      <p class="page-subtitle">Modules de compétences activables par Claude — globaux ou scopés à un workspace.</p>
+      <p class="page-subtitle">${library.length} skill${library.length > 1 ? 's' : ''} dans la bibliothèque, ${nDist} distribué${nDist > 1 ? 's' : ''}${nOut ? ` dont ${nOut} désynchronisé${nOut > 1 ? 's' : ''}` : ''}. Une seule édition, distribuée vers Global et les workspaces.</p>
     </div>
   `));
   mountHelpLink(page, 'skills-plugins', 'les skills');
 
-  // Help collapsible
-  const help = el('details', 'help-card');
+  // Aide repliable
+  const help = el('details', 'help-card rise');
+  help.style.setProperty('--i', 1);
   help['innerHTML'] = `
     <summary>
       <span class="help-icon">${I.info}</span>
@@ -87,30 +94,19 @@ async function renderSkills() {
   `;
   page.appendChild(help);
 
-  // Toolbar
-  const toolbar = el('div');
-  toolbar.style.cssText = 'display:flex;gap:var(--sp-3);align-items:center;margin-bottom:var(--sp-4);flex-wrap:wrap';
-  toolbar['innerHTML'] = `
-    <input class="input input-search" name="filter" placeholder="Rechercher un skill…" style="flex:1;min-width:240px;max-width:480px">
-    <span class="dim mono" style="font-size:11px;letter-spacing:0.1em" data-count></span>
-  `;
-  page.appendChild(toolbar);
-
-  // Banner migration : bibliothèque vide mais des skills existent ailleurs
-  const library = STATE.skillsLibrary || [];
+  // Bandeau migration : bibliotheque vide mais des skills existent ailleurs
   if (!library.length && (STATE.skills || []).length) {
-    const banner = el('div', 'callout callout-info');
+    const banner = el('div', 'callout callout-info pg-banner');
     banner['innerHTML'] = `
       <div>
         <strong>📚 Importer mes skills existants dans la bibliothèque ?</strong>
-        <p style="margin:4px 0 0;font-size:12px">
+        <p style="margin:4px 0 0;font-size:12.5px">
           Nebula a détecté ${STATE.skills.length} skill(s) dans <code class="mono">~/.claude/skills/</code>.
           Importe-les dans la bibliothèque pour les gérer comme un magasin (édition centralisée + distribution multi-workspaces).
         </p>
       </div>
     `;
-    const migrateBtn = btn('Importer dans la bibliothèque', 'btn-primary', '📥');
-    migrateBtn.style.marginTop = '8px';
+    const migrateBtn = btn('Importer dans la bibliothèque', 'btn-sm btn-primary', I.download);
     migrateBtn.addEventListener('click', async () => {
       try {
         const r = await API.post('/api/skills-library/migrate', {});
@@ -118,26 +114,61 @@ async function renderSkills() {
         STATE.loading = true; route();
       } catch (e) { toastErr(e.message); }
     });
-    banner.querySelector('div').appendChild(migrateBtn);
+    banner.appendChild(migrateBtn);
     page.appendChild(banner);
   }
 
-  const grid = el('div', 'skill-grid');
+  // Barre de filtres : recherche + puces a compteurs (etat de distribution).
+  const toolbar = el('div', 'pg-filters rise');
+  toolbar.style.setProperty('--i', 2);
+  toolbar['innerHTML'] = `<span class="search-field">${I.search}<input class="input" type="search" name="filter" placeholder="Nom, id, description…" aria-label="Filtrer les skills"></span>`;
+  const searchInput = toolbar.querySelector('input');
+  const chipGroup = el('span', 'pg-chipgroup');
+  chipGroup.setAttribute('role', 'group');
+  chipGroup.setAttribute('aria-label', 'Filtrer par état de distribution');
+  const countEl = el('span', 'pg-count tab-num');
+  countEl.setAttribute('aria-live', 'polite');
+  toolbar.append(chipGroup, el('span', 'sp'), countEl);
+  page.appendChild(toolbar);
+
+  const FILTERS = [
+    ['', 'Tous', () => true],
+    ['dist', 'Distribués', s => (s.distributed_to || []).length > 0],
+    ['none', 'Non distribués', s => !(s.distributed_to || []).length],
+    ['out', 'Désynchronisés', s => (s.outdated_count || 0) > 0],
+    ['gh', 'Importés de GitHub', s => !!(s.origin && s.origin.repo)],
+  ];
+  let stateF = '';
+  const drawChips = () => {
+    chipGroup['innerHTML'] = FILTERS
+      .map(([v, l, fn]) => [v, l, library.filter(fn).length])
+      .filter(([v, , n]) => !v || n > 0 || v === stateF)
+      .map(([v, l, n]) => `<button class="fchip" type="button" data-f="${v}" aria-pressed="${stateF === v}">${escapeHtml(l)} <b>${n}</b></button>`).join('');
+  };
+  chipGroup.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-f]');
+    if (!b) return;
+    stateF = b.dataset.f;
+    drawChips(); renderList();
+  });
+
+  const grid = el('div', 'xgrid rise');
+  grid.style.setProperty('--i', 3);
   page.appendChild(grid);
 
   const skills = library.slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
 
   const renderList = () => {
-    const filter = (toolbar.querySelector('[name=filter]').value || '').trim().toLowerCase();
-    const filtered = filter
-      ? skills.filter(s => (`${s.id} ${s.name || ''} ${s.description || ''}`).toLowerCase().includes(filter))
-      : skills;
-    toolbar.querySelector('[data-count]').textContent = `${filtered.length} / ${skills.length}`;
+    const filter = (searchInput.value || '').trim().toLowerCase();
+    const fn = (FILTERS.find(f => f[0] === stateF) || FILTERS[0])[2];
+    const filtered = skills.filter(s => fn(s) && (!filter || (`${s.id} ${s.name || ''} ${s.description || ''}`).toLowerCase().includes(filter)));
+    countEl.textContent = `${filtered.length} / ${skills.length}`;
     grid['innerHTML'] = '';
     if (!filtered.length) {
       const empty = el('div', 'empty');
-      if (filter) {
-        empty['innerHTML'] = `<div class="empty-title">Aucun skill ne correspond</div><p class="muted">Modifie ton filtre.</p>`;
+      if (filter || stateF) {
+        empty['innerHTML'] = `<div class="empty-title">Aucun skill ne correspond</div><p class="muted">Modifie ta recherche ou tes filtres.</p> <button class="btn btn-sm" type="button" data-reset-filters>Tout afficher</button>`;
+        empty.querySelector('[data-reset-filters]').addEventListener('click', () => { searchInput.value = ''; stateF = ''; drawChips(); renderList(); });
       } else {
         empty['innerHTML'] = `<div class="empty-title">Bibliothèque vide</div><p class="muted">Crée un skill, ou importe-en depuis GitHub avec le bouton « Importer GitHub ».</p>`;
       }
@@ -146,32 +177,24 @@ async function renderSkills() {
     }
     for (const s of filtered) grid.appendChild(librarySkillCard(s));
   };
-  toolbar.querySelector('[name=filter]').addEventListener('input', debounce(renderList, 100));
+  searchInput.addEventListener('input', debounce(renderList, 100));
+  drawChips();
   renderList();
 
   c.appendChild(page);
 }
 
 function librarySkillCard(s) {
-  const card = el('div', 'skill-card');
+  const card = el('article', 'xcard skill-card');
   const distributed = s.distributed_to || [];
   const outdated = s.outdated_count || 0;
-  const distLabel = (t) => {
-    if (t === 'global') return 'Global';
-    if (t.startsWith('workspace:')) {
-      const id = t.split(':', 2)[1];
-      const w = (STATE.workspaces || []).find(x => x.id === id);
-      return `WS: ${w?.label || w?.name || id}`;
-    }
-    return t;
-  };
-  let badge;
+  let state;
   if (!distributed.length) {
-    badge = '<span class="badge">non distribué</span>';
+    state = '<span class="pill mute">non distribué</span>';
   } else if (outdated > 0) {
-    badge = `<span class="badge badge-warn" title="${outdated} copie(s) avec contenu différent de la bibliothèque">${distributed.length} distribué(s) · ${outdated} désync.</span>`;
+    state = `<span class="pill warn" title="${outdated} copie(s) avec contenu différent de la bibliothèque">${distributed.length} distribué(s) · ${outdated} désync.</span>`;
   } else {
-    badge = `<span class="badge badge-ok">${distributed.length} distribué(s)</span>`;
+    state = `<span class="pill ok">${distributed.length} distribué(s)</span>`;
   }
 
   // Lot E item 5 : chip d'origine GitHub pour les skills importés.
@@ -189,21 +212,34 @@ function librarySkillCard(s) {
     originChip = `<span class="chip chip-origin" title="${escapeHtml(titleParts.join(' · '))}">${escapeHtml(label)}</span>`;
   }
 
+  // Cibles de distribution : Global + pastilles des workspaces connus + libelles.
+  const byId = new Map((STATE.workspaces || []).map(w => [w.id, w]));
+  const wsIds = distributed.filter(t => t.startsWith('workspace:')).map(t => t.split(':', 2)[1]);
+  const wsNames = wsIds.map(id => { const w = byId.get(id); return (w && (w.label || w.name)) || id; });
+  let used = '';
+  if (distributed.includes('global')) used += '<span class="pill accent" title="~/.claude/skills/ : actif dans tous les projets">Global</span>';
+  if (wsIds.length) {
+    const known = wsIds.filter(id => byId.has(id));
+    used += (known.length ? `<span class="gem-stack">${known.slice(0, 5).map(id => wsGem(byId.get(id))).join('')}</span>` : '')
+      + `<span class="used-names" title="${escapeHtml(wsNames.join(', '))}">${escapeHtml(wsNames.join(', '))}</span>`;
+  }
+  if (!used) used = '<span class="ghost">Distribué nulle part</span>';
+
   card['innerHTML'] = `
-    <div class="skill-card-header">
-      <div class="skill-icon">${I.sparkle}</div>
-      <div style="flex:1;min-width:0">
+    <div class="top">
+      <span class="xi" aria-hidden="true">${I.sparkle}</span>
+      <div class="xt">
         <h3 class="skill-name">${escapeHtml(s.name || s.id)}</h3>
-        <div class="dim mono" style="font-size:11px;margin-top:2px">${escapeHtml(s.id)}</div>
+        <div class="msub"><small>${escapeHtml(s.id)}</small>${originChip}</div>
       </div>
-      ${badge}
+      <div class="xstate">${state}</div>
     </div>
-    <p class="skill-desc">${escapeHtml(s.description || 'Pas de description')}</p>
-    ${originChip ? `<div class="skill-origin">${originChip}</div>` : ''}
-    ${distributed.length ? `<div class="skill-ws-list">${distributed.map(t => `<span class="chip">${escapeHtml(distLabel(t))}</span>`).join('')}</div>` : ''}
+    <p class="xdesc ${s.description ? '' : 'none'}">${escapeHtml(s.description || 'Pas de description')}</p>
+    <div class="used">${used}</div>
   `;
-  const actions = el('div', 'skill-actions');
-  const dist = btn('Distribuer', 'btn-sm btn-primary', '📤');
+  const actions = el('div', 'xfoot');
+  const dist = btn('Distribuer', 'btn-sm btn-ghost xfoot-main', SKILL_SEND_ICON);
+  dist.title = 'Choisir où ce skill est installé (Global, workspaces)';
   dist.addEventListener('click', () => modalDistributeSkill(s));
   const ed = btn('Éditer', 'btn-sm btn-ghost', I.edit);
   // Ouvre le navigateur de fichiers complet (SKILL.md + annexes), même UI que
@@ -211,6 +247,7 @@ function librarySkillCard(s) {
   ed.addEventListener('click', () => modalEditSkillFiles('library', s.id));
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
   rm.title = 'Supprimer de la bibliothèque';
+  rm.setAttribute('aria-label', `Supprimer ${s.name || s.id} de la bibliothèque`);
   rm.addEventListener('click', () => modalDeleteLibrarySkill(s));
   actions.append(dist, ed, rm);
   card.appendChild(actions);
@@ -363,35 +400,37 @@ function modalDeleteLibrarySkill(s) {
 }
 
 function skillCard(s, usedInWorkspaces) {
-  const card = el('div', 'skill-card');
+  const card = el('article', 'xcard skill-card');
   const usageText = usedInWorkspaces.length
-    ? `<span class="badge badge-info">${usedInWorkspaces.length} workspace${usedInWorkspaces.length > 1 ? 's' : ''}</span>`
-    : '<span class="badge">global seul</span>';
+    ? `<span class="pill info">${usedInWorkspaces.length} workspace${usedInWorkspaces.length > 1 ? 's' : ''}</span>`
+    : '<span class="pill mute">global seul</span>';
   card['innerHTML'] = `
-    <div class="skill-card-header">
-      <div class="skill-icon">${I.sparkle}</div>
-      <div style="flex:1;min-width:0">
+    <div class="top">
+      <span class="xi" aria-hidden="true">${I.sparkle}</span>
+      <div class="xt">
         <h3 class="skill-name">${escapeHtml(s.name || s.id)}</h3>
-        <div class="dim mono" style="font-size:11px;margin-top:2px">${escapeHtml(s.id)}</div>
+        <div class="msub"><small>${escapeHtml(s.id)}</small></div>
       </div>
-      ${usageText}
+      <div class="xstate">${usageText}</div>
     </div>
-    <p class="skill-desc">${escapeHtml(s.description || 'Pas de description')}</p>
-    ${usedInWorkspaces.length ? `<div class="skill-ws-list">${usedInWorkspaces.map(w => `<span class="chip">${escapeHtml(w)}</span>`).join('')}</div>` : ''}
+    <p class="xdesc ${s.description ? '' : 'none'}">${escapeHtml(s.description || 'Pas de description')}</p>
+    ${usedInWorkspaces.length ? `<div class="used chips-wrap">${usedInWorkspaces.map(w => `<span class="chip">${escapeHtml(w)}</span>`).join('')}</div>` : ''}
   `;
-  const actions = el('div', 'skill-actions');
-  const ed = btn('Éditer', 'btn-sm btn-primary', I.edit);
+  const actions = el('div', 'xfoot');
+  const ed = btn('Éditer', 'btn-sm btn-ghost xfoot-main', I.edit);
   ed.addEventListener('click', () => modalEditSkillFiles('global', s.id));
   const copy = btn('Copier dans…', 'btn-sm btn-ghost', I.copy);
   copy.addEventListener('click', () => modalCopySkillToWorkspace(s));
   const open = btn('', 'btn-sm btn-ghost btn-icon-only', I.folder);
   open.title = 'Ouvrir le dossier';
+  open.setAttribute('aria-label', 'Ouvrir le dossier');
   open.addEventListener('click', async () => {
     try { const r = await API.post('/api/open', { target: `skill-global:${s.id}` }); toastOk(r.message); }
     catch (e) { toastErr(e.message); }
   });
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
   rm.title = 'Supprimer';
+  rm.setAttribute('aria-label', `Supprimer ${s.id}`);
   rm.addEventListener('click', () => confirmDialog(`Supprimer le skill ${s.id} ? (les copies dans les workspaces ne seront pas affectées)`, async () => {
     try { await API.del(`/api/skills/global/${s.id}`); toastOk('Supprimé'); STATE.loading = true; route(); }
     catch (e) { toastErr(e.message); }

@@ -52,19 +52,36 @@ BROWSER = find_browser() if os.environ.get("NEBULA_UI_TESTS") == "1" else None
 # Journal des fetch + panne simulée de /api/overview (pilotée par sessionStorage).
 INSTR = r"""
 window.__fetchLog = [];
+window.__fetchErrors = [];
 const _f = window.fetch.bind(window);
 window.fetch = async (url, opts) => {
   const u = String(url);
   window.__fetchLog.push(u);
   if (sessionStorage.getItem('failOverview') === '1' && u.startsWith('/api/overview'))
     throw new TypeError('Failed to fetch');
-  return _f(url, opts);
+  const r = await _f(url, opts);
+  if (r.status >= 500) window.__fetchErrors.push(r.status + ' ' + u);
+  return r;
 };
 """
 
 WAIT = """(async (sel, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) {
   if (document.querySelector(sel)) return true; await new Promise(r => setTimeout(r, 50)); }
   return false; })"""
+
+# Page rendue : #content non vide, ni squelette ni boîte d'erreur, hash conservé.
+RENDERED = """(async (hash, ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms) {
+  const c = document.querySelector('#content');
+  const txt = c ? c.innerText.trim() : '';
+  if (txt.length > 20 && !c.querySelector('.skeleton, [aria-busy="true"]'))
+    return {ok: true, hash: location.hash,
+            error: !!c.querySelector('.error-box, .load-error'), text: txt.slice(0, 200)};
+  await new Promise(r => setTimeout(r, 50)); }
+  return {ok: false, hash: location.hash, error: false, text: ''}; })"""
+
+# Routes de premier niveau du routeur (js/router.js) + page d'un workspace.
+ROUTES = ("#/", "#/mcps", "#/plugins", "#/skills", "#/templates", "#/tools",
+          "#/aide", "#/workspace/ws1")
 
 
 @unittest.skipUnless(os.environ.get("NEBULA_UI_TESTS") == "1",
@@ -161,7 +178,27 @@ class UiSmokeTests(unittest.TestCase):
         self.nav(self.url + "/#/")
         self.assertTrue(self.wait('[data-ws-card="ws1"]'))
 
-    def test_3_aucune_exception_js(self):
+    def test_3_toutes_les_pages_se_rendent(self):
+        """Chaque route rend une page (sans erreur affichée ni 5xx d'API) et
+        n'est pas redirigée vers l'accueil (route inconnue du routeur)."""
+        for hash in ROUTES:
+            with self.subTest(route=hash):
+                before = len(self._exceptions())
+                self.nav(self.url + "/" + hash)
+                res = self.c.js(f"{RENDERED}({json.dumps(hash)}, 8000)")
+                self.assertTrue(res["ok"], f"{hash} : page vide")
+                # Un workspace sans onglet est complété par l'onglet par défaut.
+                self.assertTrue(res["hash"] == hash or res["hash"].startswith(hash + "/"),
+                                f"{hash} redirigé vers {res['hash']}")
+                self.assertFalse(res["error"], f"{hash} : {res['text']}")
+                self.assertEqual(self.c.js("window.__fetchErrors"), [], hash)
+                new = self._exceptions()[before:]
+                self.assertFalse(new, json.dumps(new)[:600])
+
+    def _exceptions(self):
+        return [e for e in self.c.events if e.get("method") == "Runtime.exceptionThrown"]
+
+    def test_9_aucune_exception_js(self):
         errs = [e for e in self.c.events if e.get("method") == "Runtime.exceptionThrown"]
         self.assertFalse(errs, json.dumps(errs)[:600])
 

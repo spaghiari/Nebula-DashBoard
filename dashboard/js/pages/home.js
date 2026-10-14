@@ -138,6 +138,57 @@ function homeSentence() {
     + (idle ? `, ${idle === 1 ? 'un terminal est resté ouvert' : idle + ' terminaux sont restés ouverts'}.` : '.');
 }
 
+/* ---- Series temporelles des KPIs (GET /api/stats/history) -------------
+   Un point par jour enregistre cote serveur a chaque /api/stats
+   (workspace_io.record_stats_history). Serie = historique (hors jour
+   courant) + point du jour calcule en direct depuis les stats deja
+   chargees. Moins de 2 jours connus : repli sur le texte d'origine, sans
+   sparkline. */
+function _isoLocalDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function kpiSeries(history, key, todayVal) {
+  const today = _isoLocalDate(new Date());
+  const pts = ((history && history.points) || [])
+    .filter(p => p && typeof p.date === 'string' && p.date < today && Number.isFinite(p[key]))
+    .map(p => ({ d: p.date, v: p[key] }));
+  if (Number.isFinite(todayVal)) pts.push({ d: today, v: todayVal });
+  return pts.slice(-31);
+}
+
+// Ecart sur ~7 jours (ou depuis le plus ancien point si l'historique est
+// plus court) : { delta, days } ou null.
+function kpiTrend(series) {
+  if (series.length < 2) return null;
+  const last = series[series.length - 1];
+  const lim = new Date(Date.parse(last.d + 'T00:00:00') - 7 * 86400000);
+  const limIso = _isoLocalDate(lim);
+  let ref = series[0];
+  for (const p of series) { if (p.d <= limIso) ref = p; }
+  const days = Math.round((Date.parse(last.d + 'T00:00:00') - Date.parse(ref.d + 'T00:00:00')) / 86400000);
+  return days > 0 ? { delta: last.v - ref.v, days } : null;
+}
+
+// Sparkline de l'activite quotidienne (increments jour a jour, >= 0).
+// Decorative (aria-hidden) : l'information est portee par le texte de tendance.
+function kpiSpark(series) {
+  if (series.length < 3) return '';
+  const inc = [];
+  for (let i = 1; i < series.length; i++) inc.push(Math.max(0, series[i].v - series[i - 1].v));
+  const max = Math.max(...inc, 1);
+  const W = 84, H = 28;
+  const pts = inc.map((v, i) => `${(inc.length === 1 ? W : (i / (inc.length - 1)) * W).toFixed(1)},${(H - 2 - (v / max) * (H - 4)).toFixed(1)}`).join(' ');
+  return `<svg class="k-spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true" focusable="false"`
+    + ` style="flex:0 1 ${W}px;min-width:40px;height:${H}px;margin-left:auto;align-self:flex-end;color:var(--accent);opacity:.7;overflow:visible">`
+    + `<polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+function kpiTrendText(tr, unit) {
+  const n = Math.max(0, tr.delta);
+  return `+${fmtNum(n)} ${unit}${n > 1 ? 's' : ''} sur ${tr.days} j`;
+}
+
 async function renderHome() {
   // Bug #14 : capture du jeton de rendu (voir _routeToken, js/router.js).
   // renderHome await des fetchs (stats + sanity) avant d'attacher la page
@@ -184,10 +235,17 @@ async function renderHome() {
   // Stats + sanity en parallèle : la sanity alimente les badges « désync »
   // (lot E item 1a) et le bloc Santé. stats === null = echec de /api/stats
   // (distinct de « 0 session ») : le KPI l'affiche au lieu d'un 0 trompeur.
-  const [statsRaw, sanity] = await Promise.all([
-    API.get('/api/stats').catch(() => null),
-    safe('/api/sanity-check', null),
-  ]);
+  // Juste apres un loadAll (cf. js/router.js), les deux sont deja en vol ou
+  // charges : on les reprend (usage unique, 10 s max) au lieu de refetcher.
+  const pre = STATE.homePrefetch;
+  STATE.homePrefetch = null;
+  const [statsRaw, sanity, history] = pre && Date.now() - pre.at < 10000
+    ? [pre.stats, await pre.sanity, await pre.history]
+    : await Promise.all([
+      API.get('/api/stats').catch(() => null),
+      safe('/api/sanity-check', null),
+      safe('/api/stats/history', null),
+    ]);
   if (statsRaw) STATE.stats = statsRaw;
   const stats = STATE.stats || {};
   STATE.sanityDesync = new Set(((sanity && sanity.findings) || []).map(f => f.workspace));
@@ -200,17 +258,26 @@ async function renderHome() {
   const disabled = STATE.mcps.filter(m => m.status === 'désactivé').length;
   const nSkills = (STATE.skills || []).length;
 
-  const kpi = (i, icon, n, label, trend, cls, count = true) => `
-    <div class="card kpi rise" style="--i:${i}"><span class="ic">${icon}</span>
+  // Tendances reelles (historique) : sessions et messages. Repli : textes d'origine.
+  const sessSeries = statsRaw ? kpiSeries(history, 'sessions', totalSessions) : [];
+  const msgSeries = statsRaw ? kpiSeries(history, 'messages', totalMsgs) : [];
+  const sessTr = kpiTrend(sessSeries);
+  const msgTr = kpiTrend(msgSeries);
+  const kpi = (i, icon, n, label, trend, cls, count = true, spark = '', tip = '') => `
+    <div class="card kpi rise" style="--i:${i}"${tip ? ` title="${escapeHtml(tip)}"` : ''}><span class="ic">${icon}</span>
       <div style="min-width:0"><div class="k-n"><b class="tab-num" ${count ? `data-count="${n}"` : ''}>${count ? fmtNum(n) : escapeHtml(String(n))}</b><span class="k-l">${escapeHtml(label)}</span></div>
-      <span class="k-t ${cls}">${escapeHtml(trend)}</span></div></div>`;
+      <span class="k-t ${cls}">${escapeHtml(trend)}</span></div>${spark}</div>`;
+  const sessText = `${totalSessions} session${totalSessions > 1 ? 's' : ''} cumulée${totalSessions > 1 ? 's' : ''}`;
+  const actText = `${activeWs} workspace${activeWs > 1 ? 's' : ''} actif${activeWs > 1 ? 's' : ''}`;
   const kpis = el('section', 'kpis');
   kpis.setAttribute('aria-label', 'Indicateurs');
   kpis['innerHTML'] =
-    kpi(1, I.folder, wsCount, 'workspaces', statsRaw ? `${totalSessions} session${totalSessions > 1 ? 's' : ''} cumulée${totalSessions > 1 ? 's' : ''}` : 'Statistiques indisponibles', statsRaw ? '' : 'err')
+    kpi(1, I.folder, wsCount, 'workspaces', statsRaw ? (sessTr ? kpiTrendText(sessTr, 'session') : sessText) : 'Statistiques indisponibles', statsRaw ? (sessTr && sessTr.delta > 0 ? 'ok' : '') : 'err',
+      true, kpiSpark(sessSeries), sessTr ? sessText : '')
     + kpi(2, I.box, STATE.mcps.length, 'MCPs', orphans.length ? `${orphans.length} sans workspace` : (disabled ? `${disabled} désactivé${disabled > 1 ? 's' : ''}` : 'tous utilisés'), orphans.length ? 'warn' : (disabled ? '' : 'ok'))
     + kpi(3, I.plug, pluginCount, pluginCount > 1 ? 'plugins' : 'plugin', `${nSkills} skill${nSkills > 1 ? 's' : ''} global${nSkills > 1 ? 'aux' : ''}`, '')
-    + kpi(4, I.message, statsRaw ? totalMsgs : '-', 'messages', statsRaw ? `${activeWs} workspace${activeWs > 1 ? 's' : ''} actif${activeWs > 1 ? 's' : ''}` : 'Statistiques indisponibles', statsRaw ? '' : 'err', !!statsRaw);
+    + kpi(4, I.message, statsRaw ? totalMsgs : '-', 'messages', statsRaw ? (msgTr ? kpiTrendText(msgTr, 'message') : actText) : 'Statistiques indisponibles', statsRaw ? (msgTr && msgTr.delta > 0 ? 'ok' : '') : 'err',
+      !!statsRaw, kpiSpark(msgSeries), msgTr ? actText : '');
   page.appendChild(kpis);
 
   // --- Section « En cours » : running (cartes vives) puis idle (Terminal ouvert).

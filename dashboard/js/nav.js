@@ -46,6 +46,10 @@ function renderSidebar() {
     a.href = item.route;
     a.className = 'nav-link';
     a.dataset.id = item.id;
+    // Nom accessible + infobulle : sous 900px (barre horizontale,
+    // css/shell-mobile.css) seul l'icone reste affiche.
+    a.setAttribute('aria-label', item.label);
+    a.title = item.label;
     // Compteur (MCPs, Plugins) alimente par updateNavCounts() ; badge
     // generique setNavBadge() (lot E item 3) conserve.
     a['innerHTML'] = `${item.icon}<span>${escapeHtml(item.label)}</span>` +

@@ -43,7 +43,7 @@ from dashcore.helpers import (
     enable_encryption, disable_encryption, env_health,
     export_plain_text,
     backup_claude_config, list_backups, restore_backup, read_journal, append_journal, clear_journal,
-    all_stats, sanity_check, global_search, cleanup_orphan_bats,
+    all_stats, sanity_check, cleanup_orphan_bats,
 )
 from dashcore.api_workspaces import (
     list_templates, duplicate_template, delete_template,
@@ -72,7 +72,10 @@ from dashcore.active_sessions import (
     list_active as list_active_sessions,
     kill as kill_active_session,
 )
-from dashcore.workspace_io import list_workspaces, list_workspaces_with_status, workspaces_overview
+from dashcore.workspace_io import (
+    list_workspaces, list_workspaces_with_status, workspaces_overview,
+    record_stats_history, stats_history,
+)
 from dashcore.api_mcps import (
     add_or_update_mcp, delete_mcp, sync_workspace_mcps, sync_all_workspaces,
     workspace_mcp_status, mcp_live_check, diagnose_mcp, scan_claude_config,
@@ -457,15 +460,22 @@ def h_get_snippets(q, b):
         for f in SNIPPETS_DIR.glob("*.md"):
             out[f.stem] = f.read_text(encoding="utf-8")
     return 200, out
-def h_get_stats(q, b):           return 200, all_stats()
+def h_get_stats(q, b):
+    stats = all_stats()
+    # Historique quotidien (sparklines de l'Accueil) : best-effort, ne doit
+    # jamais faire échouer /api/stats.
+    try:
+        record_stats_history(stats)
+    except OSError as e:
+        log.warning("Historique des stats non enregistré : %s", e)
+    return 200, stats
+def h_get_stats_history(q, b):   return 200, stats_history()
 def h_get_sanity(q, b):          return 200, sanity_check()
 def h_get_backups(q, b):         return 200, {"dir": str(BACKUPS_DIR), "items": list_backups()}
 def h_get_journal(q, b):         return 200, {"entries": read_journal()[-100:]}
 def h_get_hooks_global(q, b):    return 200, {"hooks": get_global_hooks()}
 def h_get_hooks_backup(q, b):            return get_hooks_backup(None)
 def h_get_ws_hooks_backup(q, b, ws):     return get_hooks_backup(ws)
-def h_get_search(q, b):
-    return 200, global_search(q.get("q", [""])[0])
 def h_get_setup_scan(q, b):      return scan_claude_config()
 def h_get_ui_state(q, b):        return get_ui_state()
 def h_post_ui_state(q, b):       return patch_ui_state(b)
@@ -634,6 +644,7 @@ ROUTES_GET = [
     (re.compile(r"^/api/env/export-plain$"),                                               h_get_env_export_plain),
     (re.compile(r"^/api/snippets$"),                                                       h_get_snippets),
     (re.compile(r"^/api/stats$"),                                                          h_get_stats),
+    (re.compile(r"^/api/stats/history$"),                                                  h_get_stats_history),
     (re.compile(r"^/api/sanity-check$"),                                                   h_get_sanity),
     (re.compile(r"^/api/backups$"),                                                        h_get_backups),
     (re.compile(r"^/api/journal$"),                                                        h_get_journal),
@@ -641,7 +652,6 @@ ROUTES_GET = [
     (re.compile(r"^/api/hooks/backup$"),                                                   h_get_hooks_backup),
     (re.compile(rf"^/api/workspaces/({_ID})/hooks/backup$"),                                h_get_ws_hooks_backup),
     (re.compile(r"^/api/hooks/errors$"),                                                   h_get_hooks_errors),
-    (re.compile(r"^/api/search$"),                                                         h_get_search),
     (re.compile(r"^/api/setup/scan$"),                                                     h_get_setup_scan),
     (re.compile(r"^/api/ui-state$"),                                                       h_get_ui_state),
     (re.compile(r"^/api/system/version$"),                                                 h_get_system_version),
@@ -1038,6 +1048,8 @@ def main():
                     help=f"hôte d'écoute (défaut : NEBULA_HOST ou 127.0.0.1, ici {HOST})")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--debug", action="store_true", help="Active le niveau DEBUG")
+    ap.add_argument("--migrate-data", action="store_true",
+                    help="Recopie vers NEBULA_DATA_DIR les données absentes (sans écraser)")
     args = ap.parse_args()
 
     setup_logging(logging.DEBUG if args.debug else logging.INFO)
@@ -1065,6 +1077,14 @@ def main():
 
     if DATA_DIR_IS_CUSTOM:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
+    # Migration assistée vers NEBULA_DATA_DIR (copie sans écrasement, cf.
+    # dashcore/data_migration.py) : automatique au 1er lancement sur un
+    # dossier vide, forcée par --migrate-data.
+    from dashcore.data_migration import startup_migration
+    try:
+        startup_migration(force=args.migrate_data)
+    except OSError as e:
+        log.warning("Migration des données impossible : %s", e)
 
     server_cls = _NebulaHTTPServer
     if ipv6:

@@ -353,6 +353,6 @@ function wsHasOverlay(wsId, ovId = SELF_IMPROVING_ID) {
 }
 function selfImprovingMark(wsId) {
   return wsHasOverlay(wsId)
-    ? '<span class="si" title="Auto-amélioration de Claude active" role="img" aria-label="Auto-amélioration active">🧠</span>'
+    ? '<span class="si" title="Auto-amélioration de Claude active" role="img" aria-label="Auto-amélioration active">' + (typeof I !== 'undefined' && I.selfImprove ? I.selfImprove : '') + '</span>'
     : '';
 }

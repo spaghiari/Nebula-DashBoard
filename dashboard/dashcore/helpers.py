@@ -199,32 +199,6 @@ def parse_skill_frontmatter(skill_md: Path) -> dict:
     return meta
 
 
-def global_search(q: str) -> dict:
-    q = (q or "").strip().lower()
-    if not q:
-        return {"results": []}
-    results = []
-
-    for w in list_workspaces():
-        hay = f"{w.get('id','')} {w.get('label','')} {w.get('description','')}".lower()
-        if q in hay:
-            results.append({"kind": "workspace", "id": w["id"], "label": w.get("label"), "route": f"#/workspace/{w['id']}"})
-    for m in read_json(MCP_REGISTRY, {"mcps": []}).get("mcps", []):
-        hay = f"{m.get('id','')} {m.get('name','')} {m.get('description','')} {m.get('notes','')}".lower()
-        if q in hay:
-            results.append({"kind": "mcp", "id": m["id"], "label": m.get("name"), "route": "#/mcps"})
-    # Import tardif pour éviter les cycles dashcore.helpers ↔ dashcore.api_{plugins,workspaces}
-    from dashcore.api_plugins import list_skills_global
-    from dashcore.api_workspaces import list_templates
-    for s in list_skills_global():
-        if q in (s["name"] + " " + s["description"]).lower():
-            results.append({"kind": "skill", "id": s["id"], "label": s["name"], "route": "#/tools"})
-    for t in list_templates():
-        if q in (t["id"] + " " + t["label"] + " " + t["description"]).lower():
-            results.append({"kind": "template", "id": t["id"], "label": t["label"], "route": "#/templates"})
-    return {"results": results[:40]}
-
-
 def is_text_file(path: Path) -> bool:
     if path.name in (".gitignore", ".gitkeep", ".env", ".env.local"):
         return True

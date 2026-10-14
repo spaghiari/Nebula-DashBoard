@@ -73,12 +73,37 @@ function wsSessionActions(w) {
   return out;
 }
 
+// Compteur de l'onglet Extensions = MCPs actifs + skills locaux + plugins
+// actifs (comme le prototype). Skills et plugins ne sont pas dans STATE :
+// memorises ici a chaque chargement de l'onglet (loadWsSkills /
+// loadWsPlugins) ou par wsPrefetchExtCounts a l'ouverture de la page.
+const WS_EXT_COUNTS = {};   // ws_id -> { skills, plugins }
+
 function wsTabCounts(w) {
   const s = (STATE.stats || {})[w.id] || {};
+  const x = WS_EXT_COUNTS[w.id] || {};
   return {
-    extensions: ((STATE.wsMcps || {})[w.id] || { active: [] }).active.length,
+    extensions: ((STATE.wsMcps || {})[w.id] || { active: [] }).active.length + (x.skills || 0) + (x.plugins || 0),
     sessions: s.sessions || 0,
   };
+}
+
+// Met a jour un compte (skills | plugins) puis le chiffre de l'onglet.
+function wsSetExtCount(wsId, key, n) {
+  (WS_EXT_COUNTS[wsId] = WS_EXT_COUNTS[wsId] || {})[key] = n;
+  if (!WS_PAGE || WS_PAGE.wsId !== wsId || !WS_PAGE.root.isConnected) return;
+  const ct = WS_PAGE.root.querySelector('#ws-tab-extensions .ct');
+  if (ct) ct.textContent = String(wsTabCounts(WS_PAGE.w).extensions);
+  requestAnimationFrame(placeWsTabInd);
+}
+
+// Deux GET legers (listing de dossiers) en arriere-plan, uniquement si
+// l'onglet Extensions n'est pas celui qu'on monte (il les charge lui-meme).
+function wsPrefetchExtCounts(wsId) {
+  API.get(`/api/workspaces/${wsId}/skills`)
+    .then(r => wsSetExtCount(wsId, 'skills', (r.local || []).length)).catch(() => {});
+  API.get(`/api/workspaces/${wsId}/plugins`)
+    .then(r => wsSetExtCount(wsId, 'plugins', Object.values(r.plugins || {}).filter(p => p && p.effective).length)).catch(() => {});
 }
 
 async function renderWorkspace(wsId, tab) {
@@ -224,6 +249,7 @@ async function renderWorkspace(wsId, tab) {
   wsSelectTab(current, false);
   if (animate) countUp(page);
   wsUpdateDirtyDots();
+  if (current !== 'extensions' && !prev) wsPrefetchExtCounts(wsId);
 }
 
 // Bascule d'onglet depuis le hash (lien, palette, historique) sans re-rendu.
@@ -289,8 +315,11 @@ async function wsRefreshPanels(keys, { reload = false } = {}) {
   if (!WS_PAGE) return;
   const wsId = WS_PAGE.wsId;
   if (reload) {
+    // panelsReloading : ce STATE.loading-ci n'est pas une navigation
+    // post-mutation, la garde de navigation reste active (js/router.js).
     STATE.loading = true;
-    try { await loadAll(); } finally { STATE.loading = false; }
+    STATE.panelsReloading = true;
+    try { await loadAll(); } finally { STATE.loading = false; STATE.panelsReloading = false; }
   }
   if (!WS_PAGE || WS_PAGE.wsId !== wsId || !WS_PAGE.root.isConnected) return;
   const w = STATE.workspaces.find(x => x.id === wsId);
@@ -340,7 +369,7 @@ function wsRefreshSiBadge() {
   const slot = WS_PAGE.root.querySelector('[data-ws-si]');
   if (!slot) return;
   if (!wsHasOverlay(WS_PAGE.wsId)) { slot.replaceChildren(); return; }
-  slot['innerHTML'] = `<button type="button" class="pill info" title="Auto-amélioration de Claude active : voir le module dans l'onglet Configuration"><span aria-hidden="true">🧠</span>Auto-amélioration</button>`;
+  slot['innerHTML'] = `<button type="button" class="pill info" title="Auto-amélioration de Claude active : voir le module dans l'onglet Configuration">${I.selfImprove}Auto-amélioration</button>`;
   slot.firstElementChild.addEventListener('click', () => {
     wsSelectTab('config', true);
     const mod = WS_PAGE.root.querySelector('#ws-panel-config .mods');
@@ -1500,6 +1529,7 @@ async function loadWsSkills(wsId, host) {
     const r = await API.get(`/api/workspaces/${wsId}/skills`);
     const local = r.local || [];
     const global = r.global_available || [];
+    wsSetExtCount(wsId, 'skills', local.length);
     host.innerHTML = '';
     // Action bar : ajouter depuis le magasin
     const actionBar = el('div');
@@ -1561,6 +1591,7 @@ async function loadWsPlugins(wsId, host) {
     const r = await API.get(`/api/workspaces/${wsId}/plugins`);
     const plugins = r.plugins || {};
     const ids = Object.keys(plugins).sort();
+    wsSetExtCount(wsId, 'plugins', ids.filter(pid => plugins[pid] && plugins[pid].effective).length);
     if (!ids.length) {
       host.innerHTML = '<div class="dim" style="font-size:12.5px">Aucun plugin global.</div>';
       return;
@@ -1765,7 +1796,6 @@ async function startFirstRunWizard() {
   let importedItems = { mcps: 0, workspaces: 0 };
 
   const root = $('#modal-root');
-  root.innerHTML = '';
   const overlay = el('div', 'firstrun-overlay');
   const wiz = el('div', 'firstrun');
   wiz.setAttribute('role', 'dialog');
@@ -1773,9 +1803,11 @@ async function startFirstRunWizard() {
   wiz.setAttribute('aria-label', 'Assistant de premier lancement');
   wiz.tabIndex = -1;
   overlay.appendChild(wiz);
-  root.appendChild(overlay);
-
+  // Focus lu AVANT l'insertion : pushModalLayer rend inerte une eventuelle
+  // modale ouverte dessous, ce qui lui ferait perdre le focus.
   const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  root.appendChild(overlay);
+  const releaseLayer = pushModalLayer(overlay, wiz);
 
   const steps = [
     { id: 'welcome',   render: renderWelcome },
@@ -1788,7 +1820,8 @@ async function startFirstRunWizard() {
   const close = (markDone = true) => {
     if (markDone) markOnboarded();
     overlay.classList.add('firstrun-closing');
-    setTimeout(() => { root.innerHTML = ''; }, 220);
+    releaseLayer();
+    setTimeout(() => overlay.remove(), 220);
     releaseTrap();
     if (previouslyFocused && document.body.contains(previouslyFocused)) {
       try { previouslyFocused.focus(); } catch { /* noop */ }
@@ -4519,12 +4552,8 @@ function init() {
   // Hote reel (carte profil sidebar) : source de verite = location.host.
   const hostEl = $('#sidebar-host');
   if (hostEl && location.host) hostEl.textContent = location.host;
-  $('#sidebar-toggle').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
-  document.addEventListener('click', (e) => {
-    if (window.innerWidth <= 900 && !e.target.closest('#sidebar') && !e.target.closest('#sidebar-toggle')) {
-      $('#sidebar').classList.remove('open');
-    }
-  });
+  // Sous 900px la sidebar devient une barre horizontale (css/shell-mobile.css) :
+  // plus de tiroir ni de bouton menu.
   route().then(async () => {
     // STATE.uiState est déjà chargé par loadAll() (lancé dans route()).
     // On lit la source de vérité et on synchronise thème + wizard.

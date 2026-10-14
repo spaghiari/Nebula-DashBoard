@@ -145,7 +145,7 @@ claude-workspace/
 │   ├── server.py                # Serveur Python stdlib + dispatcher de routes
 │   ├── index.html               # Squelette SPA
 │   ├── app.css                  # Design system : tokens (8 thèmes) + composants
-│   ├── css/                     # redesign.css (refonte 2026-10), editor-matrix.css, sessions.css
+│   ├── css/                     # redesign.css (refonte 2026-10), shell-mobile.css, editor-matrix.css, sessions.css
 │   ├── app.js                   # SPA vanilla JS (page workspace, modales, palette)
 │   ├── dashcore/                # Backend modulaire
 │   │   ├── config.py            # Constantes & chemins
@@ -162,6 +162,7 @@ claude-workspace/
 │   │   ├── api_plugins.py       # Plugins, skills, agents, commandes
 │   │   ├── api_skills_library.py # Bibliothèque de skills centralisée (magasin)
 │   │   ├── api_ui_state.py      # Persistance thème + onboarding côté serveur
+│   │   ├── data_migration.py    # Migration assistée vers NEBULA_DATA_DIR (copie sans écrasement)
 │   │   └── system_update.py     # Auto-update bulletproof (auto-stash + reset)
 │   ├── tests/                   # Tests unittest stdlib (cf. tests/README.md)
 │   └── data/                    # Déplaçable via NEBULA_DATA_DIR (sauf mcp_recipes.json)
@@ -240,7 +241,7 @@ Toutes optionnelles ; sans elles, le comportement est celui d'origine.
 | `NEBULA_PORT` | `4777` | Port d'écoute (`--port` prime ; valeur invalide = avertissement + défaut) |
 | `NEBULA_HOST` | `127.0.0.1` | Hôte d'écoute (`--host` prime). Hors boucle locale : **avertissement au démarrage**, l'API n'a pas d'authentification |
 | `NEBULA_ALLOWED_HOSTS` | (vide) | Noms supplémentaires acceptés dans l'en-tête `Host` (ex. `nas.lan`, **sans port**), séparés par des virgules |
-| `NEBULA_DATA_DIR` | `dashboard/data` | Dossier des données utilisateur (`workspaces.json`, `ui_state.json`, bibliothèque de skills, recettes locales, état de sync, sessions actives). Pour migrer : déplacer ces fichiers dans le nouveau dossier |
+| `NEBULA_DATA_DIR` | `dashboard/data` | Dossier des données utilisateur (`workspaces.json`, `ui_state.json`, bibliothèque de skills, recettes locales, état de sync, sessions actives). Au 1er lancement sur un dossier vide, les données existantes y sont **copiées** (jamais d'écrasement, l'ancien dossier reste intact) ; dossier déjà utilisé : `python server.py --migrate-data` recopie seulement les fichiers manquants |
 | `ATELIER_ROOT` | parent de `dashboard/` | Racine de l'installation (registre MCP, templates, workspaces, `.env.local`) |
 
 Le contrôle anti DNS-rebinding accepte toujours `127.0.0.1` / `localhost`,

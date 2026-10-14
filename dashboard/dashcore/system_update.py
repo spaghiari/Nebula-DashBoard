@@ -11,12 +11,13 @@ hardcodées (pas d'injection possible via les paramètres utilisateur).
 """
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import threading
 import time
 
-from dashcore.config import ROOT, log
+from dashcore.config import LEGACY_ORIGIN_URL, ORIGIN_URL, ROOT, log
 
 
 GIT_TIMEOUT_FETCH = 20
@@ -100,8 +101,77 @@ def _git(*args: str, timeout: int = GIT_TIMEOUT_QUICK) -> tuple[int, str, str]:
         return -1, "", f"erreur : {e}"
 
 
+def _porcelain_v2_path(line: str) -> str:
+    """Chemin d'une ligne `git status --porcelain=v2` (chemin de destination
+    pour un renommage). Le v2 ne commence jamais par un espace : le strip()
+    de `_git()` ne tronque donc pas la 1re ligne, contrairement au v1 (" M x").
+    """
+    # Nombre de champs avant le chemin, selon le type d'entree.
+    fields = {"1": 8, "2": 9, "u": 10, "?": 1, "!": 1}.get(line[:1])
+    if fields is None:
+        return ""
+    parts = line.split(" ", fields)
+    path = parts[fields] if len(parts) > fields else ""
+    # Renommage/copie (type 2) : "<dest><TAB><origine>".
+    return path.split("\t", 1)[0].strip('"')
+
+
 def _is_git_repo() -> bool:
     return (ROOT / ".git").exists()
+
+
+# « hôte/chemin » d'une URL git, sans schéma, identifiants, port, `.git` ni
+# barres finales : https://u:t@h/a/b.git, ssh://git@h:22/a/b, git@h:a/b -> h/a/b.
+_SCP_LIKE_RE = re.compile(r"^(?:[^@/]+@)?([^:/]+):(?!//)(.+)$")
+
+
+def _normalize_git_url(url: str) -> str:
+    u = (url or "").strip()
+    m = re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://(.*)$", u)
+    if m:
+        rest = m.group(1)
+        host, _, path = rest.partition("/")
+        host = host.rsplit("@", 1)[-1].split(":", 1)[0]
+    else:
+        m = _SCP_LIKE_RE.match(u)
+        if not m:
+            return ""
+        host, path = m.group(1), m.group(2)
+    path = path.strip("/")
+    if path.lower().endswith(".git"):
+        path = path[:-4]
+    path = path.strip("/")
+    if not host or not path:
+        return ""
+    return f"{host}/{path}".lower()
+
+
+def _migrate_origin_remote() -> bool:
+    """Réoriente `origin` de l'ancien GitLab vers Forgejo (cf. config.py).
+
+    À appeler avant tout fetch/pull. Idempotent : sans effet si `origin`
+    pointe déjà ailleurs (nouveau dépôt, fork, miroir) ou n'existe pas.
+    Retourne True si l'URL a été changée.
+    """
+    with _GIT_LOCK:
+        rc, url, _ = _git("remote", "get-url", "origin")
+        if rc != 0 or not url:
+            return False
+        legacy = _normalize_git_url(LEGACY_ORIGIN_URL)
+        if not legacy or _normalize_git_url(url) != legacy:
+            return False
+        # Cible injoignable (poste hors du LAN, Forgejo arrêté) : on garde
+        # l'ancien origin plutôt que de basculer vers un dépôt mort.
+        rc_l, _, err_l = _git("ls-remote", "--heads", ORIGIN_URL, timeout=GIT_TIMEOUT_FETCH)
+        if rc_l != 0:
+            log.info("Bascule du remote origin différée, %s injoignable : %s", ORIGIN_URL, err_l)
+            return False
+        rc_s, _, err = _git("remote", "set-url", "origin", ORIGIN_URL)
+        if rc_s != 0:
+            log.warning("Bascule du remote origin vers %s échouée : %s", ORIGIN_URL, err)
+            return False
+        log.info("Remote origin basculé de l'ancien dépôt GitLab vers %s", ORIGIN_URL)
+        return True
 
 
 def _new_stash_label(prefix: str) -> str:
@@ -294,6 +364,7 @@ def system_version_info(check_remote: bool = False) -> dict:
         return info
 
     if check_remote:
+        _migrate_origin_remote()
         rcf, _, errf = _git("fetch", "--quiet", timeout=GIT_TIMEOUT_FETCH)
         if rcf != 0:
             info["fetch_error"] = errf or "git fetch a échoué"
@@ -442,7 +513,7 @@ def system_apply_update() -> tuple[int, dict]:
 
         # 2. Snapshot HEAD + pré-stash systématique si dirty
         rc_b, head_before, _ = _git("rev-parse", "HEAD")
-        rc_st, status, _ = _git("status", "--porcelain")
+        rc_st, status, _ = _git("status", "--porcelain=v2")
         has_local_changes = bool(status.strip())
 
         stash_applied = False
@@ -457,8 +528,7 @@ def system_apply_update() -> tuple[int, dict]:
             sensitive_patterns = (".env.local", "mcp/registry.json",
                                   "dashboard/data/workspaces.json")
             for line in status.splitlines():
-                # format porcelain : "XY path"
-                path = line[3:].strip().strip('"')
+                path = _porcelain_v2_path(line)
                 if any(p in path for p in sensitive_patterns):
                     sensitive_in_stash.append(path)
 
@@ -480,6 +550,7 @@ def system_apply_update() -> tuple[int, dict]:
         #    NOTRE stash, retrouvé par son label (jamais `stash@{0}` à l'aveugle).
         rc_p, pull_out, pull_err = -1, "", "pull non exécuté"
         try:
+            _migrate_origin_remote()
             rc_p, pull_out, pull_err = _git("pull", "--ff-only", timeout=GIT_TIMEOUT_PULL)
         finally:
             if stash_applied:
@@ -975,6 +1046,7 @@ def system_reset_to_upstream() -> tuple[int, dict]:
         # 1. Fetch D'ABORD : s'il échoue (réseau, auth), rien n'a été touché
         #    (avant : le stash -u était fait avant le fetch et un fetch KO
         #    laissait les fichiers non suivis de l'utilisateur rangés dans la pile).
+        _migrate_origin_remote()
         rc_f, _, fetch_err = _git("fetch", "--quiet", timeout=GIT_TIMEOUT_FETCH)
         if rc_f != 0:
             return 500, {"ok": False, "error": "git fetch a échoué", "stderr": fetch_err}

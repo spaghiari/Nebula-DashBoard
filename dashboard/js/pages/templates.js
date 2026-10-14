@@ -1,7 +1,8 @@
 /* ================================================================
    Nebula - Page Templates (catalogue + edition + duplication)
    ----------------------------------------------------------------
-   renderTemplates : page Templates avec card-grid + help-card.
+   renderTemplates : cartes .xcard + filtres (recherche, qualite), aide
+   repliable (refonte 2026-10, css/redesign.css section 10).
    templateCard : card par template avec qualite async.
    modalNewTemplate : 2 etapes (starter + meta).
    modalPreviewTemplateFile : apercu avec valeurs de test.
@@ -25,18 +26,20 @@ async function renderTemplates() {
   const c = $('#content');
   c['innerHTML'] = '';
   const page = el('div', 'page');
-  page.appendChild(el('div', 'page-header', `
+  const tpls = STATE.templates || [];
+  const nFiles = tpls.reduce((n, t) => n + (Number(t.file_count) || 0), 0);
+  page.appendChild(el('div', 'page-header rise', `
     <div class="page-header-text">
-      <div class="page-eyebrow"><span class="index">03.</span><span>Bibliothèque</span></div>
       <h1 class="page-title">Templates</h1>
-      <p class="page-subtitle">Modèles réutilisables pour créer de nouveaux workspaces — clique <strong>+ Nouveau template</strong> pour démarrer.</p>
+      <p class="page-subtitle">${tpls.length} modèle${tpls.length > 1 ? 's' : ''} (${nFiles} fichier${nFiles > 1 ? 's' : ''}) copié${tpls.length > 1 ? 's' : ''} à chaque nouveau workspace, <code class="mono">{{placeholders}}</code> remplacés. Clique <strong>Nouveau template</strong> pour démarrer.</p>
     </div>
   `));
   mountHelpLink(page, 'templates', 'les templates');
 
-  // Note "Comment utiliser" (collapsible) — refondu
-  const help = el('details', 'help-card');
-  help.open = !STATE.templates.length;  // ouvert par défaut si aucun template
+  // Note "Comment utiliser" (repliable)
+  const help = el('details', 'help-card rise');
+  help.style.setProperty('--i', 1);
+  help.open = !tpls.length;  // ouvert par défaut si aucun template
   help['innerHTML'] = `
     <summary>
       <span class="help-icon">${I.info}</span>
@@ -64,7 +67,7 @@ Créé : 2026-04-27</pre>
         </div>
         <div>
           <h4>🔤 Les 6 placeholders</h4>
-          <table style="font-size:12px;width:100%;border-collapse:collapse">
+          <table class="help-ph">
             <tr><td><code class="mono">{{name}}</code></td><td>ID technique du workspace</td></tr>
             <tr><td><code class="mono">{{label}}</code></td><td>Libellé lisible</td></tr>
             <tr><td><code class="mono">{{emoji}}</code></td><td>Emoji choisi</td></tr>
@@ -100,44 +103,107 @@ Créé : 2026-04-27</pre>
   `;
   page.appendChild(help);
 
-  const tpls = STATE.templates;
   if (!tpls.length) {
-    const empty = el('div', 'empty');
+    const empty = el('div', 'empty rise');
+    empty.style.setProperty('--i', 2);
     empty['innerHTML'] = `
       <div class="empty-title">Aucun template</div>
-      <p class="muted">Clique <strong>+ Nouveau template</strong> en haut à droite pour démarrer avec un starter pré-rempli.</p>
+      <p class="muted">Clique <strong>Nouveau template</strong> pour démarrer avec un starter pré-rempli.</p>
     `;
-    const newCta = btn('+ Nouveau template', 'btn-primary', I.plus);
+    const newCta = btn('Nouveau template', 'btn-primary', I.plus);
     newCta.style.marginTop = '12px';
     newCta.addEventListener('click', () => modalNewTemplate());
     empty.appendChild(newCta);
     page.appendChild(empty);
-  } else {
-    const grid = el('div', 'template-grid');
-    for (const t of tpls) {
-      grid.appendChild(templateCard(t));
-    }
-    page.appendChild(grid);
+    c.appendChild(page);
+    return;
   }
+
+  // Barre de filtres : recherche + puces de qualite (alimentees au fil des
+  // reponses /quality, une requete par carte comme avant).
+  const toolbar = el('div', 'pg-filters rise');
+  toolbar.style.setProperty('--i', 2);
+  toolbar['innerHTML'] = `<span class="search-field">${I.search}<input class="input" type="search" placeholder="Nom, id, description…" aria-label="Filtrer les templates"></span>`;
+  const searchInput = toolbar.querySelector('input');
+  const chipGroup = el('span', 'pg-chipgroup');
+  chipGroup.setAttribute('role', 'group');
+  chipGroup.setAttribute('aria-label', 'Filtrer par qualité');
+  const countEl = el('span', 'pg-count tab-num');
+  countEl.setAttribute('aria-live', 'polite');
+  toolbar.append(chipGroup, el('span', 'sp'), countEl);
+  page.appendChild(toolbar);
+
+  const quality = new Map();  // id -> 'ok' | 'info' | 'warn' | 'err'
+  const QF = [['', 'Tous', () => true], ['ok', 'Qualité OK', l => l === 'ok' || l === 'info'], ['todo', 'À revoir', l => l === 'warn' || l === 'err']];
+  let qualF = '';
+  const drawChips = () => {
+    chipGroup['innerHTML'] = QF
+      .map(([v, l, fn]) => [v, l, v ? tpls.filter(t => quality.has(t.id) && fn(quality.get(t.id))).length : tpls.length])
+      .filter(([v, , n]) => !v || n > 0 || v === qualF)
+      .map(([v, l, n]) => `<button class="fchip" type="button" data-f="${v}" aria-pressed="${qualF === v}">${escapeHtml(l)} <b>${n}</b></button>`).join('');
+  };
+  chipGroup.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-f]');
+    if (!b) return;
+    qualF = b.dataset.f;
+    drawChips(); applyFilter();
+  });
+
+  const grid = el('div', 'xgrid rise');
+  grid.style.setProperty('--i', 3);
+  const cards = tpls.map(t => {
+    const card = templateCard(t, (level) => { quality.set(t.id, level); drawChips(); applyFilter(); });
+    grid.appendChild(card);
+    return [t, card];
+  });
+  const emptyEl = el('div', 'empty');
+  emptyEl.hidden = true;
+  emptyEl['innerHTML'] = `<div class="empty-title">Aucun template ne correspond</div><p class="muted">Modifie ta recherche ou tes filtres.</p> <button class="btn btn-sm" type="button" data-reset-filters>Tout afficher</button>`;
+  emptyEl.querySelector('[data-reset-filters]').addEventListener('click', () => { searchInput.value = ''; qualF = ''; drawChips(); applyFilter(); });
+  grid.appendChild(emptyEl);
+  page.appendChild(grid);
+
+  // Filtre en place (pas de reconstruction : la qualite deja chargee reste).
+  function applyFilter() {
+    const q = (searchInput.value || '').trim().toLowerCase();
+    const fn = (QF.find(f => f[0] === qualF) || QF[0])[2];
+    let n = 0;
+    for (const [t, card] of cards) {
+      const okQ = !qualF || (quality.has(t.id) && fn(quality.get(t.id)));
+      const okS = !q || (`${t.id} ${t.label || ''} ${t.description || ''}`).toLowerCase().includes(q);
+      card.hidden = !(okQ && okS);
+      if (!card.hidden) n++;
+    }
+    emptyEl.hidden = n > 0;
+    countEl.textContent = `${n} / ${tpls.length}`;
+  }
+  searchInput.addEventListener('input', debounce(applyFilter, 100));
+  drawChips();
+  applyFilter();
   c.appendChild(page);
 }
 
-function templateCard(t) {
-  const card = el('div', 'template-card');
+function templateCard(t, onQuality) {
+  const card = el('article', 'xcard template-card');
   // Le starter "Standard" est mis en avant si présent
   const isRecommended = t.id === 'standard';
+  const n = Number(t.file_count) || 0;
   card['innerHTML'] = `
-    ${isRecommended ? '<div class="template-recommended">⭐ Recommandé</div>' : ''}
-    <div class="template-emoji">${escapeHtml(t.emoji || '📦')}</div>
-    <h3 class="template-name">${escapeHtml(t.label || t.id)}</h3>
-    <p class="template-desc">${escapeHtml(t.description || '—')}</p>
-    <div class="template-meta">${t.file_count} fichier${t.file_count > 1 ? 's' : ''} · <span class="mono">${escapeHtml(t.id)}</span></div>
-    <div class="template-quality" data-quality>
-      <span class="dim" style="font-size:11px">⏳ qualité…</span>
+    <div class="top">
+      <span class="gem" style="--h:${nameHue(t.label || t.id)}" aria-hidden="true">${escapeHtml(t.emoji || '📦')}</span>
+      <div class="xt">
+        <h3 class="template-name">${escapeHtml(t.label || t.id)}</h3>
+        <div class="msub"><small>${escapeHtml(t.id)}</small><span class="chip">${n} fichier${n > 1 ? 's' : ''}</span></div>
+      </div>
+      <div class="xstate">
+        ${isRecommended ? '<span class="pill accent">Recommandé</span>' : ''}
+        <span data-quality><span class="pill mute">qualité…</span></span>
+      </div>
     </div>
+    <p class="xdesc ${t.description ? '' : 'none'}">${escapeHtml(t.description || 'Pas de description.')}</p>
   `;
-  const actions = el('div', 'template-actions');
-  const ed = btn('Éditer', 'btn-sm btn-primary', I.edit);
+  const actions = el('div', 'xfoot');
+  const ed = btn('Éditer', 'btn-sm btn-ghost xfoot-main', I.edit);
   ed.addEventListener('click', () => modalEditTemplate(t.id));
   const open = btn('Dossier', 'btn-sm btn-ghost', I.folder);
   open.title = 'Ouvrir dans l\'explorateur';
@@ -145,11 +211,11 @@ function templateCard(t) {
     try { const r = await API.post('/api/open', { target: `template:${t.id}` }); toastOk(r.message || 'Ouvert'); }
     catch (e) { toastErr(e.message); }
   });
-  const dup = btn('', 'btn-sm btn-ghost btn-icon-only', I.copy);
-  dup.title = 'Dupliquer';
+  const dup = btn('Dupliquer', 'btn-sm btn-ghost', I.copy);
   dup.addEventListener('click', () => modalDuplicateTemplate(t));
   const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
   rm.title = 'Supprimer';
+  rm.setAttribute('aria-label', `Supprimer le template ${t.label || t.id}`);
   rm.addEventListener('click', () => confirmDialog(`Supprimer le template ${t.id} ?`, async () => {
     try {
       await API.del(`/api/templates/${t.id}`);
@@ -169,12 +235,13 @@ function templateCard(t) {
     const hasErr = sugs.some(s => s.level === 'error');
     const hasWarn = sugs.some(s => s.level === 'warn');
     const hasInfo = sugs.some(s => s.level === 'info');
-    let cls, icon, summary;
-    if (hasErr) { cls = 'badge-err'; icon = '❌'; summary = `${sugs.length} problème${sugs.length > 1 ? 's' : ''}`; }
-    else if (hasWarn) { cls = 'badge-warn'; icon = '⚠️'; summary = `${sugs.length} suggestion${sugs.length > 1 ? 's' : ''}`; }
-    else if (hasInfo) { cls = 'badge'; icon = 'ℹ️'; summary = `${sugs.length} info${sugs.length > 1 ? 's' : ''}`; }
-    else { cls = 'badge-ok'; icon = '✅'; summary = 'Qualité OK'; }
-    qualHost['innerHTML'] = `<span class="badge ${cls}" title="${escapeHtml(sugs.map(s => '• ' + s.msg).join('\n') || 'Aucune suggestion')}">${icon} ${summary}</span>`;
+    let cls, level, summary;
+    if (hasErr) { cls = 'err'; level = 'err'; summary = `${sugs.length} problème${sugs.length > 1 ? 's' : ''}`; }
+    else if (hasWarn) { cls = 'warn'; level = 'warn'; summary = `${sugs.length} suggestion${sugs.length > 1 ? 's' : ''}`; }
+    else if (hasInfo) { cls = 'mute'; level = 'info'; summary = `${sugs.length} info${sugs.length > 1 ? 's' : ''}`; }
+    else { cls = 'ok'; level = 'ok'; summary = 'Qualité OK'; }
+    qualHost['innerHTML'] = `<span class="pill ${cls}" title="${escapeHtml(sugs.map(s => '• ' + s.msg).join('\n') || 'Aucune suggestion')}">${summary}</span>`;
+    if (onQuality) onQuality(level);
   }).catch(() => {
     qualHost['innerHTML'] = '';
   });

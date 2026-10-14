@@ -157,7 +157,7 @@ function permissionHint(line) {
 function validateSkillFrontmatter(content) {
   const text = String(content || '');
   // Frontmatter : --- en tout début (BOM/espaces tolérés), bloc jusqu'au --- suivant.
-  const m = text.match(/^﻿?\s*---\r?\n([\s\S]*?)\r?\n---/);
+  const m = text.match(/^\uFEFF?\s*---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return { ok: false, missing: ['name', 'description'] };
   const block = m[1];
   const missing = [];

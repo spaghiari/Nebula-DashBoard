@@ -426,27 +426,83 @@ function createJsonEditor({ value = '', onChange = null, onSave = null, onValidC
     if (fromUser && onChange) onChange(ta.value);
   };
 
+  // ---- Pile d'annulation maison ----------------------------------------
+  // Les ecritures DIRECTES (gros fichier, cf. replaceRange) n'entrent pas dans
+  // la pile native du navigateur. Elles sont empilees ici (instantanes texte
+  // + selection + defilement). L'ecriture directe passe par ta.value = ...,
+  // ce qui VIDE la pile native (Chromium) : elle ne contient ensuite que les
+  // frappes posterieures, jamais d'operation decalee rejouee au mauvais
+  // endroit. Ctrl+Z : tant que la pile native a de quoi annuler (frappe
+  // normale), c'est elle qui sert ; une fois revenu a l'etat produit par
+  // l'ecriture directe, l'instantane maison est restaure. Ctrl+Y /
+  // Ctrl+Maj+Z : symetrique. Sans ecriture directe (cas courant), rien n'est
+  // intercepte : annulation 100 % native. Limite : l'historique de frappe
+  // ANTERIEUR a une ecriture directe est perdu (la pile native est videe).
+  const JSE_UNDO_MAX = 30;
+  let undoStack = [];
+  let redoStack = [];
+  const snap = () => ({ v: ta.value, s: ta.selectionStart, e: ta.selectionEnd, top: ta.scrollTop, left: ta.scrollLeft });
+  const restoreSnap = (st) => {
+    ta.value = st.v;
+    ta.setSelectionRange(st.s, st.e);
+    ta.scrollTop = st.top;
+    ta.scrollLeft = st.left;
+    onInput(true);
+  };
+  // Tente l'annulation / le retablissement natif ; true si le texte a change.
+  const tryNative = (cmd) => {
+    const v0 = ta.value;
+    try { document.execCommand(cmd); } catch { /* commande non supportee */ }
+    return ta.value !== v0;
+  };
+  const customUndo = () => {
+    const top = undoStack[undoStack.length - 1];
+    if (ta.value !== top.after.v && tryNative('undo')) return;
+    undoStack.pop();
+    // Si de la frappe non annulable s'est intercalee, le retablissement
+    // ramene a l'etat courant (frappe comprise), pas a l'ancien « apres ».
+    redoStack.push({ before: top.before, after: ta.value === top.after.v ? top.after : snap() });
+    restoreSnap(top.before);
+  };
+  const customRedo = () => {
+    const top = redoStack[redoStack.length - 1];
+    if (ta.value !== top.before.v && tryNative('redo')) return;
+    redoStack.pop();
+    undoStack.push({ before: ta.value === top.before.v ? top.before : snap(), after: top.after });
+    restoreSnap(top.after);
+  };
+
   // ---- Edition clavier ----------------------------------------------
   // Remplace [a,b) par text en conservant la pile d'annulation native
-  // (execCommand) ; repli sur setRangeText si le navigateur refuse.
+  // (execCommand) ; repli sur une ecriture directe (pile maison) sinon.
   const replaceRange = (a, b, text, caretA = null, caretB = null) => {
+    const before = snap();
     ta.setSelectionRange(a, b);
     let done = false;
     // execCommand conserve l'annulation native (Ctrl+Z) mais son cout explose
     // avec la taille (mesure : 72 Kio / 6300 lignes = plus de 40 s). Au-dela
-    // du seuil on ecrit directement : plus d'annulation native pour CETTE
-    // operation (Mettre en forme / indenter tout un gros fichier), mais
-    // instantane.
+    // du seuil on ecrit directement (instantane) et l'operation (Mettre en
+    // forme / indenter tout un gros fichier) part dans la pile maison.
     if (text.length <= JSE_NATIVE_EDIT_MAX && (b - a) <= JSE_NATIVE_EDIT_MAX) {
       try {
         done = text === '' ? document.execCommand('delete') : document.execCommand('insertText', false, text);
       } catch { done = false; }
     }
+    let direct = false;
     if (!done || (text !== '' && ta.value.slice(a, a + text.length) !== text)) {
-      ta.setRangeText(text, a, b, 'end');
+      direct = true;
+      ta.value = before.v.slice(0, a) + text + before.v.slice(b);
+      ta.setSelectionRange(a + text.length, a + text.length);
+      ta.scrollTop = before.top;
+      ta.scrollLeft = before.left;
       ta.dispatchEvent(new Event('input', { bubbles: true }));
     }
     if (caretA !== null) ta.setSelectionRange(caretA, caretB === null ? caretA : caretB);
+    if (direct) {
+      undoStack.push({ before, after: snap() });
+      if (undoStack.length > JSE_UNDO_MAX) undoStack.shift();
+      redoStack = [];
+    }
   };
 
   // Vrai si le curseur est a l'interieur d'une chaine (nombre impair de
@@ -473,6 +529,12 @@ function createJsonEditor({ value = '', onChange = null, onSave = null, onValidC
 
     if (ctrlOnly && (key === 's' || key === 'S')) { e.preventDefault(); if (onSave) onSave(); return; }
     if (ctrlOnly && (key === 'm' || key === 'M')) { e.preventDefault(); setTabCapture(!tabCapture, true); return; }
+    // Annuler / retablir : intercepte seulement si la pile maison a servi
+    // (sinon comportement natif inchange). e.key suit la disposition : Ctrl+Z
+    // sur AZERTY donne bien 'z' ; AltGr (Ctrl+Alt) exclu par ctrlOnly.
+    const isZ = key === 'z' || key === 'Z';
+    if (ctrlOnly && isZ && !e.shiftKey && undoStack.length) { e.preventDefault(); customUndo(); return; }
+    if (ctrlOnly && ((isZ && e.shiftKey) || key === 'y' || key === 'Y') && redoStack.length) { e.preventDefault(); customRedo(); return; }
     if (key === 'Escape') {
       // Ne bloque pas Echap (la modale gere la fermeture / la confirmation) :
       // arme seulement la sortie clavier pour 1,5 s.
@@ -574,7 +636,11 @@ function createJsonEditor({ value = '', onChange = null, onSave = null, onValidC
   };
 
   // ---- Cablage --------------------------------------------------------
-  const onTaInput = () => onInput(true);
+  // Une nouvelle saisie (hors annuler / retablir natifs) invalide le retablissement.
+  const onTaInput = (e) => {
+    if (e && e.inputType && !/^history/.test(e.inputType)) redoStack = [];
+    onInput(true);
+  };
   ta.addEventListener('input', onTaInput);
   ta.addEventListener('scroll', onScroll);
   ta.addEventListener('keydown', onKeyDown);
@@ -588,6 +654,8 @@ function createJsonEditor({ value = '', onChange = null, onSave = null, onValidC
 
   const setValue = (v, { silent = true } = {}) => {
     ta.value = String(v ?? '').replace(/^\uFEFF/, '');    // BOM tolere a la lecture
+    undoStack = [];
+    redoStack = [];
     ta.scrollTop = 0;
     ta.scrollLeft = 0;
     lines = ta.value.split('\n');

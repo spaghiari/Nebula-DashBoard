@@ -19,7 +19,8 @@ from dashcore.config import (
     WORKSPACES_DIR, WORKSPACES_JSON, log, IS_WINDOWS, WINDOWS_ONLY_MSG,
 )
 from dashcore.env_local import load_env_local
-from dashcore.helpers import read_json
+from dashcore import config as _config
+from dashcore.helpers import CorruptJsonError, read_json, read_json_strict, write_json
 
 
 def list_workspaces() -> list[dict]:
@@ -443,3 +444,70 @@ def sanity_check() -> dict:
             missing_env[m["id"]] = miss
 
     return {"findings": findings, "missing_env": missing_env}
+
+
+# --- Historique quotidien des totaux (sparklines / tendances de l'Accueil) ---
+# Un point par jour (le dernier calcul du jour l'emporte), rétention bornée.
+# Fichier runtime dans le dossier de données (NEBULA_DATA_DIR respecté, lu à
+# l'appel), non versionné (.gitignore). Écriture atomique via write_json, et
+# seulement si le point du jour change.
+STATS_HISTORY_NAME = "stats_history.json"
+STATS_HISTORY_DAYS = 90
+_HISTORY_LOCK = threading.Lock()
+
+
+def stats_history_path() -> Path:
+    return _config.DATA_DIR / STATS_HISTORY_NAME
+
+
+def _history_totals(stats: dict) -> dict:
+    tot = {"workspaces": len(stats), "sessions": 0, "messages": 0, "tokens": 0}
+    for s in stats.values():
+        if not isinstance(s, dict):
+            continue
+        tot["sessions"] += int(s.get("sessions") or 0)
+        tot["messages"] += int(s.get("messages") or 0)
+        tot["tokens"] += int(s.get("input_tokens") or 0) + int(s.get("output_tokens") or 0)
+    return tot
+
+
+def _clean_points(data) -> list[dict]:
+    pts = data.get("points") if isinstance(data, dict) else None
+    if not isinstance(pts, list):
+        return []
+    out = []
+    for p in pts:
+        if isinstance(p, dict) and isinstance(p.get("date"), str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", p["date"]):
+            out.append(p)
+    return out
+
+
+def record_stats_history(stats: dict, today: dt.date | None = None) -> bool:
+    """Enregistre le point du jour à partir de `all_stats()`. True si écrit.
+
+    Un JSON corrompu est repris de zéro (write_json en garde une copie
+    `.corrupt-<ts>`) : l'historique n'est qu'une aide à la lecture. Une
+    erreur de lecture passagère (OSError) remonte SANS écrire, pour ne pas
+    remplacer un historique sain par un seul point.
+    """
+    day = (today or dt.date.today()).isoformat()
+    point = {"date": day, **_history_totals(stats)}
+    path = stats_history_path()
+    with _HISTORY_LOCK:
+        try:
+            raw = read_json_strict(path, {})
+        except CorruptJsonError:
+            raw = {}
+        pts = _clean_points(raw)
+        if pts and pts[-1] == point:
+            return False
+        pts = [p for p in pts if p["date"] != day] + [point]
+        pts.sort(key=lambda p: p["date"])
+        write_json(path, {"version": 1, "points": pts[-STATS_HISTORY_DAYS:]})
+    return True
+
+
+def stats_history() -> dict:
+    """Points enregistrés, du plus ancien au plus récent."""
+    return {"points": _clean_points(read_json(stats_history_path(), {})),
+            "max_days": STATS_HISTORY_DAYS}

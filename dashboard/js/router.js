@@ -21,7 +21,14 @@
    ================================================================ */
 'use strict';
 
-async function loadAll() {
+// sanity : true quand la page cible est l'accueil. Le sanity-check part
+// alors EN PARALLELE des ressources globales (sans rallonger loadAll : il
+// n'est pas dans le Promise.all) et renderHome reprend sa promesse ainsi que
+// les stats deja chargees ici, au lieu de les redemander apres coup.
+async function loadAll({ sanity = false } = {}) {
+  const sanityPromise = sanity ? safe('/api/sanity-check', null) : null;
+  // Historique quotidien des totaux (sparklines des KPIs) : meme principe.
+  const historyPromise = sanity ? safe('/api/stats/history', null) : null;
   // Erreurs de chargement par ressource : distingue « le serveur a echoue »
   // d'un etat vide legitime (avant, safe() renvoyait le fallback vide et la
   // page affichait « aucun element » sur une erreur). Lu par route() via
@@ -55,6 +62,7 @@ async function loadAll() {
   STATE.overlaysActive = overview.overlays_active || {};
   if (stats) STATE.stats = stats;
   STATE.statsFailed = !stats;
+  STATE.homePrefetch = sanityPromise ? { at: Date.now(), stats, sanity: sanityPromise, history: historyPromise } : null;
   STATE.mcps = mcps.mcps || [];
   STATE.envKeys = env.keys || [];
   STATE.envFile = env.file;
@@ -178,8 +186,69 @@ function dockPageActions() {
   requestAnimationFrame(() => document.querySelectorAll('.seg').forEach(placeSegThumb));
 }
 
+/* ================================================================
+   Garde de navigation interne (onglet workspace modifie)
+   ----------------------------------------------------------------
+   beforeunload (app.js) ne couvre que la fermeture / le rechargement de
+   l'onglet du navigateur. Quitter la page workspace par la sidebar, un
+   lien, Ctrl+K, un raccourci « g x » ou l'historique passe par
+   hashchange -> route() : on demande confirmation si un onglet du
+   workspace a une edition non enregistree (meme etat que la pastille
+   « modifie », panels[k].isDirty()).
+   Rester = le hash precedent est restaure par replaceState (aucun
+   hashchange, aucun re-rendu : editeurs intacts). Une bascule d'onglet
+   dans le meme workspace (meme pageKey) n'est jamais concernee.
+   Navigation programmee apres une mutation explicite (creation,
+   duplication, suppression : STATE.loading deja a true) : pas de garde.
+   Limite : « Rester » apres un Precedent du navigateur reecrit l'entree
+   d'historique precedente avec la page workspace (pas de go(+1) fiable).
+   ================================================================ */
+let _navGuardPending = false;
+
+// Libelles des onglets du workspace affiche qui ont une edition en cours.
+function wsPendingEditTabs() {
+  if (typeof WS_PAGE === 'undefined' || !WS_PAGE || !WS_PAGE.root || !WS_PAGE.root.isConnected) return [];
+  const tabs = (typeof WS_TABS !== 'undefined') ? WS_TABS : [];
+  return tabs.filter(([k]) => {
+    const p = WS_PAGE.panels[k];
+    return p && p.mounted && typeof p.isDirty === 'function' && p.isDirty();
+  }).map(t => t[1]);
+}
+
+// true = navigation bloquee (l'appelant ne doit rien rendre).
+async function navGuardBlocks(hash) {
+  // Une confirmation est deja ouverte : elle tranchera sur le hash final.
+  if (_navGuardPending) return true;
+  if ((STATE.loading && !STATE.panelsReloading) || !_lastRoutedHash || !hash.startsWith('#/')) return false;
+  if (pageKey(hash) === pageKey(_lastRoutedHash)) return false;
+  const tabs = wsPendingEditTabs();
+  if (!tabs.length) return false;
+  const from = _lastRoutedHash;
+  _navGuardPending = true;
+  let leave = false;
+  try {
+    const plural = tabs.length > 1;
+    const msg = `Modifications non enregistrées dans ${plural ? 'les onglets' : "l'onglet"} ${tabs.join(', ')}.\n`
+      + 'Quitter cette page les abandonne. Reste sur la page pour les enregistrer (Ctrl+S) ou les annuler.';
+    leave = await new Promise((resolve) => {
+      let yes = false;
+      confirmDialog(msg, () => { yes = true; }, {
+        danger: true, confirmLabel: 'Quitter sans enregistrer', cancelLabel: 'Rester sur la page',
+        onClose: () => resolve(yes),
+      });
+    });
+  } finally {
+    _navGuardPending = false;
+  }
+  if (leave) return false;
+  if (location.hash !== from) history.replaceState(null, '', from);
+  updateActiveNav();
+  return true;
+}
+
 async function route(opts) {
   const silent = !!(opts && opts.silent);
+  if (!silent && await navGuardBlocks(location.hash || '#/')) return;
   clearPagePollers();
   updateActiveNav();
   const hash = location.hash || '#/';
@@ -197,7 +266,7 @@ async function route(opts) {
     return;
   }
   const myToken = ++_routeToken;
-  if (STATE.loading) await loadAll();
+  if (STATE.loading) await loadAll({ sanity: hash === '#/' });
   // Bug #14 : une navigation plus recente a pris la main pendant
   // loadAll -- on abandonne AVANT de toucher au DOM ou de dispatcher.
   if (routeIsStale(myToken)) return;

@@ -126,5 +126,49 @@ class OverviewOverlaysTests(unittest.TestCase):
         self.assertEqual(workspace_io.workspaces_overview()["overlays_active"], {})
 
 
+class StatsHistoryTests(unittest.TestCase):
+    """Historique quotidien des totaux (sparklines de l'Accueil)."""
+
+    def setUp(self):
+        reset_sandbox()
+        workspace_io.stats_history_path().unlink(missing_ok=True)
+
+    @staticmethod
+    def _stats(sessions, messages):
+        return {"a": {"sessions": sessions, "messages": messages, "input_tokens": 10, "output_tokens": 5},
+                "b": {"sessions": 1, "messages": 2, "input_tokens": 0, "output_tokens": 0}}
+
+    def test_un_point_par_jour_et_ecriture_seulement_si_change(self):
+        import datetime as dt
+        d1, d2 = dt.date(2026, 10, 1), dt.date(2026, 10, 2)
+        self.assertTrue(workspace_io.record_stats_history(self._stats(3, 10), d1))
+        self.assertFalse(workspace_io.record_stats_history(self._stats(3, 10), d1))
+        self.assertTrue(workspace_io.record_stats_history(self._stats(4, 12), d1))
+        self.assertTrue(workspace_io.record_stats_history(self._stats(5, 20), d2))
+        pts = workspace_io.stats_history()["points"]
+        self.assertEqual([p["date"] for p in pts], ["2026-10-01", "2026-10-02"])
+        self.assertEqual(pts[0], {"date": "2026-10-01", "workspaces": 2, "sessions": 5, "messages": 14, "tokens": 15})
+        self.assertEqual(pts[1]["messages"], 22)
+        # Fichier dans le dossier de données (NEBULA_DATA_DIR respecté).
+        self.assertEqual(workspace_io.stats_history_path().parent, workspace_io._config.DATA_DIR)
+
+    def test_retention_bornee(self):
+        import datetime as dt
+        start = dt.date(2026, 1, 1)
+        for i in range(workspace_io.STATS_HISTORY_DAYS + 5):
+            workspace_io.record_stats_history(self._stats(i, i), start + dt.timedelta(days=i))
+        pts = workspace_io.stats_history()["points"]
+        self.assertEqual(len(pts), workspace_io.STATS_HISTORY_DAYS)
+        self.assertEqual(pts[0]["date"], (start + dt.timedelta(days=5)).isoformat())
+
+    def test_fichier_corrompu_repris_sans_erreur(self):
+        path = workspace_io.stats_history_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{pas du json", encoding="utf-8")
+        self.assertEqual(workspace_io.stats_history()["points"], [])
+        self.assertTrue(workspace_io.record_stats_history(self._stats(1, 1)))
+        self.assertEqual(len(workspace_io.stats_history()["points"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

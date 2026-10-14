@@ -43,6 +43,15 @@ VALID_MODES = ("solo", "equipe", "equipe-hierarchique")
 # Modes pour lesquels l'attribution d'auteur est obligatoire.
 AUTHOR_MODES = ("equipe", "equipe-hierarchique")
 VALID_DEPTHS = ("minimal", "complete")
+# Artefacts de build a ne jamais lister ni copier (un overlay qui embarque
+# des hooks Python genere des __pycache__ des qu'on les execute sur place).
+_JUNK_DIRS = {"__pycache__"}
+_JUNK_SUFFIXES = {".pyc", ".pyo"}
+
+
+def _is_junk(rel: Path) -> bool:
+    """Vrai si `rel` (relatif au dossier de l'overlay) est un artefact de build."""
+    return rel.suffix in _JUNK_SUFFIXES or any(part in _JUNK_DIRS for part in rel.parts)
 
 
 def is_overlay_dir(d: Path) -> bool:
@@ -62,8 +71,11 @@ def list_overlays() -> list[dict]:
         meta = read_json(d / OVERLAY_MARKER, {}) or {}
         files: list[str] = []
         for entry in d.rglob("*"):
-            if entry.is_file() and entry.name != OVERLAY_MARKER:
-                files.append(str(entry.relative_to(d)).replace("\\", "/"))
+            if not entry.is_file() or entry.name == OVERLAY_MARKER:
+                continue
+            rel = entry.relative_to(d)
+            if not _is_junk(rel):
+                files.append(rel.as_posix())
         out.append({
             "id": meta.get("id") or d.name,
             "dir_id": d.name,
@@ -402,7 +414,7 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
         rel_posix = rel.as_posix()
         if rel.name == OVERLAY_MARKER:
             continue
-        if entry.is_dir():
+        if entry.is_dir() or _is_junk(rel):
             continue
         # CLAUDE.md (complet + fragment) deja gere a l'etape 1.
         if rel_posix in claude_md_names:

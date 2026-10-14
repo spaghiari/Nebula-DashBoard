@@ -267,19 +267,6 @@ body {
 /* Halos « nebuleuse » (--g1/--g2 poses par wsGradient) : HSL fixes en sat
    78-82% qui jurent sur fond clair. On baisse drastiquement leur opacite
    et celle des glows de gem en thème clair pour rester reposant. */
-:root[data-theme="nebula-clair"] .workspace-card::before,
-:root[data-theme="nebula-clair"] .featured-card::before,
-:root[data-theme="nebula-clair"] .ws-hero::before {
-  opacity: 0.08;
-}
-:root[data-theme="nebula-clair"] .workspace-card:hover::before { opacity: 0.16; }
-:root[data-theme="nebula-clair"] .featured-card:hover::before  { opacity: 0.18; }
-:root[data-theme="nebula-clair"] .featured-gem,
-:root[data-theme="nebula-clair"] .ws-row-gem,
-:root[data-theme="nebula-clair"] .ws-hero-gem {
-  /* glow accent attenue sur fond clair, sinon halo iris/jaune voyant */
-  box-shadow: 0 0 0 1px rgba(0,0,0,0.06), 0 2px 10px rgba(0,0,0,0.08);
-}
 
 /* Marine : dark + bleu profond */
 :root[data-theme="marine"] {
@@ -521,7 +508,9 @@ body {
   --live-ghost-bg: rgba(26, 11, 6, 0.14); --live-ghost-tx: #1a0b06;
   --live-track: rgba(26, 11, 6, 0.16);
   --seg-1: #1a0b06; --seg-2: rgba(26, 11, 6, 0.62); --seg-3: rgba(26, 11, 6, 0.38); --seg-4: rgba(26, 11, 6, 0.2);
-  --syn-key: #c6ff3d; --syn-str: #ffb59f; --syn-num: #ffc533; --syn-kw: #9ca8ff; --syn-punc: #69709a;
+  /* 4 teintes bien separees (cles citron, chaines cyan, nombres corail,
+     mots-cles mauve) : cles et chaines etaient trop proches a l'oeil. */
+  --syn-key: #c6ff3d; --syn-str: #7fdcff; --syn-num: #ff9f80; --syn-kw: #e2a8ff; --syn-punc: #7d84ad;
 }
 
 /* Les surcharges par composant des themes sobre / doux / pop (etiquettes,
@@ -784,9 +773,6 @@ body {
 }
 .topbar-right { gap: var(--sp-2); }
 
-.sidebar-toggle { display: none; }
-@media (max-width: 900px) { .sidebar-toggle { display: inline-flex; } }
-
 .breadcrumbs {
   display: flex; align-items: center; gap: var(--sp-2);
   font-size: 13px;
@@ -849,7 +835,6 @@ body {
   margin-top: var(--sp-2);
   color: var(--text-muted); font-size: 14px;
 }
-.page-header-actions { display: flex; gap: var(--sp-2); flex-shrink: 0; }
 
 /* === SECTION LABELS (editorial hairlines) ======================= */
 .section-label {
@@ -1957,195 +1942,18 @@ body {
 .banner svg { width: 16px; height: 16px; }
 
 /* === PAGE: HOME ============================================== */
-.kpi-row {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--sp-4);
-  margin-bottom: var(--sp-8);
-}
-.kpi-card {
-  position: relative;
-  padding: var(--sp-5);
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  overflow: hidden;
-  box-shadow: var(--shadow-1);
-  transition: border-color var(--d-fast), transform var(--d-fast);
-}
-.kpi-card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
-/* Marqueur editorial "01./02./03." retire (n'existe pas dans le prototype
-   command-center). L'attribut data-index reste sur le markup (pas de risque
-   de regression JS) mais n'a plus de rendu. */
-.kpi-card::after {
-  content: ""; position: absolute;
-  inset: auto -20% -40% auto;
-  width: 200px; height: 200px; border-radius: 50%;
-  background: radial-gradient(circle, var(--accent-soft), transparent 70%);
-  opacity: 0.5; pointer-events: none;
-}
-.kpi-label {
-  font-family: var(--font-mono); font-size: 10.5px;
-  letter-spacing: 0.18em; text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: var(--sp-3);
-}
-.kpi-value {
-  font-size: 38px; font-weight: 600;
-  letter-spacing: -0.03em;
-  font-variant-numeric: tabular-nums slashed-zero;
-  line-height: 1;
-}
-.kpi-detail {
-  margin-top: var(--sp-2);
-  font-size: 12px; color: var(--text-muted);
-  display: flex; align-items: center; gap: var(--sp-2);
-}
-/* Sparkline decoratif bas-droite (cf. prototype). Posé au-dessus du halo
-   radial ::after par ordre de peinture (les enfants reels passent devant
-   les pseudos). Inerte au clavier/souris -- decoratif uniquement. */
-.kpi-card .kpi-spark {
-  position: absolute;
-  right: 0; bottom: 0;
-  width: 90px; height: 38px;
-  opacity: 0.55;
-  pointer-events: none;
-}
 
-.home-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  gap: var(--sp-6);
-  align-items: start;
-}
-@media (max-width: 1100px) { .home-grid { grid-template-columns: 1fr; } }
-
-.workspace-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: var(--sp-4);
-}
-
-.workspace-card {
-  position: relative;
-  display: flex; flex-direction: column;
-  gap: var(--sp-3);
-  padding: var(--sp-5);
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  text-align: left; width: 100%;
-  transition: transform var(--d-norm) var(--ease), border-color var(--d-norm) var(--ease), box-shadow var(--d-norm) var(--ease);
-  overflow: hidden;
-  cursor: pointer;
-}
-/* Halo "nebuleuse" derive du nom (--g1 pose par wsGradient). Discret au
-   repos, s'intensifie au survol. --g1 a un fallback sur l'accent pour les
-   cards sans gradient (defensif). */
-.workspace-card::before {
-  content: "";
-  position: absolute; right: -24px; top: -30px;
-  width: 120px; height: 120px; border-radius: 50%;
-  background: radial-gradient(circle, var(--g1, var(--accent)), transparent 66%);
-  opacity: 0.14; transition: opacity var(--d-norm) var(--ease);
-  pointer-events: none;
-}
-.workspace-card:hover {
-  border-color: var(--border-strong);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-2);
-}
-.workspace-card:hover::before { opacity: 0.3; }
-.workspace-card-header {
-  display: flex; align-items: flex-start; justify-content: space-between;
-  gap: var(--sp-3);
-  position: relative;
-}
-/* Emoji du workspace presente comme "gem" a degrade nebuleuse. */
-.workspace-emoji {
-  font-size: 20px; line-height: 1;
-  width: 38px; height: 38px; flex-shrink: 0;
-  display: grid; place-items: center;
-  border-radius: var(--r-md);
-  background: linear-gradient(140deg, var(--g1, var(--accent)), var(--g2, var(--accent-2)));
-  box-shadow: 0 0 16px -5px var(--g1, var(--accent-glow));
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.35));
-}
-.workspace-name { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-.workspace-id {
-  font-family: var(--font-mono); font-size: 11px;
-  color: var(--text-dim); margin-top: 3px;
-}
-.workspace-desc {
-  font-size: 13px; color: var(--text-muted);
-  margin: 0; flex: 1;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  line-height: 1.45;
-}
 /* Lot E item 1 : rangée de badges d'état (désync MCP, chemin KO) sous le header. */
 .workspace-state-badges {
   display: flex; flex-wrap: wrap; gap: 4px;
   margin: 0 0 var(--sp-1);
 }
 .workspace-state-badges [role=button] { cursor: pointer; }
-.workspace-meta {
-  display: flex; flex-wrap: wrap; gap: var(--sp-2);
-  align-items: center;
-  font-size: 11.5px; color: var(--text-dim);
-}
-.workspace-meta-item {
-  display: inline-flex; align-items: center; gap: 4px;
-}
-.workspace-meta-item svg { width: 12px; height: 12px; }
-.workspace-actions {
-  display: flex; gap: var(--sp-2); margin-top: var(--sp-2);
-  position: relative; z-index: 2;
-}
 
 .sanity-card .card-title { display: flex; align-items: center; gap: var(--sp-2); }
-.sanity-list { display: flex; flex-direction: column; gap: var(--sp-2); }
-.sanity-item {
-  display: flex; flex-direction: column; gap: 4px;
-  padding: var(--sp-3);
-  background: var(--surface-2);
-  border-radius: var(--r-sm);
-  border-left: 2px solid var(--warn);
-  font-size: 12.5px;
-}
-.sanity-item.ok { border-left-color: var(--ok); }
-.sanity-item.err { border-left-color: var(--err); }
-.sanity-empty {
-  padding: var(--sp-5);
-  text-align: center;
-  color: var(--ok);
-  font-size: 13px;
-}
-.sanity-empty svg { width: 24px; height: 24px; margin: 0 auto var(--sp-2); display: block; }
 
 .journal-form { display: flex; flex-direction: column; gap: var(--sp-2); }
 .journal-form .textarea { min-height: 60px; }
-.journal-list {
-  display: flex; flex-direction: column; gap: var(--sp-2);
-  max-height: 320px; overflow-y: auto;
-  margin-top: var(--sp-4);
-}
-.journal-entry {
-  padding: var(--sp-3);
-  background: var(--surface-2);
-  border-radius: var(--r-sm);
-  border-left: 2px solid var(--warm);
-  font-size: 13px;
-}
-.journal-ts {
-  font-family: var(--font-mono); font-size: 10.5px;
-  letter-spacing: 0.06em;
-  color: var(--text-dim);
-  margin-bottom: 4px;
-}
-.journal-text { white-space: pre-wrap; word-wrap: break-word; }
 
 /* --- Section « En cours » (workspaces avec session active) ----- */
 .featured-grid {
@@ -2154,339 +1962,8 @@ body {
   gap: var(--sp-4);
   margin-bottom: var(--sp-4);
 }
-.featured-card {
-  position: relative;
-  padding: var(--sp-5);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  background: var(--surface-1);
-  overflow: hidden;
-  cursor: pointer;
-  transition: transform var(--d-norm) var(--ease), border-color var(--d-norm) var(--ease), box-shadow var(--d-norm) var(--ease);
-}
-.featured-card::before {
-  content: "";
-  position: absolute; left: -30px; top: -40px;
-  width: 160px; height: 160px; border-radius: 50%;
-  background: radial-gradient(circle, var(--g1, var(--accent)), transparent 68%);
-  opacity: 0.22; transition: opacity var(--d-norm) var(--ease);
-  pointer-events: none;
-}
-.featured-card:hover {
-  transform: translateY(-3px);
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-2);
-}
-.featured-card:hover::before { opacity: 0.34; }
-.featured-top { display: flex; align-items: center; gap: var(--sp-3); position: relative; }
-.featured-gem {
-  width: 46px; height: 46px; flex-shrink: 0;
-  border-radius: 13px;
-  display: grid; place-items: center;
-  font-size: 22px;
-  background: linear-gradient(140deg, var(--g1, var(--accent)), var(--g2, var(--accent-2)));
-  box-shadow: 0 0 22px -4px var(--g1, var(--accent-glow));
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
-}
-.featured-id-block { min-width: 0; }
-.featured-name {
-  font-size: 16px; font-weight: 600; letter-spacing: -0.01em;
-  display: flex; align-items: center; gap: var(--sp-2);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.featured-id { font-size: 11px; color: var(--text-dim); margin-top: 2px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.featured-live {
-  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
-  background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft);
-  color: var(--ok); animation: pulse-dot 2s infinite;
-}
-.featured-meta {
-  display: flex; flex-wrap: wrap; gap: var(--sp-4);
-  margin: var(--sp-4) 0;
-  font-size: 11.5px; color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  position: relative;
-}
-.featured-meta .u { color: var(--text-dim); }
-.featured-actions { display: flex; gap: var(--sp-2); position: relative; }
-
-/* --- Navigateur « Tous les workspaces » ----------------------- */
-.ws-browser-head { margin-top: var(--sp-6); flex-wrap: wrap; }
-.ws-tools {
-  margin-left: auto;
-  display: flex; align-items: center; gap: var(--sp-2);
-  text-transform: none; letter-spacing: normal;
-}
-.ws-search { position: relative; }
-.ws-search .input-search { width: 190px; height: 32px; padding-top: 0; padding-bottom: 0; }
-.ws-sort { width: auto; height: 32px; padding-top: 0; padding-bottom: 0; }
-.ws-view-toggle {
-  display: inline-flex; flex-shrink: 0;
-  border: 1px solid var(--border); border-radius: var(--r-sm);
-  overflow: hidden; background: var(--surface-1);
-}
-.ws-view-btn {
-  width: 32px; height: 32px;
-  display: grid; place-items: center;
-  color: var(--text-dim);
-  transition: background var(--d-fast) var(--ease), color var(--d-fast) var(--ease);
-}
-.ws-view-btn svg { width: 15px; height: 15px; }
-.ws-view-btn:hover { color: var(--text-muted); background: var(--hover); }
-.ws-view-btn.is-active { color: var(--text); background: var(--surface-3); }
-.ws-view-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.ws-browser-empty {
-  grid-column: 1 / -1;
-  padding: var(--sp-8); text-align: center; font-size: 13px;
-  border: 1px dashed var(--border); border-radius: var(--r-md);
-}
-
-/* Grille nebuleuse : meme moteur que .workspace-grid, simple alias
-   semantique (le halo vient de .workspace-card::before). */
-.nebula-grid { /* herite de .workspace-grid */ }
-
-/* --- Liste dense (toggle) ------------------------------------- */
-.ws-list {
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  overflow: hidden;
-  background: var(--surface-1);
-}
-.ws-list-head, .ws-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1.8fr) 70px 90px 110px 64px;
-  gap: var(--sp-3);
-  align-items: center;
-  padding: 0 var(--sp-4);
-}
-.ws-list-head {
-  height: 38px;
-  font-family: var(--font-mono); font-size: 10.5px;
-  letter-spacing: 0.1em; text-transform: uppercase;
-  color: var(--text-dim);
-  background: var(--surface-2);
-  border-bottom: 1px solid var(--border);
-}
-.ws-list-head span:not(:first-child),
-.ws-row .ws-row-cell, .ws-row .ws-row-pill { text-align: right; justify-self: end; }
-.ws-row {
-  height: 50px;
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-  transition: background var(--d-fast) var(--ease);
-}
-.ws-row:last-child { border-bottom: 0; }
-.ws-row:hover { background: var(--hover); }
-.ws-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.ws-row-name { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
-.ws-row-gem {
-  width: 28px; height: 28px; flex-shrink: 0;
-  border-radius: 8px; display: grid; place-items: center;
-  font-size: 14px;
-  background: linear-gradient(140deg, var(--g1, var(--accent)), var(--g2, var(--accent-2)));
-  box-shadow: 0 0 12px -5px var(--g1, var(--accent-glow));
-}
-.ws-row-text { min-width: 0; display: flex; flex-direction: column; }
-.ws-row-label {
-  font-size: 13px; font-weight: 500;
-  display: flex; align-items: center; gap: 6px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.ws-row-live {
-  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
-  background: var(--ok); color: var(--ok); animation: pulse-dot 2s infinite;
-}
-.ws-row-id { font-size: 10.5px; color: var(--text-dim);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ws-row-cell { font-size: 13px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.ws-row-cell.dim { color: var(--text-dim); }
-.ws-row-pill {
-  font-size: 11px; padding: 2px 9px; border-radius: 999px;
-  color: var(--text-dim); background: var(--surface-3);
-}
-.ws-row-pill.is-on { color: var(--accent-2); background: var(--accent-soft); }
-
-/* Sanity + Journal en pied de home : deux colonnes egales, full width. */
-.home-grid-bottom {
-  grid-template-columns: 1fr 1fr;
-  margin-top: var(--sp-4);
-}
-@media (max-width: 900px) { .home-grid-bottom { grid-template-columns: 1fr; } }
-
-/* Responsive ws-browser : la barre d'outils passe sous le titre, la
-   recherche s'etire, et la liste dense degage les colonnes accessoires
-   (activite, sessions) pour rester lisible sur mobile. */
-@media (max-width: 680px) {
-  .ws-tools { width: 100%; margin-left: 0; margin-top: var(--sp-2); }
-  .ws-search { flex: 1; }
-  .ws-search .input-search { width: 100%; }
-  /* 3 colonnes : workspace + MCPs + sessions. Activite masquee sur mobile. */
-  .ws-list-head, .ws-row { grid-template-columns: minmax(0, 1fr) 56px 64px; }
-  .ws-list-head > span:nth-child(4),
-  .ws-row > :nth-child(4) { display: none; }
-}
 
 /* === PAGE: WORKSPACE DETAIL =================================== */
-.ws-header {
-  display: flex; flex-direction: column; gap: var(--sp-3);
-  margin-bottom: var(--sp-6);
-  padding-bottom: var(--sp-5);
-  border-bottom: 1px solid var(--border);
-}
-.ws-header-top {
-  display: flex; align-items: flex-start; gap: var(--sp-4);
-}
-.ws-emoji {
-  font-size: 40px; line-height: 1;
-  width: 56px; height: 56px;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  flex-shrink: 0;
-}
-.ws-title-block { flex: 1; min-width: 0; }
-.ws-title {
-  font-size: 24px; font-weight: 600; letter-spacing: -0.02em; margin: 0;
-  display: flex; align-items: center; gap: var(--sp-3);
-}
-.ws-title-live {
-  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
-  background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft);
-  color: var(--ok); animation: pulse-dot 2s infinite;
-}
-.ws-path {
-  font-family: var(--font-mono); font-size: 12px;
-  color: var(--text-muted); margin-top: 4px;
-  word-break: break-all;
-}
-.ws-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; position: relative; z-index: 1; }
-
-.ws-header { margin-bottom: var(--sp-6); padding-bottom: var(--sp-5); border-bottom: 1px solid var(--border); }
-
-/* Variante "hero" command-center (cf. prototype .ws-hero) : surface
-   encadree + halo radial accent + gem a degrade nebuleuse (--g1/--g2 poses
-   par wsGradient sur le header). Conserve la structure .ws-header. */
-.ws-hero {
-  position: relative;
-  padding: var(--sp-5);
-  border: 1px solid var(--border);
-  border-bottom: 1px solid var(--border); /* annule le border-bottom seul de .ws-header */
-  border-radius: var(--r-xl);
-  background: linear-gradient(135deg, var(--surface-1), var(--bg));
-  overflow: hidden;
-}
-.ws-hero::after {
-  content: ""; position: absolute; right: -40px; top: -40px;
-  width: 200px; height: 200px; border-radius: 50%;
-  background: radial-gradient(circle, var(--g1, var(--accent-glow)), transparent 70%);
-  opacity: 0.22; pointer-events: none;
-}
-.ws-hero .ws-header-top, .ws-hero .ws-actions { position: relative; z-index: 1; }
-.ws-gem {
-  font-size: 30px;
-  border: 0;
-  color: #fff;
-  background: linear-gradient(140deg, var(--g1, var(--accent)), var(--g2, var(--accent-2)));
-  box-shadow: 0 0 24px -4px var(--g1, var(--accent-glow));
-}
-
-/* Trio MCPs / Skills / Plugins — 3 colonnes équilibrées, repli responsive */
-.ws-trio {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--sp-4);
-  margin-bottom: var(--sp-4);
-}
-@media (max-width: 1200px) { .ws-trio { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 720px) { .ws-trio { grid-template-columns: 1fr; } }
-
-.ws-card { display: flex; flex-direction: column; min-height: 180px; }
-.ws-card .stack { flex: 1; }
-
-/* Bottom : sessions + agents/commandes côte à côte */
-.ws-bottom {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: var(--sp-6);
-}
-@media (max-width: 1000px) { .ws-bottom { grid-template-columns: 1fr; } }
-
-/* Barre de configuration horizontale (CLAUDE.md, settings, etc.) */
-.config-bar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--sp-2);
-  padding: var(--sp-3);
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  margin-bottom: var(--sp-2);
-}
-.config-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 8px 14px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text);
-  transition: all var(--d-fast) var(--ease);
-  cursor: pointer;
-}
-.config-btn:hover {
-  background: var(--surface-3);
-  border-color: var(--accent);
-  color: var(--accent);
-  transform: translateY(-1px);
-}
-.config-btn svg { width: 14px; height: 14px; color: var(--accent); }
-
-.ws-info-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: var(--sp-3);
-}
-.info-tile {
-  padding: var(--sp-3);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-}
-.info-tile-label {
-  font-family: var(--font-mono); font-size: 10px;
-  letter-spacing: 0.16em; text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 4px;
-}
-.info-tile-value {
-  font-size: 18px; font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.session-list { display: flex; flex-direction: column; gap: var(--sp-2); }
-.session-row {
-  display: flex; gap: var(--sp-3); padding: var(--sp-3);
-  background: var(--surface-1); border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  align-items: center;
-  transition: border-color var(--d-fast) var(--ease);
-  cursor: pointer;
-}
-.session-row:hover { border-color: var(--border-strong); }
-.session-info { flex: 1; min-width: 0; }
-.session-msg {
-  font-size: 13px; color: var(--text);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.session-meta {
-  font-family: var(--font-mono); font-size: 10.5px;
-  color: var(--text-dim); margin-top: 2px;
-}
 
 .list-row {
   display: flex; align-items: center; gap: var(--sp-3);
@@ -2508,12 +1985,7 @@ body {
 .list-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
 
 /* === PAGE: MCPs ============================================== */
-.mcp-toolbar {
-  display: flex; gap: var(--sp-3); align-items: center;
-  margin-bottom: var(--sp-5);
-  flex-wrap: wrap;
-}
-.mcp-toolbar .input-search { flex: 1; min-width: 240px; max-width: 480px; }
+
 .filter-group { display: flex; gap: var(--sp-2); align-items: center; }
 
 .mcp-grid {
@@ -2531,9 +2003,9 @@ body {
   position: relative; overflow: hidden;
 }
 .mcp-card:hover { border-color: var(--border-strong); }
-.mcp-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-3); }
+
 /* Lot E item 2 : statut + sous-badges (env manquant) empilés à droite du header. */
-.mcp-card-badges { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; flex: none; max-width: 60%; }
+
 .mcp-name { font-size: 14px; font-weight: 600; margin: 0; }
 .mcp-desc {
   font-size: 12.5px; color: var(--text-muted); margin: 0;
@@ -2549,93 +2021,12 @@ body {
   border: 1px solid var(--border);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.mcp-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+
 .mcp-card-footer {
   display: flex; gap: var(--sp-2); margin-top: auto;
   padding-top: var(--sp-3);
   border-top: 1px solid var(--border);
 }
-
-/* === PAGE: PLUGINS =========================================== */
-.plugin-section { margin-bottom: var(--sp-8); }
-
-.matrix-wrap {
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  overflow-x: auto;
-}
-.matrix {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-}
-.matrix th, .matrix td {
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-  text-align: center;
-  white-space: nowrap;
-}
-.matrix th:last-child, .matrix td:last-child { border-right: 0; }
-.matrix th {
-  font-family: var(--font-mono); font-size: 10px;
-  letter-spacing: 0.1em; text-transform: uppercase;
-  color: var(--text-dim);
-  background: var(--surface-2);
-  position: sticky; top: 0;
-}
-.matrix th:first-child, .matrix td:first-child {
-  text-align: left;
-  position: sticky; left: 0;
-  background: var(--surface-1);
-  z-index: 1;
-}
-.matrix th:first-child { background: var(--surface-2); z-index: 2; }
-.matrix-cell-active   { color: var(--ok); }
-.matrix-cell-disabled { color: var(--err); }
-.matrix-cell-inherit  { color: var(--text-dim); }
-.matrix-cell button {
-  font-family: var(--font-mono); font-size: 12px;
-  width: 24px; height: 24px;
-  border-radius: 4px;
-  transition: background var(--d-fast) var(--ease);
-}
-.matrix-cell button:hover { background: var(--hover); }
-
-/* === PAGE: TEMPLATES ========================================= */
-.template-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: var(--sp-4);
-}
-.template-card {
-  padding: var(--sp-5);
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  display: flex; flex-direction: column; gap: var(--sp-3);
-  transition: border-color var(--d-fast) var(--ease);
-}
-.template-card:hover { border-color: var(--border-strong); }
-.template-card { position: relative; }
-.template-recommended {
-  position: absolute;
-  top: 8px; right: 8px;
-  font-size: 10.5px;
-  padding: 3px 8px;
-  background: linear-gradient(90deg, var(--accent), var(--ok));
-  color: var(--bg);
-  border-radius: 999px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-.template-emoji { font-size: 32px; line-height: 1; }
-.template-name { font-size: 14px; font-weight: 600; margin: 0; }
-.template-desc { font-size: 12.5px; color: var(--text-muted); margin: 0; flex: 1; }
-.template-meta { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
-.template-quality { font-size: 11.5px; }
-.template-actions { display: flex; gap: var(--sp-2); }
 
 /* === PAGE: TOOLS ============================================= */
 .tools-stack { display: flex; flex-direction: column; gap: var(--sp-6); }
@@ -3352,44 +2743,6 @@ body {
 }
 
 /* === PAGE AIDE ================================================ */
-.help-hub-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: var(--sp-4);
-  margin-top: var(--sp-4);
-}
-.help-hub-card {
-  display: block;
-  padding: var(--sp-5);
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  text-decoration: none;
-  color: inherit;
-  transition: transform var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease), box-shadow var(--d-fast) var(--ease);
-}
-.help-hub-card:hover {
-  transform: translateY(-2px);
-  border-color: var(--accent);
-  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
-}
-.help-hub-emoji {
-  font-size: 32px;
-  line-height: 1;
-  margin-bottom: var(--sp-3);
-}
-.help-hub-title {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-  margin-bottom: 6px;
-  color: var(--text);
-}
-.help-hub-summary {
-  font-size: 12.5px;
-  line-height: 1.5;
-  color: var(--text-muted);
-}
 
 /* CTA « Ouvrir la feature » en fin de topic d'aide (lot F item 3). */
 .help-cta {
@@ -3426,49 +2779,6 @@ body {
 .help-nav-link .dim { font-size: 10.5px; letter-spacing: 0.05em; text-transform: uppercase; }
 
 .help-content-single section { margin-bottom: var(--sp-8); }
-
-.help-toc {
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
-  border-radius: var(--r-md);
-  padding: var(--sp-4) var(--sp-5);
-  margin-bottom: var(--sp-8);
-  position: sticky;
-  top: calc(var(--topbar-h) + var(--sp-3));
-  z-index: 5;
-}
-.help-toc-title {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: var(--sp-2);
-}
-.help-toc ol {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 4px var(--sp-4);
-  list-style: none; padding: 0; margin: 0;
-  counter-reset: hl;
-}
-.help-toc li {
-  counter-increment: hl;
-  font-size: 12.5px;
-}
-.help-toc li::before {
-  content: counter(hl, decimal-leading-zero) " ";
-  font-family: var(--font-mono);
-  color: var(--warm);
-  font-size: 10.5px;
-  margin-right: 6px;
-}
-.help-toc a {
-  color: var(--text-muted);
-  transition: color var(--d-fast) var(--ease);
-}
-.help-toc a:hover { color: var(--accent); }
 
 .help-content section {
   margin-bottom: var(--sp-12);
@@ -3752,49 +3062,9 @@ body {
 .help-list li code { color: var(--warm); }
 
 /* === SKILLS PAGE ============================================== */
-.skill-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: var(--sp-4);
-}
-.skill-card {
-  display: flex; flex-direction: column;
-  gap: var(--sp-3);
-  padding: var(--sp-5);
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  transition: border-color var(--d-fast) var(--ease), transform var(--d-fast) var(--ease);
-}
-.skill-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
-.skill-card-header {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--sp-3);
-}
-.skill-icon {
-  width: 36px; height: 36px;
-  display: flex; align-items: center; justify-content: center;
-  background: var(--accent-soft);
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
-  border-radius: var(--r-sm);
-  color: var(--accent);
-  flex-shrink: 0;
-}
-.skill-icon svg { width: 18px; height: 18px; }
-.skill-name { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-.skill-desc {
-  font-size: 12.5px;
-  color: var(--text-muted);
-  margin: 0;
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
+
 /* Lot E item 5 : chip d'origine GitHub d'un skill importé. */
-.skill-origin { display: flex; flex-wrap: wrap; gap: 4px; padding-top: var(--sp-2); }
+
 .chip-origin {
   font-family: var(--font-mono);
   color: var(--text-muted);
@@ -3802,17 +3072,6 @@ body {
   border: 1px solid var(--border);
   max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.skill-ws-list {
-  display: flex; flex-wrap: wrap; gap: 4px;
-  padding-top: var(--sp-2);
-  border-top: 1px solid var(--border);
-}
-.skill-actions {
-  display: flex; gap: var(--sp-2);
-  margin-top: auto;
-  padding-top: var(--sp-3);
-  border-top: 1px solid var(--border);
 }
 
 .ws-pick-list {
@@ -4153,85 +3412,9 @@ body {
 /* === RESPONSIVE ============================================== */
 @media (max-width: 900px) {
   #app { grid-template-columns: 1fr; }
-  .sidebar {
-    position: fixed; left: -100%; top: 0;
-    width: 280px;
-    transition: left var(--d-norm) var(--ease);
-    box-shadow: 0 0 32px rgba(0, 0, 0, 0.5);
-  }
-  .sidebar.open { left: 0; }
   .content { padding: var(--sp-4); }
-  .kpi-row { grid-template-columns: 1fr; }
   .page-header { flex-direction: column; align-items: flex-start; }
-  .page-header-actions { width: 100%; justify-content: flex-start; }
 }
-
-/* Indicateur "session active" sur workspace-card : petite pastille
-   verte pulsante en haut à gauche pour distinguer immédiatement
-   les workspaces dont Claude Code tourne. */
-.workspace-card { position: relative; }
-.workspace-live-dot {
-  position: absolute;
-  top: var(--sp-3); left: var(--sp-3);
-  width: 10px; height: 10px;
-  border-radius: 50%;
-  background: var(--ok, #10b981);
-  box-shadow: 0 0 0 2px var(--bg), 0 0 8px var(--ok, #10b981);
-  animation: workspace-live-pulse 1.6s ease-in-out infinite;
-  pointer-events: none;
-}
-@keyframes workspace-live-pulse {
-  0%, 100% { opacity: 0.85; transform: scale(1); }
-  50%      { opacity: 1; transform: scale(1.15); }
-}
-
-/* === WS CLAUDE.MD INLINE EDITOR ======================================= */
-.ws-claudemd-card {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: var(--surface-1);
-  margin-bottom: var(--sp-4);
-  overflow: hidden;
-}
-.ws-claudemd-header {
-  display: flex;
-  align-items: baseline;
-  gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-3);
-  border-bottom: 1px solid var(--border);
-}
-.ws-claudemd-title { font-weight: 500; font-size: 13px; flex: 1; }
-.ws-claudemd-dirty { color: var(--accent); font-size: 11.5px; }
-.ws-claudemd-textarea {
-  flex: 1;
-  width: 100%;
-  padding: var(--sp-3);
-  border: none;
-  border-radius: 0;
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-  font-size: 12.5px;
-  line-height: 1.55;
-  resize: vertical;
-  min-height: 280px;
-  tab-size: 2;
-}
-.ws-claudemd-textarea:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-.ws-claudemd-footer {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  justify-content: flex-end;
-  padding: var(--sp-2) var(--sp-3);
-  border-top: 1px solid var(--border);
-}
-.ws-claudemd-hint { margin-right: auto; font-size: 11px; }
 
 /* === SESSION VIEWER LIVE ============================================== */
 .session-live-dot {
@@ -4435,11 +3618,9 @@ body {
 /* Indicateur de focus clavier pour tous les controles cliquables
    non-btn (cards, lignes, onglets, segments). Les .btn et 2 textareas
    ont deja leur propre regle ; ceci comble le reste. */
-.nav-link:focus-visible, .card.hoverable:focus-visible, .workspace-card:focus-visible,
-.featured-card:focus-visible,
-.mcp-card:focus-visible, .recipe-card:focus-visible, .session-row:focus-visible,
-.list-row:focus-visible, .palette-item:focus-visible, .theme-card:focus-visible,
-.config-btn:focus-visible, .quick-btn:focus-visible, .tab:focus-visible,
+.nav-link:focus-visible, .card.hoverable:focus-visible,
+.mcp-card:focus-visible, .recipe-card:focus-visible,
+.list-row:focus-visible, .palette-item:focus-visible, .theme-card:focus-visible, .quick-btn:focus-visible, .tab:focus-visible,
 .seg-control button:focus-visible, .icon-btn:focus-visible, .help-hub-card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

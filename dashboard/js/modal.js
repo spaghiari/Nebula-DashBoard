@@ -40,6 +40,22 @@ function _refreshModalStack() {
   });
 }
 
+// Inscrit un overlay maison (wizard de premier lancement) dans la pile :
+// les modales deja ouvertes deviennent inertes au lieu d'etre detruites, et
+// une modale ouverte par-dessus le rend inerte a son tour. Retourne la
+// fonction de retrait (idempotente), a appeler a la fermeture.
+function pushModalLayer(overlay, modal) {
+  const entry = { overlay, modal, prev: null };
+  _modalStack.push(entry);
+  _refreshModalStack();
+  return () => {
+    const idx = _modalStack.indexOf(entry);
+    if (idx < 0) return;
+    _modalStack.splice(idx, 1);
+    _refreshModalStack();
+  };
+}
+
 function openModal({ title, body, footer = null, wide = false, onClose = null, closeOnBackdrop = false, confirmClose = null }) {
   const root = $('#modal-root');
   const overlay = document.createElement('div');

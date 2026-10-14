@@ -1,10 +1,12 @@
 /* ================================================================
    Nebula - Page Plugins (marketplace + installes)
    ----------------------------------------------------------------
-   renderPlugins : page Plugins avec 2 onglets (installes, explorer).
-   loadInstalledPlugins : liste des plugins installes localement avec
-   actions enable/disable/uninstall.
-   renderPluginScope : onglet Explorer (marketplace + filtres).
+   renderPlugins : en-tete, cartes « Installes » (filtres), orphelins,
+   scope par workspace. Mise en page de la refonte 2026-10 (langage de
+   la page MCPs : .pg-filters, .xcard, css/redesign.css section 10).
+   loadInstalledPlugins / pluginCard : cartes avec interrupteur global
+   et desinstallation ; pluginState : actif / desactive / casse / absent.
+   renderPluginScope : override par workspace (Actif / Inactif / Heriter).
    modalInstallPlugin : modal d'installation depuis marketplace.
    modalPluginReadme : visualisation du README d'un plugin.
 
@@ -25,31 +27,54 @@ async function renderPlugins() {
   const c = $('#content');
   c['innerHTML'] = '';
   const page = el('div', 'page');
-  page.appendChild(el('div', 'page-header', `
+  const enabledMap = (STATE.plugins && STATE.plugins.enabled) || {};
+  const nKnown = Object.keys(enabledMap).length;
+  const nOn = Object.values(enabledMap).filter(Boolean).length;
+  const header = el('div', 'page-header rise', `
     <div class="page-header-text">
-      <div class="page-eyebrow"><span class="index">02.</span><span>Extensions</span></div>
       <h1 class="page-title">Plugins</h1>
-      <p class="page-subtitle">Plugins Claude Code installés et leur scope par workspace.</p>
+      <p class="page-subtitle" data-plugins-sub>${nKnown} plugin${nKnown > 1 ? 's' : ''} Claude Code déclaré${nKnown > 1 ? 's' : ''}, ${nOn} actif${nOn > 1 ? 's' : ''} globalement. Le scope se règle ensuite workspace par workspace.</p>
     </div>
-  `));
+  `);
+  page.appendChild(header);
   mountHelpLink(page, 'skills-plugins', 'les plugins');
 
-  // Installed
-  page.appendChild(el('div', 'section-label', '<span class="num">A.</span> Installés'));
-  const installedHost = el('div');
+  // Installés
+  const instHead = el('div', 'lbl rise', 'Installés <small data-inst-count></small>');
+  instHead.style.setProperty('--i', 1);
+  page.appendChild(instHead);
+  const installedHost = el('div', 'rise');
+  installedHost.style.setProperty('--i', 2);
   page.appendChild(installedHost);
-  loadInstalledPlugins(installedHost);
+  loadInstalledPlugins(installedHost, { countEl: instHead.querySelector('[data-inst-count]'), subEl: header.querySelector('[data-plugins-sub]') });
 
-  // Per-plugin scope manager
-  page.appendChild(el('div', 'section-label', '<span class="num">B.</span> Scope par workspace'));
-  const scopeHost = el('div');
+  // Scope par plugin et par workspace
+  const scopeHead = el('div', 'lbl rise', 'Scope par workspace <small>override local d\'un plugin, ou héritage du global</small>');
+  scopeHead.style.setProperty('--i', 3);
+  page.appendChild(scopeHead);
+  const scopeHost = el('div', 'rise');
+  scopeHost.style.setProperty('--i', 4);
   page.appendChild(scopeHost);
   renderPluginScope(scopeHost);
 
   c.appendChild(page);
 }
 
-async function loadInstalledPlugins(host) {
+// Etat affiche d'un plugin installe (Lot E item 4 : 3 etats degrades).
+//   cassé    : activé (enabled) mais absent du disque -> rouge, switch
+//              désactivé (l'activer n'a aucun effet réel).
+//   absent   : présent dans settings.json mais plus sur disque, pas activé
+//              -> neutre (warn), simple constat.
+//   actif/désactivé : sur disque, géré normalement par le switch.
+function pluginState(p) {
+  if (p.enabled && !p.on_disk) return { key: 'broken', pill: '<span class="pill err" title="Plugin activé mais introuvable sur le disque -- il ne fait rien. Réinstalle-le ou désinstalle l\'entrée.">cassé</span>' };
+  if (!p.on_disk) return { key: 'missing', pill: '<span class="pill warn" title="Absent du disque">absent</span>' };
+  return p.enabled
+    ? { key: 'on', pill: '<span class="pill ok">actif</span>' }
+    : { key: 'off', pill: '<span class="pill mute">désactivé</span>' };
+}
+
+async function loadInstalledPlugins(host, opts = {}) {
   host['innerHTML'] = '<div class="page-loader"><div class="spinner"></div></div>';
   try {
     const data = await API.get('/api/plugins/installed');
@@ -59,6 +84,17 @@ async function loadInstalledPlugins(host) {
     // Stash les marketplaces pour le bouton Installer
     STATE.marketplaces = data.marketplaces || [];
 
+    const refreshHeader = () => {
+      const on = installed.filter(p => p.enabled && p.on_disk).length;
+      const bad = installed.filter(p => !p.on_disk).length;
+      if (opts.countEl) opts.countEl.textContent = installed.length ? String(installed.length) : '';
+      if (opts.subEl) {
+        opts.subEl['innerHTML'] = `${installed.length} plugin${installed.length > 1 ? 's' : ''} Claude Code installé${installed.length > 1 ? 's' : ''}, ${on} actif${on > 1 ? 's' : ''}`
+          + (bad ? `, ${bad} à réparer` : '') + '. Le scope se règle ensuite workspace par workspace.';
+      }
+    };
+    refreshHeader();
+
     if (!installed.length && !orphans.length) {
       host['innerHTML'] = '<div class="empty"><div class="empty-title">Aucun plugin installé</div><p class="muted">Clique sur <strong>Installer</strong> pour parcourir les marketplaces.</p></div>';
       return;
@@ -66,85 +102,131 @@ async function loadInstalledPlugins(host) {
     host['innerHTML'] = '';
 
     if (installed.length) {
-      const wrap = el('div', 'table-frame');
-      wrap['innerHTML'] = `
-        <table class="table">
-          <thead><tr><th>Plugin</th><th>Description</th><th>État</th><th></th></tr></thead>
-          <tbody></tbody>
-        </table>
-      `;
-      const tb = wrap.querySelector('tbody');
-      for (const p of installed) {
-        const tr = el('tr');
-        const [shortId, mkt] = p.id.includes('@') ? p.id.split('@') : [p.id, null];
-        // Lot E item 4 : distinguer 3 états dégradés.
-        //   cassé    : activé (enabled) mais absent du disque -> rouge, switch
-        //              désactivé (l'activer n'a aucun effet réel).
-        //   absent   : présent dans settings.json mais plus sur disque, pas activé
-        //              -> neutre (warn), simple constat.
-        //   actif/désactivé : sur disque, géré normalement par le switch.
-        const broken = p.enabled && !p.on_disk;
-        let stateBadge = '';
-        if (broken) {
-          stateBadge = '<span class="badge badge-err" title="Plugin activé mais introuvable sur le disque -- il ne fait rien. Réinstalle-le ou désinstalle l\'entrée." style="margin-left:6px">cassé</span>';
-        } else if (!p.on_disk) {
-          stateBadge = '<span class="badge badge-warn" title="Absent du disque" style="margin-left:6px">absent</span>';
-        }
-        tr['innerHTML'] = `
-          <td>
-            <div><strong style="font-size:13px">${escapeHtml(shortId)}</strong>${stateBadge}</div>
-            ${mkt ? `<div class="dim mono" style="font-size:10.5px">${escapeHtml(mkt)}</div>` : ''}
-          </td>
-          <td><div class="muted" style="font-size:12.5px;max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(p.description || '')}">${escapeHtml(p.description || '—')}</div></td>
-          <td></td>
-          <td style="text-align:right"></td>
-        `;
-        const sw = el('label', 'switch', `<input type="checkbox" aria-label="Activer ${escapeHtml(shortId)}" ${p.enabled ? 'checked' : ''}${!p.on_disk ? ' disabled' : ''}><span class="switch-slider"></span>`);
-        // Switch désactivé si le plugin est absent du disque : (dés)activer un
-        // plugin introuvable n'a aucun effet -> on évite le faux levier.
-        if (!p.on_disk) {
-          sw.title = "Plugin absent du disque -- impossible de l'activer tant qu'il n'est pas réinstallé.";
-        }
-        sw.querySelector('input').addEventListener('change', async (ev) => {
-          const url = ev.target.checked ? '/api/plugins/enable' : '/api/plugins/disable';
-          ev.target.disabled = true;
-          try { await API.post(url, { plugin_id: p.id }); toastOk('Mis à jour'); }
-          catch (e) { toastErr(e.message); ev.target.checked = !ev.target.checked; }
-          finally { ev.target.disabled = false; }
-        });
-        tr.children[2].appendChild(sw);
+      // Barre de filtres : recherche + puces (actifs / désactivés / à réparer).
+      const toolbar = el('div', 'pg-filters');
+      toolbar['innerHTML'] = `<span class="search-field">${I.search}<input class="input" type="search" placeholder="Nom, marketplace, description…" aria-label="Filtrer les plugins"></span>`;
+      const searchInput = toolbar.querySelector('input');
+      const chipGroup = el('span', 'pg-chipgroup');
+      chipGroup.setAttribute('role', 'group');
+      chipGroup.setAttribute('aria-label', 'Filtrer par état');
+      toolbar.appendChild(chipGroup);
+      host.appendChild(toolbar);
+      const FILTERS = [['', 'Tous', () => true], ['on', 'Actifs', p => pluginState(p).key === 'on'],
+        ['off', 'Désactivés', p => pluginState(p).key === 'off'], ['bad', 'À réparer', p => !p.on_disk]];
+      let stateF = '';
+      const drawChips = () => {
+        chipGroup['innerHTML'] = FILTERS
+          .map(([v, l, fn]) => [v, l, installed.filter(fn).length])
+          .filter(([v, , n]) => !v || n > 0 || v === stateF)
+          .map(([v, l, n]) => `<button class="fchip" type="button" data-f="${v}" aria-pressed="${stateF === v}">${escapeHtml(l)} <b>${n}</b></button>`).join('');
+      };
 
-        const actions = tr.children[3];
-        const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
-        rm.title = 'Désinstaller';
-        rm.addEventListener('click', () => confirmDialog(`Désinstaller ${p.id} ?`, async () => {
-          try {
-            await API.post('/api/plugins/uninstall-soft', { plugin_id: p.id, remove_files: false });
-            toastOk('Désinstallé'); STATE.loading = true; route();
-          } catch (e) { toastErr(e.message); }
-        }, { danger: true, confirmLabel: 'Désinstaller' }));
-        actions.appendChild(rm);
-        tb.appendChild(tr);
+      const grid = el('div', 'xgrid');
+      host.appendChild(grid);
+      const cards = installed.map(p => {
+        const card = pluginCard(p, () => { drawChips(); refreshHeader(); applyFilter(); });
+        grid.appendChild(card);
+        return [p, card];
+      });
+      const emptyEl = el('div', 'empty');
+      emptyEl.hidden = true;
+      emptyEl['innerHTML'] = '<div class="empty-title">Aucun plugin ne correspond</div><p class="muted">Modifie ta recherche ou tes filtres.</p> <button class="btn btn-sm" type="button" data-reset-filters>Tout afficher</button>';
+      emptyEl.querySelector('[data-reset-filters]').addEventListener('click', () => { searchInput.value = ''; stateF = ''; drawChips(); applyFilter(); });
+      grid.appendChild(emptyEl);
+
+      function applyFilter() {
+        const q = (searchInput.value || '').trim().toLowerCase();
+        const fn = (FILTERS.find(f => f[0] === stateF) || FILTERS[0])[2];
+        let n = 0;
+        for (const [p, card] of cards) {
+          card.hidden = !(fn(p) && (!q || `${p.id} ${p.description || ''}`.toLowerCase().includes(q)));
+          if (!card.hidden) n++;
+        }
+        emptyEl.hidden = n > 0;
       }
-      host.appendChild(wrap);
+      chipGroup.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-f]');
+        if (!b) return;
+        stateF = b.dataset.f;
+        drawChips(); applyFilter();
+      });
+      searchInput.addEventListener('input', debounce(applyFilter, 100));
+      drawChips();
     }
 
     if (orphans.length) {
-      const orphHeader = el('div', 'dim');
-      orphHeader.style.cssText = 'font-size:12px;margin:var(--sp-3) 0 var(--sp-2)';
-      orphHeader.textContent = `${orphans.length} dossier(s) orphelin(s) sur disque (présents mais non listés dans settings.json)`;
-      host.appendChild(orphHeader);
-      const wrap = el('div', 'table-frame');
-      wrap['innerHTML'] = `<table class="table"><thead><tr><th>Dossier</th><th>Chemin</th></tr></thead><tbody></tbody></table>`;
-      const tb = wrap.querySelector('tbody');
+      const box = el('div', 'card flush xorph');
+      box['innerHTML'] = `
+        <div class="card-h"><h3>${I.folder}Dossiers orphelins</h3><span class="pill mute">${orphans.length}</span></div>
+        <p class="xorph-note">${orphans.length} dossier(s) orphelin(s) sur disque (présents mais non listés dans settings.json)</p>
+        <div class="xrows"></div>
+      `;
+      const rows = box.querySelector('.xrows');
       for (const o of orphans) {
-        const tr = el('tr');
-        tr['innerHTML'] = `<td><span class="mono">${escapeHtml(o.dir_name)}</span></td><td><span class="dim mono" style="font-size:11.5px">${escapeHtml(o.rel_path)}</span></td>`;
-        tb.appendChild(tr);
+        const r = el('div', 'xrow');
+        r['innerHTML'] = `<span class="mono xrow-n">${escapeHtml(o.dir_name)}</span><span class="dim mono xrow-p" title="${escapeHtml(o.rel_path)}">${escapeHtml(o.rel_path)}</span>`;
+        rows.appendChild(r);
       }
-      host.appendChild(wrap);
+      host.appendChild(box);
     }
   } catch (e) { host['innerHTML'] = `<div class="error-box">${escapeHtml(e.message)}</div>`; }
+}
+
+// Carte d'un plugin installe : etat, interrupteur global, desinstallation.
+// onChange : rappel apres bascule reussie (compteurs / filtres de la page).
+function pluginCard(p, onChange) {
+  const card = el('article', 'xcard plugin-card');
+  const [shortId, mkt] = p.id.includes('@') ? p.id.split('@') : [p.id, null];
+  const meta = [];
+  if (p.scope) meta.push(`<span>scope ${escapeHtml(p.scope)}</span>`);
+  if (p.size_kb) meta.push(`<span>${fmtBytes(p.size_kb * 1024)}</span>`);
+  if (p.installed_at) meta.push(`<span title="${escapeHtml(fmtDateTime(p.installed_at))}">installé ${escapeHtml(fmtAgo(p.installed_at))}</span>`);
+  card['innerHTML'] = `
+    <div class="top">
+      <span class="xi" aria-hidden="true">${I.plug}</span>
+      <div class="xt">
+        <h3>${escapeHtml(shortId)}</h3>
+        <div class="msub">${mkt ? `<small>${escapeHtml(mkt)}</small>` : ''}${p.version ? `<span class="chip">${escapeHtml(p.version)}</span>` : ''}</div>
+      </div>
+      <div class="xstate" data-state>${pluginState(p).pill}</div>
+    </div>
+    <p class="xdesc ${p.description ? '' : 'none'}" title="${escapeHtml(p.description || '')}">${escapeHtml(p.description || 'Pas de description.')}</p>
+    ${meta.length ? `<div class="xmeta">${meta.join('')}</div>` : ''}
+  `;
+  const foot = el('div', 'xfoot');
+  const swWrap = el('label', 'xswitch');
+  swWrap['innerHTML'] = `<span class="switch"><input type="checkbox" aria-label="Activer ${escapeHtml(shortId)}" ${p.enabled ? 'checked' : ''}${!p.on_disk ? ' disabled' : ''}><span class="switch-slider"></span></span><span class="xswitch-l">Activé globalement</span>`;
+  // Switch désactivé si le plugin est absent du disque : (dés)activer un
+  // plugin introuvable n'a aucun effet -> on évite le faux levier.
+  if (!p.on_disk) {
+    swWrap.title = "Plugin absent du disque -- impossible de l'activer tant qu'il n'est pas réinstallé.";
+  }
+  swWrap.querySelector('input').addEventListener('change', async (ev) => {
+    const url = ev.target.checked ? '/api/plugins/enable' : '/api/plugins/disable';
+    ev.target.disabled = true;
+    try {
+      await API.post(url, { plugin_id: p.id });
+      toastOk('Mis à jour');
+      p.enabled = ev.target.checked;
+      if (STATE.plugins && STATE.plugins.enabled && p.id in STATE.plugins.enabled) STATE.plugins.enabled[p.id] = p.enabled;
+      card.querySelector('[data-state]')['innerHTML'] = pluginState(p).pill;
+      if (onChange) onChange();
+    }
+    catch (e) { toastErr(e.message); ev.target.checked = !ev.target.checked; }
+    finally { ev.target.disabled = false; }
+  });
+  const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
+  rm.title = 'Désinstaller';
+  rm.setAttribute('aria-label', `Désinstaller ${shortId}`);
+  rm.addEventListener('click', () => confirmDialog(`Désinstaller ${p.id} ?`, async () => {
+    try {
+      await API.post('/api/plugins/uninstall-soft', { plugin_id: p.id, remove_files: false });
+      toastOk('Désinstallé'); STATE.loading = true; route();
+    } catch (e) { toastErr(e.message); }
+  }, { danger: true, confirmLabel: 'Désinstaller' }));
+  foot.append(swWrap, rm);
+  card.appendChild(foot);
+  return card;
 }
 
 async function renderPluginScope(host) {
@@ -152,36 +234,38 @@ async function renderPluginScope(host) {
 
   const pluginIds = Object.keys(STATE.plugins.enabled || {});
   if (!pluginIds.length) {
-    host['innerHTML'] = '<div class="dim" style="font-size:12.5px;padding:var(--sp-3)">Aucun plugin installé pour configurer le scope.</div>';
+    host['innerHTML'] = '<div class="card xempty">Aucun plugin installé pour configurer le scope.</div>';
     return;
   }
   if (!STATE.workspaces.length) {
-    host['innerHTML'] = '<div class="dim" style="font-size:12.5px;padding:var(--sp-3)">Aucun workspace.</div>';
+    host['innerHTML'] = '<div class="card xempty">Aucun workspace.</div>';
     return;
   }
 
   // UI : sélecteur plugin + filtre workspace + actions de masse + liste
   host['innerHTML'] = `
-    <div class="scope-toolbar">
-      <div class="field" style="flex:2;margin:0;min-width:240px">
-        <label class="field-label">Plugin</label>
-        <select class="select" name="plugin">
-          ${pluginIds.map(id => `<option value="${escapeHtml(id)}">${escapeHtml(id.split('@')[0])}${id.includes('@') ? ` <span>· ${escapeHtml(id.split('@')[1])}</span>` : ''}</option>`).join('')}
-        </select>
+    <div class="card flush scope-card">
+      <div class="scope-toolbar">
+        <label class="scope-field">
+          <span class="field-label">Plugin</span>
+          <select class="select" name="plugin">
+            ${pluginIds.map(id => `<option value="${escapeHtml(id)}">${escapeHtml(id.split('@')[0])}${id.includes('@') ? ` · ${escapeHtml(id.split('@')[1])}` : ''}</option>`).join('')}
+          </select>
+        </label>
+        <label class="scope-field scope-field-q">
+          <span class="field-label">Filtrer les workspaces</span>
+          <span class="search-field">${I.search}<input class="input" type="search" name="filter" placeholder="Nom ou id…"></span>
+        </label>
+        <div class="scope-bulk" role="group" aria-label="Actions de masse sur les workspaces filtrés">
+          <span class="scope-bulk-l">En masse</span>
+          <button class="btn btn-sm" type="button" data-bulk="on">Activer tout</button>
+          <button class="btn btn-sm" type="button" data-bulk="off">Désactiver tout</button>
+          <button class="btn btn-sm btn-ghost" type="button" data-bulk="reset">Réinitialiser</button>
+        </div>
       </div>
-      <div class="field" style="flex:1;margin:0;min-width:200px">
-        <label class="field-label">Filtrer workspaces</label>
-        <input class="input input-search" name="filter" placeholder="Recherche…">
-      </div>
-      <div class="scope-bulk">
-        <span class="dim" style="font-size:11px;text-transform:uppercase;letter-spacing:0.1em">Masse :</span>
-        <button class="btn btn-sm" data-bulk="on">Activer tout</button>
-        <button class="btn btn-sm" data-bulk="off">Désactiver tout</button>
-        <button class="btn btn-sm btn-ghost" data-bulk="reset">Réinitialiser</button>
-      </div>
+      <div class="scope-summary"></div>
+      <div class="scope-list"></div>
     </div>
-    <div class="scope-summary"></div>
-    <div class="scope-list"></div>
   `;
 
   const sel = host.querySelector('[name=plugin]');
@@ -206,6 +290,13 @@ async function renderPluginScope(host) {
     if (info.overridden) return info.effective ? 'on' : 'off';
     return info.effective ? 'inherit-on' : 'inherit-off';
   };
+  const STATE_PILL = {
+    'on': '<span class="pill ok" title="Override local : forcé actif">actif ici</span>',
+    'off': '<span class="pill err" title="Override local : forcé inactif">inactif ici</span>',
+    'inherit-on': '<span class="pill mute" title="Pas d\'override : suit le global">hérité · actif</span>',
+    'inherit-off': '<span class="pill mute" title="Pas d\'override : suit le global">hérité · inactif</span>',
+    'inherit': '<span class="pill mute" title="État inconnu : suit le global">hérité</span>',
+  };
 
   const render = () => {
     const filter = (filterInput.value || '').trim().toLowerCase();
@@ -221,15 +312,13 @@ async function renderPluginScope(host) {
       else inheritOff++;
     }
     summaryEl['innerHTML'] = `
-      <div class="row" style="gap:var(--sp-3);font-size:12px;margin:var(--sp-3) 0;color:var(--text-muted)">
-        <span><strong class="text-ok tabular">${active}</strong> override actif</span>
-        <span><strong class="text-err tabular">${disabled}</strong> override désactivé</span>
-        <span class="dim"><strong class="tabular">${inheritOn + inheritOff}</strong> hérités du global (${inheritOn} actifs)</span>
-      </div>
+      <span><b class="text-ok tabular">${active}</b> override actif</span>
+      <span><b class="text-err tabular">${disabled}</b> override désactivé</span>
+      <span><b class="tabular">${inheritOn + inheritOff}</b> hérités du global (${inheritOn} actifs)</span>
     `;
 
     if (!filtered.length) {
-      listEl['innerHTML'] = '<div class="dim" style="padding:var(--sp-3);font-size:12.5px">Aucun workspace ne correspond.</div>';
+      listEl['innerHTML'] = '<div class="xempty">Aucun workspace ne correspond.</div>';
       return;
     }
 
@@ -239,16 +328,16 @@ async function renderPluginScope(host) {
       const state = stateOf(info);
       const row = el('div', 'scope-row');
       row['innerHTML'] = `
-        <span class="workspace-emoji" style="font-size:20px">${escapeHtml(w.emoji || '📁')}</span>
+        ${wsGem(w)}
         <div class="scope-row-main">
           <div class="scope-row-name">${escapeHtml(w.label || w.id)}</div>
-          <div class="dim mono" style="font-size:10.5px">${escapeHtml(w.id)}</div>
+          <small>${escapeHtml(w.id)}</small>
         </div>
-        <div class="scope-state-badge state-${state}"></div>
-        <div class="seg-control">
-          <button data-set="on" class="${state === 'on' ? 'is-active' : ''}" title="Activé pour ce workspace">Actif</button>
-          <button data-set="off" class="${state === 'off' ? 'is-active' : ''}" title="Désactivé pour ce workspace">Inactif</button>
-          <button data-set="reset" class="${state.startsWith('inherit') ? 'is-active' : ''}" title="Hériter du global (${info && info.global ? 'actif' : 'inactif'} actuellement)">Hériter</button>
+        <div class="scope-row-state">${STATE_PILL[state] || STATE_PILL.inherit}</div>
+        <div class="seg-control" role="group" aria-label="Plugin pour ${escapeHtml(w.label || w.id)}">
+          <button type="button" data-set="on" class="${state === 'on' ? 'is-active' : ''}" aria-pressed="${state === 'on'}" title="Activé pour ce workspace">Actif</button>
+          <button type="button" data-set="off" class="${state === 'off' ? 'is-active' : ''}" aria-pressed="${state === 'off'}" title="Désactivé pour ce workspace">Inactif</button>
+          <button type="button" data-set="reset" class="${state.startsWith('inherit') ? 'is-active' : ''}" aria-pressed="${state.startsWith('inherit')}" title="Hériter du global (${info && info.global ? 'actif' : 'inactif'} actuellement)">Hériter</button>
         </div>
       `;
       const segBtns = Array.from(row.querySelectorAll('button[data-set]'));
@@ -299,7 +388,7 @@ async function renderPluginScope(host) {
         }
         if (errs.length) toastErr(errs.length + ' échec(s)'); else toastOk('Action de masse terminée');
         await reload();
-      });
+      }, { confirmLabel: `${verb[0].toUpperCase()}${verb.slice(1)} (${targets.length})` });
     });
   }
 

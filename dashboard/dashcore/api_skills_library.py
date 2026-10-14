@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
+import stat
+import threading
 from pathlib import Path
 
 from dashcore.config import SKILLS_LIBRARY_DIR, CLAUDE_HOME
@@ -39,24 +42,95 @@ def _target_parent(target: str) -> Path | None:
     return None
 
 
-def _hash_dir(d: Path) -> str:
-    """Hash récursif du contenu d'un dossier (ignore .nebula-origin.json)."""
-    h = hashlib.sha256()
-    if not d.exists():
-        return ""
-    for f in sorted(d.rglob("*")):
-        if not f.is_file():
-            continue
-        if f.name == ".nebula-origin.json":
-            continue
+# Cache de `_hash_dir` (même principe que le cache de stats de
+# `workspace_io.py`). Clé : chemin absolu du dossier ; valeur : (signature,
+# hash). La signature = tuple trié (chemin relatif, st_mtime_ns, st_size) de
+# chaque fichier pris en compte : tout ajout, suppression, renommage ou
+# réécriture d'un fichier change la signature et force un recalcul. Le
+# parcours + stat reste fait à chaque appel (peu coûteux) ; seule la lecture
+# du contenu (le coût réel) est évitée. Hash produit strictement identique à
+# la version sans cache (mêmes octets hachés dans le même ordre).
+_HASH_CACHE: dict[str, tuple[tuple, str]] = {}
+_HASH_CACHE_LOCK = threading.Lock()
+# Garde-fou mémoire : bibliothèque + copies global/workspaces restent bien
+# en dessous ; au-delà on vide tout (les dossiers disparus ne s'accumulent pas).
+_HASH_CACHE_MAX = 2048
+
+
+def _walk_files(d: Path) -> list[tuple[Path, os.stat_result]]:
+    """Fichiers réguliers sous `d` (liens vers fichier suivis, liens vers
+    dossier non parcourus, comme `rglob` en 3.13) avec leur stat.
+
+    `DirEntry.stat()` réutilise les métadonnées du listage sous Windows :
+    pas d'appel système par fichier (le coût dominant de `_hash_dir`).
+    """
+    out: list[tuple[Path, os.stat_result]] = []
+    stack = [d]
+    while stack:
+        cur = stack.pop()
         try:
-            h.update(f.relative_to(d).as_posix().encode("utf-8"))
-            h.update(b"\0")
-            h.update(f.read_bytes())
-            h.update(b"\0")
+            with os.scandir(cur) as it:
+                entries = list(it)
         except OSError:
             continue
-    return h.hexdigest()
+        for e in entries:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    stack.append(Path(e.path))
+                    continue
+                st = e.stat()
+            except OSError:
+                continue  # équivalent de `is_file()` -> False
+            if stat.S_ISREG(st.st_mode):
+                out.append((Path(e.path), st))
+    return out
+
+
+def _hash_dir(d: Path) -> str:
+    """Hash récursif du contenu d'un dossier (ignore .nebula-origin.json).
+
+    Mis en cache par dossier, invalidé par la signature (mtime_ns, taille)
+    de ses fichiers (cf. `_HASH_CACHE`).
+    """
+    if not d.exists():
+        return ""
+    files: list[tuple[Path, str]] = []
+    sig: list[tuple[str, int, int]] = []
+    # Même ordre que l'ancien `sorted(d.rglob("*"))` (tri des Path) ; le
+    # parcours `os.scandir` évite un stat() système par fichier sous Windows.
+    for f, st in sorted(_walk_files(d), key=lambda item: item[0]):
+        if f.name == ".nebula-origin.json":
+            continue
+        rel = f.relative_to(d).as_posix()
+        files.append((f, rel))
+        sig.append((rel, st.st_mtime_ns, st.st_size))
+    key = str(d.absolute())
+    signature = tuple(sig)
+    with _HASH_CACHE_LOCK:
+        hit = _HASH_CACHE.get(key)
+    if hit is not None and hit[0] == signature:
+        return hit[1]
+
+    h = hashlib.sha256()
+    cacheable = True
+    for f, rel in files:
+        # Ordre des update() conservé à l'identique (y compris le cas d'un
+        # fichier illisible : chemin + séparateur déjà hachés, contenu absent).
+        h.update(rel.encode("utf-8"))
+        h.update(b"\0")
+        try:
+            h.update(f.read_bytes())
+        except OSError:
+            cacheable = False  # résultat transitoire : ne pas le figer
+            continue
+        h.update(b"\0")
+    digest = h.hexdigest()
+    if cacheable:
+        with _HASH_CACHE_LOCK:
+            if len(_HASH_CACHE) >= _HASH_CACHE_MAX:
+                _HASH_CACHE.clear()
+            _HASH_CACHE[key] = (signature, digest)
+    return digest
 
 
 def _read_origin(d: Path) -> dict | None:
@@ -82,6 +156,9 @@ def list_library() -> list[dict]:
     # relisait workspaces.json une fois par workspace (resolve_ws_dir) ->
     # O(skills x workspaces) lectures JSON.
     ws_roots = _workspace_skill_roots()
+    # Sous-dossiers de chaque racine listés une fois (au lieu de 2 exists()
+    # par skill et par workspace) : cf. `_distribution_for`.
+    listing: dict[str, set[str]] = {}
     out = []
     for sub in sorted(SKILLS_LIBRARY_DIR.iterdir()):
         if not sub.is_dir():
@@ -90,7 +167,7 @@ def list_library() -> list[dict]:
         if not skill_md.exists():
             continue
         meta = parse_skill_frontmatter(skill_md)
-        dist = _distribution_for(sub.name, _hash_dir(sub), ws_roots)
+        dist = _distribution_for(sub.name, _hash_dir(sub), ws_roots, listing)
         out.append({
             "id": sub.name,
             "name": meta.get("name") or sub.name,
@@ -116,24 +193,59 @@ def _workspace_skill_roots() -> list[tuple[str, str, Path]]:
     return roots
 
 
+def _subdir_names(root: Path, listing: dict[str, set[str]] | None) -> set[str] | None:
+    """Noms (normcase) des sous-dossiers de `root`, mémorisés dans `listing`.
+
+    None si `listing` n'est pas fourni (appel isolé : pas de pré-filtre).
+    """
+    if listing is None:
+        return None
+    key = str(root)
+    names = listing.get(key)
+    if names is None:
+        names = set()
+        try:
+            with os.scandir(root) as it:
+                for e in it:
+                    try:
+                        if e.is_dir():
+                            names.add(os.path.normcase(e.name))
+                    except OSError:
+                        continue
+        except OSError:
+            pass
+        listing[key] = names
+    return names
+
+
 def _distribution_for(name: str, src_hash: str,
-                      ws_roots: list[tuple[str, str, Path]] | None = None) -> list[dict]:
+                      ws_roots: list[tuple[str, str, Path]] | None = None,
+                      listing: dict[str, set[str]] | None = None) -> list[dict]:
     """Liste les cibles où <name> est actuellement présent + flag outdated.
 
     `ws_roots` : résultat de `_workspace_skill_roots()` à réutiliser quand on
     boucle sur plusieurs skills (list_library) ; calculé ici sinon.
+    `listing` : cache partagé des sous-dossiers de chaque racine (cf.
+    `_subdir_names`) ; pré-filtre seulement, les contrôles d'existence
+    d'origine restent appliqués aux candidats.
     """
     if ws_roots is None:
         ws_roots = _workspace_skill_roots()
+    key = os.path.normcase(name)
     out: list[dict] = []
-    g = CLAUDE_HOME / "skills" / name
-    if g.exists() and (g / "SKILL.md").exists():
+    g_root = CLAUDE_HOME / "skills"
+    g = g_root / name
+    g_names = _subdir_names(g_root, listing)
+    if (g_names is None or key in g_names) and g.exists() and (g / "SKILL.md").exists():
         out.append({
             "target": "global",
             "label": "Global (~/.claude/skills/)",
             "outdated": _hash_dir(g) != src_hash,
         })
     for ws_id, ws_label, skills_root in ws_roots:
+        ws_names = _subdir_names(skills_root, listing)
+        if ws_names is not None and key not in ws_names:
+            continue
         ws_skill = skills_root / name
         if ws_skill.exists() and (ws_skill / "SKILL.md").exists():
             out.append({
