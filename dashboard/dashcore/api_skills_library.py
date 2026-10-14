@@ -20,7 +20,7 @@ from dashcore.config import SKILLS_LIBRARY_DIR, CLAUDE_HOME
 from dashcore.helpers import (
     _remove_dir_or_link, parse_skill_frontmatter, safe_id, resolve_ws_dir,
 )
-from dashcore.workspace_io import list_workspaces
+from dashcore.workspace_io import _ws_dir_from_entry, list_workspaces
 
 
 def _ensure_library() -> None:
@@ -78,6 +78,10 @@ def _read_origin(d: Path) -> dict | None:
 
 def list_library() -> list[dict]:
     _ensure_library()
+    # Racines skills des workspaces calculées UNE fois : avant, chaque skill
+    # relisait workspaces.json une fois par workspace (resolve_ws_dir) ->
+    # O(skills x workspaces) lectures JSON.
+    ws_roots = _workspace_skill_roots()
     out = []
     for sub in sorted(SKILLS_LIBRARY_DIR.iterdir()):
         if not sub.is_dir():
@@ -86,7 +90,7 @@ def list_library() -> list[dict]:
         if not skill_md.exists():
             continue
         meta = parse_skill_frontmatter(skill_md)
-        dist = _distribution_for(sub.name, _hash_dir(sub))
+        dist = _distribution_for(sub.name, _hash_dir(sub), ws_roots)
         out.append({
             "id": sub.name,
             "name": meta.get("name") or sub.name,
@@ -99,8 +103,28 @@ def list_library() -> list[dict]:
     return out
 
 
-def _distribution_for(name: str, src_hash: str) -> list[dict]:
-    """Liste les cibles où <name> est actuellement présent + flag outdated."""
+def _workspace_skill_roots() -> list[tuple[str, str, Path]]:
+    """[(ws_id, libellé, <ws>/.claude/skills)] pour tous les workspaces du
+    registre, lu une seule fois (ordre du registre conservé)."""
+    roots: list[tuple[str, str, Path]] = []
+    for ws in list_workspaces():
+        ws_id = ws.get("id")
+        if not ws_id:
+            continue
+        roots.append((ws_id, ws.get("name") or ws_id,
+                      _ws_dir_from_entry(ws) / ".claude" / "skills"))
+    return roots
+
+
+def _distribution_for(name: str, src_hash: str,
+                      ws_roots: list[tuple[str, str, Path]] | None = None) -> list[dict]:
+    """Liste les cibles où <name> est actuellement présent + flag outdated.
+
+    `ws_roots` : résultat de `_workspace_skill_roots()` à réutiliser quand on
+    boucle sur plusieurs skills (list_library) ; calculé ici sinon.
+    """
+    if ws_roots is None:
+        ws_roots = _workspace_skill_roots()
     out: list[dict] = []
     g = CLAUDE_HOME / "skills" / name
     if g.exists() and (g / "SKILL.md").exists():
@@ -109,15 +133,12 @@ def _distribution_for(name: str, src_hash: str) -> list[dict]:
             "label": "Global (~/.claude/skills/)",
             "outdated": _hash_dir(g) != src_hash,
         })
-    for ws in list_workspaces():
-        ws_id = ws.get("id")
-        if not ws_id:
-            continue
-        ws_skill = resolve_ws_dir(ws_id) / ".claude" / "skills" / name
+    for ws_id, ws_label, skills_root in ws_roots:
+        ws_skill = skills_root / name
         if ws_skill.exists() and (ws_skill / "SKILL.md").exists():
             out.append({
                 "target": f"workspace:{ws_id}",
-                "label": f"Workspace : {ws.get('name') or ws_id}",
+                "label": f"Workspace : {ws_label}",
                 "outdated": _hash_dir(ws_skill) != src_hash,
             })
     return out
@@ -346,7 +367,7 @@ def migrate_existing_to_library() -> dict:
         ws_id = ws.get("id")
         if not ws_id:
             continue
-        ws_skills = resolve_ws_dir(ws_id) / ".claude" / "skills"
+        ws_skills = _ws_dir_from_entry(ws) / ".claude" / "skills"
         if not ws_skills.exists():
             continue
         for sub in ws_skills.iterdir():

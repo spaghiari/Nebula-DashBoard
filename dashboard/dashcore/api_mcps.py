@@ -1,40 +1,31 @@
 """Module extrait de server.py — ne pas éditer le script _split.py."""
 from __future__ import annotations
 
-import glob
 import hashlib
-import io
 import json
-import logging
-import logging.handlers
 import os
 import re
 import shlex
 import shutil
 import socket
 import subprocess
-import sys
 import threading
-import time
-import webbrowser
-import zipfile
 from pathlib import Path
 
 from dashcore.config import (
-    ROOT, USER_HOME, CLAUDE_HOME, CLAUDE_JSON, CLAUDE_SETTINGS, CLAUDE_PROJECTS,
-    BACKUPS_DIR, JOURNAL_FILE, TEMPLATES_DIR, DASHBOARD_DIR, WORKSPACES_DIR,
-    SCRIPTS_DIR, SNIPPETS_DIR, WORKSPACES_JSON, MCP_REGISTRY, ENV_FILE, LOGS_DIR,
-    TEXT_EXTENSIONS, SAFE_ID, SAFE_PLUGIN_SPEC, ENV_VAR_PATTERN, BAT_UNSAFE,
-    PATH_UNSAFE, STATIC_TYPES, ENV_KEY_RE, _MUTATION_LOCK, log,
+    USER_HOME, CLAUDE_HOME, CLAUDE_JSON, CLAUDE_SETTINGS, CLAUDE_PROJECTS,
+    WORKSPACES_JSON, MCP_REGISTRY, _MUTATION_LOCK, log,
+    MCP_SYNC_STATE_FILE, MCP_RECIPES_FILE, MCP_RECIPES_LOCAL_FILE,
     ALLOWED_TRANSPORTS, ALLOWED_STATUS,
 )
 
 
+from dashcore.env_local import EnvStoreUnreadable, load_env_local_strict
 from dashcore.helpers import (
-    load_env_local, read_json, resolve_cli, resolve_ws_dir, safe_id,
+    load_env_local, read_json, read_json_strict, CorruptJsonError, resolve_cli, resolve_ws_dir, safe_id,
     strip_invisible, substitute_env, write_json,
 )
-from dashcore.workspace_io import list_workspaces
+from dashcore.workspace_io import list_workspaces, ws_mcp_info
 
 
 def mcp_live_check(ws_id: str) -> tuple[int, dict]:
@@ -712,7 +703,35 @@ def _si_list(lst: list) -> list:
     return [_si(x) if isinstance(x, str) else x for x in lst]
 
 
+def _looks_masked(v) -> bool:
+    """Valeur issue d'un masquage d'API (« •••••• », « *** », query « … »).
+
+    Ces valeurs ne sont JAMAIS des secrets réels : les écrire dans le
+    registre puis synchroniser casserait le MCP (secret remplacé par le masque).
+    """
+    if not isinstance(v, str):
+        return False
+    t = v.strip()
+    if len(t) >= 3 and set(t) <= {"•", "*"}:
+        return True
+    return False
+
+
+def _masked_fields(clean: dict) -> list[str]:
+    bad = []
+    for field in ("env", "headers"):
+        d = clean.get(field)
+        if isinstance(d, dict):
+            bad += [f"{field}.{k}" for k, val in d.items() if _looks_masked(val)]
+    url = clean.get("url") or ""
+    if "?…" in url or url.endswith("…"):
+        bad.append("url")
+    return bad
+
+
 def clean_mcp_payload(payload: dict) -> tuple[dict, str | None]:
+    if not isinstance(payload, dict):
+        return {}, "payload invalide (objet attendu)"
     mcp_id = (payload.get("id") or "").strip()
     if not safe_id(mcp_id):
         return {}, "id invalide"
@@ -737,7 +756,7 @@ def clean_mcp_payload(payload: dict) -> tuple[dict, str | None]:
     if clean["transport"] not in ALLOWED_TRANSPORTS:
         return {}, f"transport invalide ({'/'.join(ALLOWED_TRANSPORTS)})"
     if clean["status"] not in ALLOWED_STATUS:
-        return {}, f"status invalide"
+        return {}, "status invalide"
     if not isinstance(clean["args"], list):
         return {}, "args doit être une liste"
     if not isinstance(clean["env"], dict):
@@ -746,6 +765,11 @@ def clean_mcp_payload(payload: dict) -> tuple[dict, str | None]:
         return {}, "headers doit être un objet"
     if not isinstance(clean["workspaces"], list):
         return {}, "workspaces doit être une liste"
+
+    masked = _masked_fields(clean)
+    if masked:
+        return {}, ("valeur masquée détectée (" + ", ".join(masked) + ") : "
+                    "saisis la valeur réelle ou une référence ${VAR}")
 
     clean = {k: v for k, v in clean.items() if v not in ("", [], {}, None)}
     clean["id"] = mcp_id
@@ -861,7 +885,7 @@ def add_or_update_mcp(payload: dict) -> tuple[int, dict]:
     if err:
         return 400, {"error": err}
     with _MUTATION_LOCK:
-        data = read_json(MCP_REGISTRY, {"version": "1.0", "mcps": []})
+        data = read_json_strict(MCP_REGISTRY, {"version": "1.0", "mcps": []})
         mcps = data.setdefault("mcps", [])
         idx = next((i for i, m in enumerate(mcps) if m.get("id") == clean["id"]), None)
 
@@ -889,7 +913,7 @@ def delete_mcp(mcp_id: str) -> tuple[int, dict]:
     if not safe_id(mcp_id):
         return 400, {"error": "id invalide"}
     with _MUTATION_LOCK:
-        data = read_json(MCP_REGISTRY, {"version": "1.0", "mcps": []})
+        data = read_json_strict(MCP_REGISTRY, {"version": "1.0", "mcps": []})
         existing = next((m for m in data.get("mcps", []) if m.get("id") == mcp_id), None)
         if existing is None:
             return 404, {"error": "MCP absent"}
@@ -958,7 +982,6 @@ def build_mcp_server_entry(mcp: dict, env_local: dict) -> tuple[dict, list[str]]
 # si le fichier sur disque ne correspond pas à ce hash -> il a été édité hors
 # Nebula. État centralisé (pas de sidecar dans le workspace) : ne pollue pas
 # l'arbre du workspace, ne part pas dans git, un seul fichier à gérer.
-MCP_SYNC_STATE_FILE = DASHBOARD_DIR / "data" / "mcp_sync_state.json"
 
 
 def _mcp_file_hash(path: Path) -> str | None:
@@ -974,17 +997,61 @@ def _read_mcp_sync_state() -> dict:
     return state if isinstance(state, dict) else {}
 
 
-def _set_mcp_sync_hash(ws_id: str, file_hash: str | None) -> None:
-    """Persiste (ou retire si None) le hash du dernier .mcp.json généré pour ws_id."""
+def _sync_state_entry(ws_id: str) -> tuple[str | None, set[str] | None]:
+    """(hash, clés générées) du dernier rendu Nebula pour ws_id.
+
+    Compat : ancien format = hash seul (str) -> clés inconnues (None).
+    """
+    raw = _read_mcp_sync_state().get(ws_id)
+    if isinstance(raw, str):
+        return raw, None
+    if isinstance(raw, dict):
+        keys = raw.get("keys")
+        return raw.get("hash"), (set(keys) if isinstance(keys, list) else None)
+    return None, None
+
+
+def _set_mcp_sync_hash(ws_id: str, file_hash: str | None,
+                       keys: list[str] | None = None) -> None:
+    """Persiste (ou retire si None) le hash + les clés Nebula du dernier .mcp.json généré."""
     state = _read_mcp_sync_state()
     if file_hash is None:
         state.pop(ws_id, None)
     else:
-        state[ws_id] = file_hash
+        state[ws_id] = {"hash": file_hash, "keys": sorted(keys or [])}
     write_json(MCP_SYNC_STATE_FILE, state)
 
 
+def _foreign_mcp_servers(existing: dict, registry_ids: set[str],
+                         prev_keys: set[str] | None, managed: bool) -> dict:
+    """Serveurs du .mcp.json existant qui n'ont PAS été générés par Nebula.
+
+    - clé = id du registre                 -> Nebula (régénérée ou retirée)
+    - clé listée au dernier rendu Nebula   -> Nebula (ex. MCP supprimé du registre)
+    - fichier identique au dernier rendu, ancien état sans liste de clés
+                                           -> tout est Nebula
+    - sinon                                 -> étranger : PRÉSERVÉ tel quel
+    """
+    servers = existing.get("mcpServers") if isinstance(existing, dict) else None
+    if not isinstance(servers, dict):
+        return {}
+    if managed and prev_keys is None:
+        return {}
+    nebula = set(registry_ids) | (prev_keys or set())
+    return {k: v for k, v in servers.items() if k not in nebula}
+
+
 def sync_workspace_mcps(ws_id: str) -> tuple[int, dict]:
+    """Régénère le .mcp.json du workspace depuis le registre.
+
+    Politique de sécurité (fichier non géré / édité hors Nebula) : FUSION
+    NON DESTRUCTIVE. Les serveurs dont la clé n'a jamais été produite par
+    Nebula (ni id du registre, ni clé du dernier rendu) sont préservés tels
+    quels ; seuls les serveurs Nebula sont réécrits ou retirés. Le fichier
+    n'est supprimé que s'il ne reste AUCUN serveur. Un .mcp.json existant
+    au JSON invalide n'est jamais écrasé (409). L'ancien contenu est gardé
+    en .mcp.json.bak (write_json).
+    """
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
     ws_dir = resolve_ws_dir(ws_id)
@@ -999,15 +1066,19 @@ def sync_workspace_mcps(ws_id: str) -> tuple[int, dict]:
     # _MUTATION_LOCK est un RLock (config.py) : add_or_update_mcp/delete_mcp le
     # prennent déjà puis appellent _auto_sync -> sync_workspace_mcps, qui le
     # re-prend dans le MÊME thread. La réentrance du RLock évite le deadlock que
-    # provoquerait un Lock simple ici. Choix RLock plutôt qu'extraction d'une
-    # variante sans-lock : 1 seul verrou en place, et protège aussi les appels
-    # DIRECTS (route /sync-mcps, sync_all_workspaces) jusque-là non sérialisés.
+    # provoquerait un Lock simple ici.
     with _MUTATION_LOCK:
-        env_local = load_env_local()
-        registry = read_json(MCP_REGISTRY, {"mcps": []})
+        # Store d'env illisible (DPAPI KO...) : générer avec {} remplacerait
+        # tous les secrets résolus des .mcp.json par des ${VAR} vides.
+        try:
+            env_local = load_env_local_strict()
+        except EnvStoreUnreadable as e:
+            return 409, {"error": f"Variables d'environnement illisibles ({e}) : sync annulée, .mcp.json inchangé."}
+        registry = read_json_strict(MCP_REGISTRY, {"mcps": []})
         mcp_servers = {}
         missing = {}
         applied = []
+        registry_ids = {m.get("id") for m in registry.get("mcps", []) if m.get("id")}
 
         for m in registry.get("mcps", []):
             if not mcp_applies_to(m, ws_id):
@@ -1022,26 +1093,38 @@ def sync_workspace_mcps(ws_id: str) -> tuple[int, dict]:
 
         out_path = ws_dir / ".mcp.json"
 
-        # Détection AVANT écrasement : le fichier sur disque diverge-t-il du dernier
-        # rendu Nebula connu ? On ne signale que si on a une empreinte de référence
-        # (sinon = première sync ou état perdu : pas d'alerte, on (re)synchronise).
-        prev_hash = _read_mcp_sync_state().get(ws_id)
+        # Détection AVANT écriture : le fichier sur disque diverge-t-il du dernier
+        # rendu Nebula connu ? On ne signale que si on a une empreinte de référence.
+        prev_hash, prev_keys = _sync_state_entry(ws_id)
         cur_hash = _mcp_file_hash(out_path)
+        managed = bool(prev_hash and cur_hash and cur_hash == prev_hash)
         hand_edited = bool(prev_hash and cur_hash and cur_hash != prev_hash)
 
-        if mcp_servers:
-            write_json(out_path, {"mcpServers": mcp_servers})
-            # Stocke le hash du fichier RÉELLEMENT écrit (relu sur disque) pour que
-            # la prochaine comparaison soit exacte, indépendamment du rendu json.
-            _set_mcp_sync_hash(ws_id, _mcp_file_hash(out_path))
+        foreign: dict = {}
+        if out_path.exists():
+            try:
+                existing = read_json_strict(out_path, {})
+            except CorruptJsonError:
+                return 409, {"error": (
+                    f".mcp.json illisible (JSON invalide) : {out_path}. Sync annulée "
+                    "pour ne pas écraser ce fichier : corrige-le ou supprime-le.")}
+            foreign = _foreign_mcp_servers(existing, registry_ids, prev_keys, managed)
+
+        final_servers = {**foreign, **mcp_servers}
+        if final_servers:
+            write_json(out_path, {"mcpServers": final_servers})
+            # Stocke le hash du fichier RÉELLEMENT écrit (relu sur disque) + les
+            # clés produites par Nebula (les clés étrangères n'y figurent pas).
+            _set_mcp_sync_hash(ws_id, _mcp_file_hash(out_path), list(mcp_servers))
         elif out_path.exists():
             out_path.unlink()
             _set_mcp_sync_hash(ws_id, None)
         else:
-            # Rien à générer et rien sur disque : nettoie un éventuel hash résiduel.
             _set_mcp_sync_hash(ws_id, None)
 
         result = {"ok": True, "applied": applied, "missing_env": missing, "path": str(out_path)}
+        if foreign:
+            result["preserved"] = sorted(foreign)
         if hand_edited:
             result["hand_edited"] = True
         return 200, result
@@ -1058,11 +1141,7 @@ def sync_all_workspaces() -> tuple[int, dict]:
 def workspace_mcp_status(ws_id: str) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
-    ws_dir = resolve_ws_dir(ws_id)
-    mcp_file = ws_dir / ".mcp.json"
-    data = read_json(mcp_file, None)
-    active = list((data or {}).get("mcpServers", {}).keys())
-    return 200, {"active": active, "has_file": mcp_file.exists()}
+    return 200, ws_mcp_info(resolve_ws_dir(ws_id))
 
 
 # ── Setup / Import wizard ─────────────────────────────────────────────────────
@@ -1232,7 +1311,7 @@ def remove_mcp_from_claude_global(mcp_id: str, source: str) -> tuple[int, dict]:
 
     with _MUTATION_LOCK:
         try:
-            data = read_json(src_path, {}) or {}
+            data = read_json_strict(src_path, {}) or {}
         except Exception as e:
             return 500, {"error": f"lecture impossible : {e}"}
         servers = data.get("mcpServers") or {}
@@ -1424,8 +1503,6 @@ def resolve_scanned_mcp(mcp_id: str, source: str) -> dict | None:
 
 
 # ── Recettes MCP ────────────────────────────────────────────────────────────
-MCP_RECIPES_FILE = DASHBOARD_DIR / "data" / "mcp_recipes.json"
-MCP_RECIPES_LOCAL_FILE = DASHBOARD_DIR / "data" / "mcp_recipes.local.json"
 
 _LOCAL_RECIPES_TEMPLATE = {
     "version": 1,
@@ -1491,7 +1568,7 @@ def add_or_update_local_recipe(payload: dict) -> tuple[int, dict]:
 
     ensure_local_recipes_file()
     with _MUTATION_LOCK:
-        data = read_json(MCP_RECIPES_LOCAL_FILE, {"version": 1, "recipes": []})
+        data = read_json_strict(MCP_RECIPES_LOCAL_FILE, {"version": 1, "recipes": []})
         recipes = data.get("recipes", [])
         # Construit la recette nettoyée (drop le `source` si fourni par le front)
         clean = {k: v for k, v in payload.items() if k != "source"}
@@ -1515,7 +1592,7 @@ def delete_local_recipe(rid: str) -> tuple[int, dict]:
     if not MCP_RECIPES_LOCAL_FILE.exists():
         return 404, {"error": "Aucune recette locale"}
     with _MUTATION_LOCK:
-        data = read_json(MCP_RECIPES_LOCAL_FILE, {"version": 1, "recipes": []})
+        data = read_json_strict(MCP_RECIPES_LOCAL_FILE, {"version": 1, "recipes": []})
         recipes = data.get("recipes", [])
         new_recipes = [r for r in recipes if r.get("id") != rid]
         if len(new_recipes) == len(recipes):

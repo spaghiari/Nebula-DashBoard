@@ -31,7 +31,7 @@ from pathlib import Path
 
 from dashcore.config import TEMPLATES_DIR, _MUTATION_LOCK, log
 from dashcore.helpers import (
-    apply_template, is_text_file, read_json, render_placeholders,
+    apply_template, is_text_file, read_json, read_json_strict, render_placeholders,
     resolve_ws_dir, safe_id, write_json,
 )
 
@@ -252,7 +252,7 @@ def _write_settings_local(ws_dir: Path, options: dict, written: list) -> None:
     valeur deja posee par l'utilisateur : patch partiel.
     """
     path = ws_dir / ".claude" / "settings.local.json"
-    data = read_json(path, {})
+    data = read_json_strict(path, {})
     if not isinstance(data, dict):
         data = {}
     want = options["validate_author"]

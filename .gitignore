@@ -38,6 +38,13 @@
 # pour détecter les éditions manuelles du fichier)
 /dashboard/data/mcp_sync_state.json
 
+# Sessions Claude lancées depuis Nebula (PID + date de création, runtime)
+/dashboard/data/active_sessions.json
+/dashboard/data/*.corrupt-*
+
+# Bibliotheque de skills locale (runtime, contenu personnel)
+/dashboard/data/skills-library/
+
 # Reflexive — DB locale, propositions, log d'erreurs hooks
 /dashboard/data/reflexive.db
 /dashboard/data/reflexive.db-wal

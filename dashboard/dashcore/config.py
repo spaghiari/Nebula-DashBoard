@@ -1,18 +1,81 @@
-"""Constantes et chemins partagés. Aucune logique ici."""
+"""Constantes et chemins partagés + lecture des variables d'environnement.
+
+Aucune logique métier ici : seulement des valeurs, résolues une fois à
+l'import. Variables d'environnement reconnues (toutes optionnelles, défaut =
+comportement historique) :
+
+- `ATELIER_ROOT`     : racine de l'installation (défaut : parent de `dashboard/`).
+- `NEBULA_DATA_DIR`  : dossier des données utilisateur/runtime (défaut :
+                       `<ROOT>/dashboard/data`).
+- `NEBULA_HOST`      : hôte d'écoute (défaut : 127.0.0.1, loopback).
+- `NEBULA_PORT`      : port d'écoute (défaut : 4777 ; `--port` prime).
+- `NEBULA_ALLOWED_HOSTS` : noms supplémentaires acceptés dans l'en-tête Host
+                       (liste séparée par des virgules, sans port).
+"""
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import re
+import sys
 import threading
 from pathlib import Path
 
-HOST = "127.0.0.1"
-DEFAULT_PORT = 4777
+IS_WINDOWS = sys.platform == "win32"
+
+# Messages de configuration à afficher au démarrage (valeur d'env invalide...).
+CONFIG_WARNINGS: list[str] = []
+
+
+def _env_port(name: str, default: int) -> int:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if 1 <= value <= 65535:
+        return value
+    CONFIG_WARNINGS.append(
+        f"{name}={raw!r} invalide (entier 1-65535 attendu) : port {default} utilisé")
+    return default
+
+
+def is_loopback_host(host: str) -> bool:
+    """True si `host` (nom ou IP, crochets IPv6 tolérés) désigne la boucle locale."""
+    h = (host or "").strip().strip("[]").lower()
+    if h == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return False
+
+
+# --- Réseau -----------------------------------------------------------------
+DEFAULT_HOST = "127.0.0.1"
+HOST = (os.environ.get("NEBULA_HOST") or "").strip() or DEFAULT_HOST
+DEFAULT_PORT = _env_port("NEBULA_PORT", 4777)
+# Noms acceptés en plus de 127.0.0.1 / localhost / HOST dans l'en-tête Host
+# (anti DNS-rebinding, cf. server.Handler._allowed_hosts).
+EXTRA_ALLOWED_HOSTS = tuple(
+    h.strip().lower()
+    for h in (os.environ.get("NEBULA_ALLOWED_HOSTS") or "").split(",")
+    if h.strip()
+)
+for _h in EXTRA_ALLOWED_HOSTS:
+    # « nom:port » ne correspondra jamais (le port d'écoute est ajouté) :
+    # on le signale au lieu d'ignorer l'entrée en silence. Les IPv6 brutes
+    # (plusieurs « : ») restent acceptées.
+    if _h.count(":") == 1 and not _h.startswith("["):
+        CONFIG_WARNINGS.append(
+            f"NEBULA_ALLOWED_HOSTS : « {_h} » contient un port, indique le nom seul")
 
 # ROOT = racine de l'installation Nebula (parent du dossier `dashboard/`).
 # Auto-détecté à partir de l'emplacement de ce fichier : <ROOT>/dashboard/dashcore/config.py
-# Override possible via la variable d'env ATELIER_ROOT pour les tests.
+# Override possible via la variable d'env ATELIER_ROOT (tests, installation déportée).
 ROOT = Path(os.environ.get("ATELIER_ROOT") or Path(__file__).resolve().parents[2])
 USER_HOME = Path.home()
 CLAUDE_HOME = USER_HOME / ".claude"
@@ -32,12 +95,26 @@ DASHBOARD_DIR = ROOT / "dashboard"
 WORKSPACES_DIR = ROOT / "workspaces"
 SCRIPTS_DIR = ROOT / "scripts"
 SNIPPETS_DIR = ROOT / "memory" / "snippets"
-WORKSPACES_JSON = DASHBOARD_DIR / "data" / "workspaces.json"
 MCP_REGISTRY = ROOT / "mcp" / "registry.json"
-SKILLS_LIBRARY_DIR = DASHBOARD_DIR / "data" / "skills-library"
 ENV_FILE = ROOT / ".env.local"
 ENV_ENC_FILE = ROOT / ".env.local.enc"
 LOGS_DIR = ROOT / "logs"
+
+# --- Données utilisateur / runtime (déplaçables via NEBULA_DATA_DIR) ---------
+_data_env = (os.environ.get("NEBULA_DATA_DIR") or "").strip()
+DATA_DIR = Path(os.path.expanduser(_data_env)).resolve() if _data_env else DASHBOARD_DIR / "data"
+DATA_DIR_IS_CUSTOM = bool(_data_env)
+WORKSPACES_JSON = DATA_DIR / "workspaces.json"
+UI_STATE_FILE = DATA_DIR / "ui_state.json"
+MCP_SYNC_STATE_FILE = DATA_DIR / "mcp_sync_state.json"
+ACTIVE_SESSIONS_FILE = DATA_DIR / "active_sessions.json"
+MCP_RECIPES_LOCAL_FILE = DATA_DIR / "mcp_recipes.local.json"
+SKILLS_LIBRARY_DIR = DATA_DIR / "skills-library"
+# Catalogue de recettes LIVRÉ avec le code (versionné) : reste dans le dépôt.
+MCP_RECIPES_FILE = DASHBOARD_DIR / "data" / "mcp_recipes.json"
+# Écrit par des hooks externes à un chemin fixe (`dashboard/data/...`) : non
+# déplacé par NEBULA_DATA_DIR, sinon Nebula ne lirait plus ce qu'ils écrivent.
+HOOK_ERRORS_LOG = DASHBOARD_DIR / "data" / "hook_errors.log"
 
 SAFE_ID = re.compile(r"^[a-zA-Z0-9_-]{1,40}$")
 SAFE_PLUGIN_SPEC = re.compile(r"^[a-zA-Z0-9@/_.-]{1,120}$")
@@ -60,6 +137,10 @@ STATIC_TYPES = {
 
 ALLOWED_TRANSPORTS = ("stdio", "http", "sse")
 ALLOWED_STATUS = ("connecté", "disponible", "à configurer", "désactivé")
+
+# Message renvoyé par les actions qui ouvrent une console Windows (cmd).
+WINDOWS_ONLY_MSG = ("Fonction disponible uniquement sous Windows (ouverture d'une "
+                    "console cmd) : lance `claude` depuis un terminal dans le dossier du workspace.")
 
 _MUTATION_LOCK = threading.RLock()
 log = logging.getLogger("dashboard")

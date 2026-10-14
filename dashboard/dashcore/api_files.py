@@ -43,6 +43,40 @@ _BINARY_EXT = {
     ".class", ".jar", ".war",
 }
 
+# Fichiers porteurs de secrets RÉSOLUS sur disque (.mcp.json généré, .env*).
+# Lecture : contenu masqué (cohérent avec read_workspace_config / F3.2).
+# Écriture d'un fichier existant : refusée (le client n'a que la version
+# masquée, la sauvegarder écraserait les secrets réels). Recherche : exclus.
+_SENSITIVE_NAMES = {".mcp.json"}
+_SENSITIVE_PREFIXES = (".env",)
+
+
+def _is_sensitive(path: Path) -> bool:
+    name = path.name.lower()
+    return name in _SENSITIVE_NAMES or name.startswith(_SENSITIVE_PREFIXES)
+
+
+def _mask_env_text(text: str) -> str:
+    """KEY=VALUE -> KEY=•••••• (commentaires / lignes vides conservés)."""
+    out = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = line.split("=", 1)[0]
+            nl = line[len(line.rstrip("\r\n")):]
+            out.append(f"{key}=••••••{nl}")
+        else:
+            out.append(line)
+    return "".join(out)
+
+
+def _mask_sensitive_content(path: Path, content: str) -> str:
+    if path.name.lower() == ".mcp.json":
+        from dashcore.api_workspaces import _mask_mcp_json_text
+        return _mask_mcp_json_text(content) or ""
+    return _mask_env_text(content)
+
+
 _MAX_READ_BYTES = 5 * 1024 * 1024          # 5 MB cap pour lecture/édition
 _MAX_SEARCH_FILE_BYTES = 2 * 1024 * 1024   # 2 MB cap par fichier scanné
 _MAX_SEARCH_FILES = 500                    # nombre max de fichiers scannés
@@ -223,6 +257,10 @@ def read_file(ws_id: str, rel_path: str) -> tuple[int, dict]:
         content, encoding = _read_text(target)
     except OSError as e:
         return 500, {"error": f"lecture échouée : {e}"}
+    if _is_sensitive(target):
+        return 200, {**base, "binary": False, "encoding": encoding,
+                     "content": _mask_sensitive_content(target, content),
+                     "masked": True, "readonly": True}
     return 200, {**base, "binary": False, "encoding": encoding, "content": content}
 
 
@@ -239,6 +277,12 @@ def write_file(ws_id: str, rel_path: str, content: str) -> tuple[int, dict]:
         return 400, {"error": "ne peut pas écrire à la racine du workspace"}
     if target.exists() and target.is_dir():
         return 400, {"error": "cible est un dossier"}
+    if target.exists() and _is_sensitive(target):
+        return 403, {"error": (
+            f"{target.name} contient des secrets (affichés masqués) : édition depuis "
+            "l'explorateur désactivée. Pour .mcp.json, modifie le registre MCP puis "
+            "synchronise ; pour .env*, utilise la page Variables d'environnement "
+            "ou un éditeur local.")}
     # Refus écriture si binaire détecté sur l'existant (protection contre corruption)
     if target.exists() and _is_binary(target):
         return 403, {"error": "fichier binaire non éditable"}
@@ -343,7 +387,7 @@ def search_workspace(ws_id: str, query: str, max_hits: int = _MAX_SEARCH_HITS) -
                 if not walk(entry):
                     return False
                 continue
-            if entry.suffix.lower() in _BINARY_EXT:
+            if entry.suffix.lower() in _BINARY_EXT or _is_sensitive(entry):
                 continue
             try:
                 size = entry.stat().st_size

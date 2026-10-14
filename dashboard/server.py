@@ -1,7 +1,8 @@
 """
 Dashboard Claude Workspace — point d'entrée.
 
-- Bind 127.0.0.1 uniquement (aucune exposition réseau).
+- Bind 127.0.0.1 par défaut (aucune exposition réseau) ; NEBULA_HOST /
+  --host pour un autre hôte (avertissement au démarrage).
 - Sert dashboard/index.html et expose /api/* pour piloter le workspace.
 - Aucune dépendance externe (stdlib only).
 
@@ -9,6 +10,10 @@ Lancement :
     python server.py                # port 4777 par défaut
     python server.py --port 4800    # port custom
     python server.py --debug        # logs DEBUG
+    python3 server.py               # Linux / macOS (lancement de console = Windows)
+
+Variables d'environnement : NEBULA_PORT, NEBULA_HOST, NEBULA_ALLOWED_HOSTS,
+NEBULA_DATA_DIR, ATELIER_ROOT (cf. dashcore/config.py et README).
 """
 from __future__ import annotations
 
@@ -16,6 +21,8 @@ import argparse
 import json
 import logging
 import re
+import socket
+import socketserver
 import threading
 import time
 import webbrowser
@@ -24,13 +31,16 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 from dashcore.config import (
-    HOST, DEFAULT_PORT, DASHBOARD_DIR, WORKSPACES_JSON, MCP_REGISTRY,
+    HOST, DEFAULT_PORT, DASHBOARD_DIR, MCP_REGISTRY,
+    EXTRA_ALLOWED_HOSTS, CONFIG_WARNINGS, DATA_DIR, DATA_DIR_IS_CUSTOM, is_loopback_host,
     ENV_FILE, ENV_ENC_FILE, BACKUPS_DIR, SNIPPETS_DIR, LOGS_DIR, STATIC_TYPES, log,
 )
+from dashcore.helpers import CorruptJsonError
+from dashcore.env_local import EnvStoreUnreadable
 from dashcore.helpers import (
-    setup_logging, read_json, safe_id, load_env_local, port_free, find_port,
+    setup_logging, safe_id, load_env_local, port_free, find_port,
     set_env_var, delete_env_var, launch_script, open_target,
-    is_encrypted_mode, enable_encryption, disable_encryption, env_health,
+    enable_encryption, disable_encryption, env_health,
     export_plain_text,
     backup_claude_config, list_backups, restore_backup, read_journal, append_journal, clear_journal,
     all_stats, sanity_check, global_search, cleanup_orphan_bats,
@@ -49,10 +59,7 @@ from dashcore.api_workspaces import (
     inspect_workspace_path, adopt_workspace,
 )
 from dashcore.api_overlays import (
-    list_overlays, apply_overlay, get_overlay, overlay_is_active,
-)
-from dashcore.api_overlays import (
-    list_overlays, apply_overlay, get_overlay, overlay_is_active,
+    list_overlays, apply_overlay, overlay_is_active,
 )
 from dashcore.api_files import (
     list_tree as fs_list_tree,
@@ -65,7 +72,7 @@ from dashcore.active_sessions import (
     list_active as list_active_sessions,
     kill as kill_active_session,
 )
-from dashcore.workspace_io import list_workspaces, list_workspaces_with_status
+from dashcore.workspace_io import list_workspaces, list_workspaces_with_status, workspaces_overview
 from dashcore.api_mcps import (
     add_or_update_mcp, delete_mcp, sync_workspace_mcps, sync_all_workspaces,
     workspace_mcp_status, mcp_live_check, diagnose_mcp, scan_claude_config,
@@ -111,6 +118,7 @@ from dashcore.api_skills_library import (
 
 # ── Workspaces ──────────────────────────────────────────────────────────────
 def h_get_workspaces(q, b):       return 200, list_workspaces_with_status()
+def h_get_overview(q, b):         return 200, workspaces_overview()
 def h_get_ws_mcps(q, b, ws):      return workspace_mcp_status(ws)
 def h_get_ws_config(q, b, ws):    return read_workspace_config(ws)
 def h_get_ws_settings(q, b, ws):  return get_workspace_settings(ws)
@@ -123,13 +131,16 @@ def h_get_ws_session_tail(q, b, ws, f):
 def h_get_ws_skills(q, b, ws):    return 200, list_skills_for_workspace(ws)
 def h_get_ws_plugins(q, b, ws):   return 200, {"plugins": get_workspace_plugins(ws)}
 def h_get_ws_mcp_check(q, b, ws): return mcp_live_check(ws)
-def h_get_ws_export(q, b, ws):
+def h_post_ws_export(q, b, ws):
+    """ZIP du workspace (contient des secrets) : servi uniquement en POST,
+    donc derrière le garde anti-CSRF (X-Nebula-XHR + Origin)."""
     status, data = export_workspace(ws)
     if status != 200:
         return status, data
     return 'raw', {
         "Content-Type": "application/zip",
         "Content-Disposition": f'attachment; filename="{ws}.zip"',
+        "Cache-Control": "no-store",
     }, data
 
 def h_post_create_ws(q, b):              return create_workspace(b)
@@ -561,7 +572,8 @@ _KIND_FILEITEM = r"agents|commands"
 
 ROUTES_GET = [
     # Workspaces
-    (re.compile(rf"^/api/workspaces$"),                                                     h_get_workspaces),
+    (re.compile(r"^/api/workspaces$"),                                                     h_get_workspaces),
+    (re.compile(r"^/api/overview$"),                                                       h_get_overview),
     (re.compile(rf"^/api/workspaces/({_ID})/mcps$"),                                        h_get_ws_mcps),
     (re.compile(rf"^/api/workspaces/({_ID})/config$"),                                      h_get_ws_config),
     (re.compile(rf"^/api/workspaces/({_ID})/settings$"),                                    h_get_ws_settings),
@@ -571,80 +583,83 @@ ROUTES_GET = [
     (re.compile(rf"^/api/workspaces/({_ID})/skills$"),                                      h_get_ws_skills),
     (re.compile(rf"^/api/workspaces/({_ID})/plugins$"),                                     h_get_ws_plugins),
     (re.compile(rf"^/api/workspaces/({_ID})/mcp-check$"),                                   h_get_ws_mcp_check),
-    (re.compile(rf"^/api/workspaces/({_ID})/export$"),                                      h_get_ws_export),
     # Sessions actives (registre PID des cmd lancees depuis Nebula)
-    (re.compile(rf"^/api/sessions/active$"),                                                h_get_sessions_active),
+    (re.compile(r"^/api/sessions/active$"),                                                h_get_sessions_active),
     # Workspace file explorer (lecture)
     (re.compile(rf"^/api/workspaces/({_ID})/fs/tree$"),                                     h_get_ws_fs_tree),
     (re.compile(rf"^/api/workspaces/({_ID})/fs/file$"),                                     h_get_ws_fs_file),
     (re.compile(rf"^/api/workspaces/({_ID})/fs/search$"),                                   h_get_ws_fs_search),
     # MCPs
-    (re.compile(rf"^/api/mcps$"),                                                           h_get_mcps),
-    (re.compile(rf"^/api/mcps/export$"),                                                    h_get_mcp_export),
-    (re.compile(rf"^/api/mcps/recipes$"),                                                   h_get_mcp_recipes),
-    (re.compile(rf"^/api/mcps/conflicts$"),                                                 h_get_mcp_conflicts),
+    (re.compile(r"^/api/mcps$"),                                                           h_get_mcps),
+    (re.compile(r"^/api/mcps/export$"),                                                    h_get_mcp_export),
+    (re.compile(r"^/api/mcps/recipes$"),                                                   h_get_mcp_recipes),
+    (re.compile(r"^/api/mcps/conflicts$"),                                                 h_get_mcp_conflicts),
     (re.compile(rf"^/api/mcps/({_ID})/diagnose$"),                                          h_get_mcp_diagnose),
     # Templates
-    (re.compile(rf"^/api/templates$"),                                                      h_get_templates),
+    (re.compile(r"^/api/templates$"),                                                      h_get_templates),
     (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_get_template_file),
     (re.compile(rf"^/api/templates/({_ID})/quality$"),                                      h_get_template_quality),
     (re.compile(rf"^/api/templates/({_ID})/preview$"),                                      h_get_template_preview),
     (re.compile(rf"^/api/templates/({_ID})$"),                                              h_get_template_detail),
     # Overlays (paquets de fichiers appliques par-dessus un template, cf.
     # dashcore/api_overlays.py)
-    (re.compile(rf"^/api/overlays$"),                                                       h_get_overlays),
+    (re.compile(r"^/api/overlays$"),                                                       h_get_overlays),
     (re.compile(rf"^/api/workspaces/({_ID})/overlays$"),                                    h_get_ws_overlays),
     # Skills
-    (re.compile(rf"^/api/skills$"),                                                         h_get_skills),
+    (re.compile(r"^/api/skills$"),                                                         h_get_skills),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/content$"),                              h_get_skill_content),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/file$"),                                 h_get_skill_file),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})$"),                                      h_get_skill_detail),
     (re.compile(rf"^/api/skills/({_ID})/usage$"),                                           h_get_skill_usage),
     # Skills library (magasin)
-    (re.compile(rf"^/api/skills-library$"),                                                 h_get_skills_library),
+    (re.compile(r"^/api/skills-library$"),                                                 h_get_skills_library),
     (re.compile(rf"^/api/skills-library/({_ID})/distribution$"),                            h_get_skill_distribution),
     (re.compile(rf"^/api/skills-library/({_ID})/content$"),                                 h_get_library_content),
     (re.compile(rf"^/api/skills-library/({_ID})/file$"),                                    h_get_library_file),
     (re.compile(rf"^/api/skills-library/({_ID})/detail$"),                                  h_get_library_detail),
     # Plugins
-    (re.compile(rf"^/api/plugins$"),                                                        h_get_plugins),
-    (re.compile(rf"^/api/plugins/installed$"),                                              h_get_plugins_installed),
+    (re.compile(r"^/api/plugins$"),                                                        h_get_plugins),
+    (re.compile(r"^/api/plugins/installed$"),                                              h_get_plugins_installed),
     (re.compile(rf"^/api/plugins/marketplace/({_ID})/(plugins|external_plugins)/({_ID})/readme$"), h_get_marketplace_readme),
     (re.compile(rf"^/api/plugins/marketplace/({_ID})$"),                                    h_get_marketplace),
     # Agents & commands
-    (re.compile(rf"^/api/agents$"),                                                         h_get_agents),
-    (re.compile(rf"^/api/commands$"),                                                       h_get_commands),
+    (re.compile(r"^/api/agents$"),                                                         h_get_agents),
+    (re.compile(r"^/api/commands$"),                                                       h_get_commands),
     (re.compile(rf"^/api/agents/workspace/({_ID})$"),                                       h_get_agents_ws),
     (re.compile(rf"^/api/commands/workspace/({_ID})$"),                                     h_get_commands_ws),
     (re.compile(rf"^/api/({_KIND_FILEITEM})/({_SCOPE})/({_ID})/content$"),                  h_get_fileitem_content),
     # Système
-    (re.compile(rf"^/api/env$"),                                                            h_get_env),
-    (re.compile(rf"^/api/env/values$"),                                                     h_get_env_values),
-    (re.compile(rf"^/api/env/export-plain$"),                                               h_get_env_export_plain),
-    (re.compile(rf"^/api/snippets$"),                                                       h_get_snippets),
-    (re.compile(rf"^/api/stats$"),                                                          h_get_stats),
-    (re.compile(rf"^/api/sanity-check$"),                                                   h_get_sanity),
-    (re.compile(rf"^/api/backups$"),                                                        h_get_backups),
-    (re.compile(rf"^/api/journal$"),                                                        h_get_journal),
-    (re.compile(rf"^/api/hooks/global$"),                                                   h_get_hooks_global),
-    (re.compile(rf"^/api/hooks/backup$"),                                                   h_get_hooks_backup),
+    (re.compile(r"^/api/env$"),                                                            h_get_env),
+    (re.compile(r"^/api/env/values$"),                                                     h_get_env_values),
+    (re.compile(r"^/api/env/export-plain$"),                                               h_get_env_export_plain),
+    (re.compile(r"^/api/snippets$"),                                                       h_get_snippets),
+    (re.compile(r"^/api/stats$"),                                                          h_get_stats),
+    (re.compile(r"^/api/sanity-check$"),                                                   h_get_sanity),
+    (re.compile(r"^/api/backups$"),                                                        h_get_backups),
+    (re.compile(r"^/api/journal$"),                                                        h_get_journal),
+    (re.compile(r"^/api/hooks/global$"),                                                   h_get_hooks_global),
+    (re.compile(r"^/api/hooks/backup$"),                                                   h_get_hooks_backup),
     (re.compile(rf"^/api/workspaces/({_ID})/hooks/backup$"),                                h_get_ws_hooks_backup),
-    (re.compile(rf"^/api/hooks/errors$"),                                                   h_get_hooks_errors),
-    (re.compile(rf"^/api/search$"),                                                         h_get_search),
-    (re.compile(rf"^/api/setup/scan$"),                                                     h_get_setup_scan),
-    (re.compile(rf"^/api/ui-state$"),                                                       h_get_ui_state),
-    (re.compile(rf"^/api/system/version$"),                                                 h_get_system_version),
-    (re.compile(rf"^/api/system/stashes$"),                                                 h_get_system_stashes),
+    (re.compile(r"^/api/hooks/errors$"),                                                   h_get_hooks_errors),
+    (re.compile(r"^/api/search$"),                                                         h_get_search),
+    (re.compile(r"^/api/setup/scan$"),                                                     h_get_setup_scan),
+    (re.compile(r"^/api/ui-state$"),                                                       h_get_ui_state),
+    (re.compile(r"^/api/system/version$"),                                                 h_get_system_version),
+    (re.compile(r"^/api/system/stashes$"),                                                 h_get_system_stashes),
 ]
 
 ROUTES_POST = [
     # Workspaces
-    (re.compile(rf"^/api/workspaces$"),                                                     h_post_create_ws),
-    (re.compile(rf"^/api/workspaces/inspect-path$"),                                        h_post_inspect_path),
-    (re.compile(rf"^/api/workspaces/adopt$"),                                               h_post_adopt_ws),
-    (re.compile(rf"^/api/workspaces/duplicate$"),                                           h_post_duplicate_ws),
+    (re.compile(r"^/api/workspaces$"),                                                     h_post_create_ws),
+    (re.compile(r"^/api/workspaces/inspect-path$"),                                        h_post_inspect_path),
+    (re.compile(r"^/api/workspaces/adopt$"),                                               h_post_adopt_ws),
+    (re.compile(r"^/api/workspaces/duplicate$"),                                           h_post_duplicate_ws),
     (re.compile(rf"^/api/workspaces/({_ID})/update$"),                                      h_post_update_ws),
     (re.compile(rf"^/api/workspaces/({_ID})/sync-mcps$"),                                   h_post_sync_mcps),
+    # Export ZIP en POST : le zip contient des secrets (.mcp.json résolus,
+    # settings…). POST = X-Nebula-XHR + Origin exigés, donc ni un <a href>,
+    # ni une navigation cross-site ne peuvent le déclencher.
+    (re.compile(rf"^/api/workspaces/({_ID})/export$"),                                      h_post_ws_export),
     (re.compile(rf"^/api/workspaces/({_ID})/settings$"),                                    h_post_save_settings),
     (re.compile(rf"^/api/workspaces/({_ID})/settings/([a-zA-Z]+)$"),                        h_post_patch_settings),
     (re.compile(rf"^/api/workspaces/({_ID})/file$"),                                        h_post_write_ws_file),
@@ -654,62 +669,62 @@ ROUTES_POST = [
     (re.compile(rf"^/api/launch-resume/({_ID})$"),                                          h_post_launch_resume),
     (re.compile(rf"^/api/workspaces/({_ID})/stop$"),                                        h_post_stop_ws_session),
     # MCPs
-    (re.compile(rf"^/api/mcps$"),                                                           h_post_add_mcp),
-    (re.compile(rf"^/api/mcps/import$"),                                                    h_post_import_mcps),
-    (re.compile(rf"^/api/mcps/recipes/ensure-local$"),                                      h_post_ensure_local_recipes),
-    (re.compile(rf"^/api/mcps/recipes/local$"),                                             h_post_local_recipe),
-    (re.compile(rf"^/api/mcps/conflicts/remove$"),                                          h_post_remove_global_mcp),
-    (re.compile(rf"^/api/mcps/conflicts/migrate$"),                                         h_post_migrate_global_mcp),
-    (re.compile(rf"^/api/sync-all$"),                                                       h_post_sync_all),
+    (re.compile(r"^/api/mcps$"),                                                           h_post_add_mcp),
+    (re.compile(r"^/api/mcps/import$"),                                                    h_post_import_mcps),
+    (re.compile(r"^/api/mcps/recipes/ensure-local$"),                                      h_post_ensure_local_recipes),
+    (re.compile(r"^/api/mcps/recipes/local$"),                                             h_post_local_recipe),
+    (re.compile(r"^/api/mcps/conflicts/remove$"),                                          h_post_remove_global_mcp),
+    (re.compile(r"^/api/mcps/conflicts/migrate$"),                                         h_post_migrate_global_mcp),
+    (re.compile(r"^/api/sync-all$"),                                                       h_post_sync_all),
     # Templates
-    (re.compile(rf"^/api/templates/duplicate$"),                                            h_post_dup_template),
-    (re.compile(rf"^/api/templates$"),                                                      h_post_create_template),
+    (re.compile(r"^/api/templates/duplicate$"),                                            h_post_dup_template),
+    (re.compile(r"^/api/templates$"),                                                      h_post_create_template),
     (re.compile(rf"^/api/templates/({_ID})/meta$"),                                         h_post_template_meta),
     (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_post_template_file),
     # Overlays : application sur un workspace existant (idempotent)
     (re.compile(rf"^/api/workspaces/({_ID})/overlays/({_ID})$"),                            h_post_apply_overlay),
     # Skills
-    (re.compile(rf"^/api/skills$"),                                                         h_post_create_skill),
-    (re.compile(rf"^/api/skills/copy$"),                                                    h_post_copy_skill),
-    (re.compile(rf"^/api/skills/import/preview$"),                                          h_post_skills_import_preview),
-    (re.compile(rf"^/api/skills/import$"),                                                  h_post_skills_import),
+    (re.compile(r"^/api/skills$"),                                                         h_post_create_skill),
+    (re.compile(r"^/api/skills/copy$"),                                                    h_post_copy_skill),
+    (re.compile(r"^/api/skills/import/preview$"),                                          h_post_skills_import_preview),
+    (re.compile(r"^/api/skills/import$"),                                                  h_post_skills_import),
     # Skills library (magasin)
-    (re.compile(rf"^/api/skills-library$"),                                                 h_post_library_create),
-    (re.compile(rf"^/api/skills-library/migrate$"),                                         h_post_library_migrate),
+    (re.compile(r"^/api/skills-library$"),                                                 h_post_library_create),
+    (re.compile(r"^/api/skills-library/migrate$"),                                         h_post_library_migrate),
     (re.compile(rf"^/api/skills-library/({_ID})/distribute$"),                              h_post_library_distribute),
     (re.compile(rf"^/api/skills-library/({_ID})/content$"),                                 h_post_library_content),
     (re.compile(rf"^/api/skills-library/({_ID})/file$"),                                    h_post_library_file),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/content$"),                              h_post_skill_content),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/file$"),                                 h_post_skill_file),
     # Plugins
-    (re.compile(rf"^/api/plugins/install$"),                                                h_post_install_plugin),
-    (re.compile(rf"^/api/plugins/enable$"),                                                 h_post_enable_plugin),
-    (re.compile(rf"^/api/plugins/disable$"),                                                h_post_disable_plugin),
-    (re.compile(rf"^/api/plugins/uninstall$"),                                              h_post_uninstall_plugin),
-    (re.compile(rf"^/api/plugins/uninstall-soft$"),                                         h_post_uninstall_soft),
+    (re.compile(r"^/api/plugins/install$"),                                                h_post_install_plugin),
+    (re.compile(r"^/api/plugins/enable$"),                                                 h_post_enable_plugin),
+    (re.compile(r"^/api/plugins/disable$"),                                                h_post_disable_plugin),
+    (re.compile(r"^/api/plugins/uninstall$"),                                              h_post_uninstall_plugin),
+    (re.compile(r"^/api/plugins/uninstall-soft$"),                                         h_post_uninstall_soft),
     # Agents & commands
-    (re.compile(rf"^/api/agents$"),                                                         h_post_create_agent),
-    (re.compile(rf"^/api/commands$"),                                                       h_post_create_command),
+    (re.compile(r"^/api/agents$"),                                                         h_post_create_agent),
+    (re.compile(r"^/api/commands$"),                                                       h_post_create_command),
     (re.compile(rf"^/api/({_KIND_FILEITEM})/({_SCOPE})/({_ID})/content$"),                  h_post_fileitem_content),
     # Système
-    (re.compile(rf"^/api/env$"),                                                            h_post_set_env),
-    (re.compile(rf"^/api/env/encrypt$"),                                                    h_post_env_encrypt),
-    (re.compile(rf"^/api/env/decrypt$"),                                                    h_post_env_decrypt),
-    (re.compile(rf"^/api/open$"),                                                           h_post_open),
-    (re.compile(rf"^/api/backup$"),                                                         h_post_backup),
-    (re.compile(rf"^/api/backups/restore$"),                                                h_post_backup_restore),
-    (re.compile(rf"^/api/cleanup/orphan-bats$"),                                            h_post_cleanup_bats),
-    (re.compile(rf"^/api/journal$"),                                                        h_post_journal),
-    (re.compile(rf"^/api/hooks/global$"),                                                   h_post_hooks_global),
-    (re.compile(rf"^/api/hooks/restore$"),                                                  h_post_hooks_restore),
+    (re.compile(r"^/api/env$"),                                                            h_post_set_env),
+    (re.compile(r"^/api/env/encrypt$"),                                                    h_post_env_encrypt),
+    (re.compile(r"^/api/env/decrypt$"),                                                    h_post_env_decrypt),
+    (re.compile(r"^/api/open$"),                                                           h_post_open),
+    (re.compile(r"^/api/backup$"),                                                         h_post_backup),
+    (re.compile(r"^/api/backups/restore$"),                                                h_post_backup_restore),
+    (re.compile(r"^/api/cleanup/orphan-bats$"),                                            h_post_cleanup_bats),
+    (re.compile(r"^/api/journal$"),                                                        h_post_journal),
+    (re.compile(r"^/api/hooks/global$"),                                                   h_post_hooks_global),
+    (re.compile(r"^/api/hooks/restore$"),                                                  h_post_hooks_restore),
     (re.compile(rf"^/api/workspaces/({_ID})/hooks/restore$"),                               h_post_ws_hooks_restore),
-    (re.compile(rf"^/api/setup/import$"),                                                   h_post_setup_import),
-    (re.compile(rf"^/api/ui-state$"),                                                       h_post_ui_state),
-    (re.compile(rf"^/api/system/update$"),                                                  h_post_system_update),
-    (re.compile(rf"^/api/system/reset$"),                                                   h_post_system_reset),
-    (re.compile(rf"^/api/system/stash-recover$"),                                           h_post_system_stash_recover),
-    (re.compile(rf"^/api/system/stash-drop$"),                                              h_post_system_stash_drop),
-    (re.compile(rf"^/api/system/stash-prune$"),                                             h_post_system_stash_prune),
+    (re.compile(r"^/api/setup/import$"),                                                   h_post_setup_import),
+    (re.compile(r"^/api/ui-state$"),                                                       h_post_ui_state),
+    (re.compile(r"^/api/system/update$"),                                                  h_post_system_update),
+    (re.compile(r"^/api/system/reset$"),                                                   h_post_system_reset),
+    (re.compile(r"^/api/system/stash-recover$"),                                           h_post_system_stash_recover),
+    (re.compile(r"^/api/system/stash-drop$"),                                              h_post_system_stash_drop),
+    (re.compile(r"^/api/system/stash-prune$"),                                             h_post_system_stash_prune),
 ]
 
 ROUTES_DELETE = [
@@ -717,8 +732,8 @@ ROUTES_DELETE = [
     (re.compile(rf"^/api/workspaces/({_ID})/fs/file$"),                                     h_del_ws_fs_file),
     (re.compile(rf"^/api/mcps/recipes/local/({_ID})$"),                                     h_del_local_recipe),
     (re.compile(rf"^/api/mcps/({_ID})$"),                                                   h_del_mcp),
-    (re.compile(rf"^/api/env/(.+)$"),                                                       h_del_env),
-    (re.compile(rf"^/api/journal$"),                                                        h_del_journal),
+    (re.compile(r"^/api/env/(.+)$"),                                                       h_del_env),
+    (re.compile(r"^/api/journal$"),                                                        h_del_journal),
     (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_del_template_file),
     (re.compile(rf"^/api/templates/({_ID})$"),                                              h_del_template),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/file$"),                                 h_del_skill_file),
@@ -739,8 +754,91 @@ ROUTES_BY_METHOD = {
 # Handler HTTP — dispatch via la table, fallback static pour les fichiers.
 # ────────────────────────────────────────────────────────────────────────────
 
+# Fichiers statiques servis (liste blanche). Tout le reste de dashboard/
+# (data/, dashcore/, tools/, *.py, *.bak, *.json...) n'est JAMAIS servi.
+_STATIC_TOP_FILES = {"index.html", "app.js", "app.css", "prototype.html"}
+_STATIC_DIRS = {"js", "css", "assets"}
+_STATIC_EXTS = (".js", ".css", ".woff2", ".woff", ".svg", ".png", ".ico")
+
+# Routes GET à effet de bord (spawn de process, appel réseau sortant) :
+# exigent aussi le header anti-CSRF (le front le pose toujours via API._req).
+_SIDE_EFFECT_GET = (
+    re.compile(r"^/api/mcps/[a-zA-Z0-9_-]+/diagnose$"),        # lance le serveur MCP / requête HTTP
+    re.compile(r"^/api/workspaces/[a-zA-Z0-9_-]+/mcp-check$"),  # `claude mcp list` (démarre les MCPs)
+)
+# /api/system/version n'a d'effet de bord (git fetch) qu'avec ?check=1 :
+# gardé seulement dans ce cas (la lecture simple reste libre).
+_FETCH_GET = "/api/system/version"
+
+# En-têtes de sécurité posés sur TOUTES les réponses. Pas de CSP stricte :
+# index.html contient un <script> inline (thème anti-flash) et les vues
+# utilisent des styles inline ; seul frame-ancestors est imposé.
+_SECURITY_HEADERS = (
+    ("X-Content-Type-Options", "nosniff"),
+    ("Referrer-Policy", "no-referrer"),
+    ("X-Frame-Options", "DENY"),
+    ("Content-Security-Policy", "frame-ancestors 'none'"),
+)
+
+
+def _host_header_name(host: str) -> str:
+    """Forme de `host` dans un en-tête Host (IPv6 entre crochets)."""
+    h = host.strip().lower()
+    return f"[{h}]" if ":" in h and not h.startswith("[") else h
+
+
+def allowed_host_headers(bind_host: str, port: int, extra=()) -> set:
+    """Valeurs acceptées pour l'en-tête Host (anti DNS-rebinding).
+
+    Toujours 127.0.0.1 / localhost (et [::1]) ; plus l'hôte d'écoute s'il
+    est explicite (pas une adresse joker 0.0.0.0 / ::), plus les noms de
+    NEBULA_ALLOWED_HOSTS. Chaque nom est accepté avec le port d'écoute.
+    """
+    names = {"127.0.0.1", "localhost", "[::1]"}
+    b = (bind_host or "").strip().strip("[]").lower()
+    if b and b not in ("0.0.0.0", "::"):
+        names.add(_host_header_name(b))
+    names.update(_host_header_name(x) for x in extra if x and x.strip())
+    return {f"{n}:{port}" for n in names}
+
+
 class Handler(BaseHTTPRequestHandler):
     MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+    # Timeout socket (s) : une connexion muette (client lent / malveillant)
+    # ne bloque plus un thread indéfiniment. N'affecte pas la durée de
+    # traitement d'un handler (git pull...), seulement les I/O socket.
+    timeout = 60
+
+    def end_headers(self):
+        for k, v in _SECURITY_HEADERS:
+            self.send_header(k, v)
+        super().end_headers()
+
+    def _allowed_hosts(self) -> set:
+        return allowed_host_headers(
+            getattr(self.server, "nebula_host", HOST),
+            self.server.server_address[1], EXTRA_ALLOWED_HOSTS)
+
+    def _host_ok(self) -> bool:
+        """Anti DNS-rebinding : Host doit être 127.0.0.1/localhost:<port>
+        (ou l'hôte configuré / NEBULA_ALLOWED_HOSTS, cf. allowed_host_headers).
+
+        Un domaine attaquant re-résolu vers 127.0.0.1 arrive avec SON nom
+        dans Host -> refusé, même s'il est « same-origin » pour le navigateur
+        (et pourrait donc poser X-Nebula-XHR).
+        """
+        host = (self.headers.get("Host") or "").strip().lower()
+        return host in self._allowed_hosts()
+
+    def _origin_ok(self) -> bool:
+        """Requêtes mutantes : Origin (si présent) doit être l'UI elle-même."""
+        origin = (self.headers.get("Origin") or "").strip().lower()
+        if origin:
+            return origin in {f"http://{h}" for h in self._allowed_hosts()}
+        # Pas d'Origin (client non navigateur) : Sec-Fetch-Site s'il existe,
+        # sinon on s'appuie sur X-Nebula-XHR (exigé de toute façon).
+        return (self.headers.get("Sec-Fetch-Site") or "same-origin").lower() in (
+            "same-origin", "none")
 
     def log_message(self, fmt, *args):
         log.info("%s %s", self.address_string(), fmt % args)
@@ -793,19 +891,30 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _read_json_body(self):
+        """Corps JSON -> (dict | None, (status, message) | None).
+
+        413 si trop gros, 400 si illisible ou si ce n'est pas un objet JSON
+        (tous les handlers font `b.get(...)` : une liste / un scalaire
+        provoquait un 500 opaque).
+        """
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
-            return None
-        if length < 0 or length > self.MAX_BODY_BYTES:
-            return None
+            return None, (400, "Content-Length invalide")
+        if length < 0:
+            return None, (400, "Content-Length invalide")
+        if length > self.MAX_BODY_BYTES:
+            return None, (413, f"corps trop volumineux (max {self.MAX_BODY_BYTES // (1024 * 1024)} Mo)")
         if length == 0:
-            return {}
+            return {}, None
         raw = self.rfile.read(length)
         try:
-            return json.loads(raw.decode("utf-8"))
+            body = json.loads(raw.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
-            return None
+            return None, (400, "JSON invalide")
+        if not isinstance(body, dict):
+            return None, (400, "corps JSON invalide : objet attendu")
+        return body, None
 
     # Routes GET qui exposent des données sensibles : exigent aussi le header
     # (les GET ne sont pas gatés par défaut, ceux-ci le sont explicitement).
@@ -816,6 +925,13 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
+
+        # Anti DNS-rebinding sur TOUTES les requêtes (lectures comprises).
+        if not self._host_ok():
+            self._send_json(403, {"error": "Host non autorisé"}); return
+        # Anti-CSRF par Origin sur les mutations (en plus de X-Nebula-XHR).
+        if method in ("POST", "DELETE", "PUT", "PATCH") and not self._origin_ok():
+            self._send_json(403, {"error": "Origine non autorisée"}); return
 
         # Anti-CSRF en DÉFAUT-REFUS : TOUTE mutation (POST/DELETE) exige le
         # header custom X-Nebula-XHR, qu'un <form>/<img> ou un fetch cross-origin
@@ -828,8 +944,11 @@ class Handler(BaseHTTPRequestHandler):
         # mutation légitime cassée. Allowlist d'exemption uniquement, jamais
         # d'inclusion à maintenir à la main.
         needs_csrf = (
-            method in ("POST", "DELETE")
+            method in ("POST", "DELETE", "PUT", "PATCH")
             or path in self._SENSITIVE_ROUTES
+            or (method == "GET" and any(p.match(path) for p in _SIDE_EFFECT_GET))
+            or (method == "GET" and path == _FETCH_GET
+                and (query.get("check", ["0"])[0] or "0") == "1")
         )
         if needs_csrf and self.headers.get("X-Nebula-XHR") != "1":
             self._send_json(403, {"error": "header X-Nebula-XHR requis"}); return
@@ -840,6 +959,11 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             try:
                 result = handler(query, body, *mat.groups())
+            except (CorruptJsonError, EnvStoreUnreadable) as e:
+                # Donnée illisible sur un chemin lecture-modif-écriture : refus
+                # (rien n'a été écrit) avec un message actionnable.
+                log.error("Refus %s %s : %s", method, path, e)
+                self._send_json(409, {"error": str(e)}); return
             except Exception:
                 log.exception("Erreur handler %s %s", method, path)
                 self._send_json(500, {"error": "internal error"}); return
@@ -859,17 +983,32 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             self._send_file(DASHBOARD_DIR / "index.html"); return
         rel = path.lstrip("/")
-        if not rel or ".." in rel.split("/") or "\\" in rel:
+        parts = rel.split("/")
+        if (not rel or ".." in parts or "" in parts or "\\" in rel or ":" in rel
+                or not self._static_allowed(parts)):
             self._send_json(404, {"error": "not found"}); return
         self._send_file(DASHBOARD_DIR / rel)
+
+    @staticmethod
+    def _static_allowed(parts: list) -> bool:
+        """Liste blanche : fichiers front de 1er niveau + js/, css/, assets/."""
+        if len(parts) == 1:
+            return parts[0] in _STATIC_TOP_FILES
+        if parts[0] not in _STATIC_DIRS:
+            return False
+        name = parts[-1].lower()
+        return name.endswith(_STATIC_EXTS) and not name.startswith(".")
 
     def do_GET(self):
         self._dispatch("GET")
 
     def do_POST(self):
-        body = self._read_json_body()
-        if body is None:
-            self._send_json(400, {"error": "JSON invalide"}); return
+        body, err = self._read_json_body()
+        if err:
+            # Corps non (entièrement) lu : fermer la connexion plutôt que de
+            # lire la suite comme une nouvelle requête.
+            self.close_connection = True
+            self._send_json(err[0], {"error": err[1]}); return
         self._dispatch("POST", body)
 
     def do_DELETE(self):
@@ -880,25 +1019,64 @@ class Handler(BaseHTTPRequestHandler):
 # Lancement
 # ────────────────────────────────────────────────────────────────────────────
 
+class _NebulaHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer.server_bind appelle socket.getfqdn(hôte) : résolution DNS
+        # inverse, ~5 s de blocage au démarrage sur une IP sans PTR (127.0.0.2,
+        # IP de réseau local). Le nom n'est utilisé nulle part : on s'en passe.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = port
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT,
+                    help=f"port d'écoute (défaut : NEBULA_PORT ou 4777, ici {DEFAULT_PORT})")
+    ap.add_argument("--host", default=HOST,
+                    help=f"hôte d'écoute (défaut : NEBULA_HOST ou 127.0.0.1, ici {HOST})")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--debug", action="store_true", help="Active le niveau DEBUG")
     args = ap.parse_args()
 
     setup_logging(logging.DEBUG if args.debug else logging.INFO)
+    for msg in CONFIG_WARNINGS:
+        log.warning("Configuration : %s", msg)
 
+    host = (args.host or HOST).strip().strip("[]")
+    ipv6 = ":" in host
     port = args.port
-    if not port_free(HOST, port):
-        new = find_port(HOST, port + 1)
+    if not port_free(host, port):
+        new = find_port(host, port + 1)
         log.warning("Port %d occupé → fallback sur %d", port, new)
         port = new
 
-    server = ThreadingHTTPServer((HOST, port), Handler)
-    url = f"http://{HOST}:{port}/"
+    if not is_loopback_host(host):
+        # API d'administration SANS authentification (secrets .env, lancement
+        # de process, écriture de fichiers) : l'exposer au réseau donne ces
+        # pouvoirs à quiconque l'atteint. Avertissement explicite.
+        log.warning("!" * 72)
+        log.warning("ATTENTION : écoute sur %s (hors boucle locale).", host)
+        log.warning("L'API n'a AUCUNE authentification : toute machine qui atteint")
+        log.warning("ce port peut lire tes secrets et lancer des commandes.")
+        log.warning("Réserve cet usage à un réseau de confiance (ou un tunnel SSH).")
+        log.warning("!" * 72)
+
+    if DATA_DIR_IS_CUSTOM:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    server_cls = _NebulaHTTPServer
+    if ipv6:
+        server_cls = type("NebulaHTTPServer6", (_NebulaHTTPServer,),
+                          {"address_family": socket.AF_INET6})
+    server = server_cls((host, port), Handler)
+    server.nebula_host = host
+    url_host = {"0.0.0.0": "127.0.0.1", "::": "[::1]"}.get(host, _host_header_name(host))
+    url = f"http://{url_host}:{port}/"
     log.info("Dashboard Claude Workspace — %s", url)
     log.info("  registry : %s", MCP_REGISTRY)
+    log.info("  données : %s%s", DATA_DIR, " (NEBULA_DATA_DIR)" if DATA_DIR_IS_CUSTOM else "")
     log.info("  .env.local : %s  (%s)", ENV_FILE, "présent" if ENV_FILE.exists() else "absent")
     log.info("  logs : %s", LOGS_DIR / "dashboard.log")
     log.info("Ctrl+C pour arrêter.")

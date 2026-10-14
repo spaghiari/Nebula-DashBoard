@@ -2,32 +2,24 @@
 from __future__ import annotations
 
 import datetime as dt
-import glob
-import io
 import json
 import logging
 import logging.handlers
 import os
-import re
-import shlex
 import shutil
 import socket
 import stat
 import subprocess
 import sys
-import threading
 import time
-import urllib.request
-import webbrowser
-import zipfile
 from pathlib import Path
 
 from dashcore.config import (
-    ROOT, USER_HOME, CLAUDE_HOME, CLAUDE_JSON, CLAUDE_SETTINGS, CLAUDE_PROJECTS,
-    BACKUPS_DIR, JOURNAL_FILE, TEMPLATES_DIR, DASHBOARD_DIR, WORKSPACES_DIR,
-    SCRIPTS_DIR, SNIPPETS_DIR, WORKSPACES_JSON, MCP_REGISTRY, ENV_FILE, LOGS_DIR,
-    TEXT_EXTENSIONS, SAFE_ID, SAFE_PLUGIN_SPEC, ENV_VAR_PATTERN, BAT_UNSAFE,
-    PATH_UNSAFE, STATIC_TYPES, ENV_KEY_RE, _MUTATION_LOCK, log,
+    ROOT, CLAUDE_HOME, CLAUDE_JSON, CLAUDE_SETTINGS, BACKUPS_DIR, TEMPLATES_DIR, WORKSPACES_DIR,
+    WORKSPACES_JSON, MCP_REGISTRY, ENV_FILE, LOGS_DIR,
+    TEXT_EXTENSIONS, SAFE_ID, BAT_UNSAFE,
+    PATH_UNSAFE, _MUTATION_LOCK, log,
+    MCP_RECIPES_LOCAL_FILE, IS_WINDOWS,
 )
 
 
@@ -55,22 +47,82 @@ def setup_logging(level: int = logging.INFO) -> None:
     log.addHandler(file_handler)
 
 
+class CorruptJsonError(ValueError):
+    """Fichier JSON présent mais illisible (syntaxe / encodage).
+
+    Levée par `read_json_strict` : un chemin lecture-modification-écriture
+    ne doit JAMAIS repartir d'un défaut vide (sinon l'écriture suivante
+    écrase la donnée réelle). `server._dispatch` la convertit en 409 avec
+    un message explicite (aucune écriture effectuée).
+    """
+
+    def __init__(self, path: Path, detail: str):
+        self.path = Path(path)
+        self.detail = detail
+        bak = self.path.with_suffix(self.path.suffix + ".bak")
+        super().__init__(
+            f"Fichier JSON illisible : {self.path} ({detail}). Aucune écriture "
+            f"effectuée. Corrige le fichier ou restaure la sauvegarde {bak.name}."
+        )
+
+
 def read_json(path: Path, default):
+    """Lecture tolérante : `default` si absent OU illisible (log warning).
+
+    À réserver aux lectures seules. Pour lire-modifier-écrire, utiliser
+    `read_json_strict` (cf. pitfalls : un défaut vide réécrit = perte de données).
+    """
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return default
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        log.warning("JSON illisible, défaut utilisé : %s (%s)", path, e)
         return default
 
 
+def read_json_strict(path: Path, default):
+    """Comme `read_json` mais lève `CorruptJsonError` si le fichier existe
+    et est illisible. `default` n'est renvoyé QUE si le fichier est absent."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8-sig"))
+    except FileNotFoundError:
+        return default
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise CorruptJsonError(path, str(e)) from e
+
+
+def _json_file_is_valid(path: Path) -> bool:
+    try:
+        json.loads(path.read_text(encoding="utf-8-sig"))
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def write_json(path: Path, data) -> None:
+    """Écriture atomique (tmp + os.replace) avec rotation `.bak` sûre.
+
+    - Le `.bak` n'est tourné QUE si le fichier courant est un JSON valide :
+      un fichier corrompu n'écrase jamais la dernière sauvegarde saine.
+    - Un fichier courant corrompu est préservé en `<nom>.corrupt-<ts>`
+      avant d'être remplacé (rien n'est perdu, même via un appelant non
+      strict).
+    """
     with _MUTATION_LOCK:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
-            backup = path.with_suffix(path.suffix + ".bak")
-            shutil.copy2(path, backup)
+            if _json_file_is_valid(path):
+                backup = path.with_suffix(path.suffix + ".bak")
+                shutil.copy2(path, backup)
+            else:
+                ts = time.strftime("%Y%m%d-%H%M%S")
+                keep = path.with_name(f"{path.name}.corrupt-{ts}")
+                shutil.copy2(path, keep)
+                log.warning("JSON corrompu préservé avant réécriture : %s", keep)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        tmp.replace(path)
+        os.replace(tmp, path)
 
 
 def resolve_cli(name: str) -> str:
@@ -102,7 +154,9 @@ from dashcore.env_local import (  # noqa: E402,F401
 
 
 def port_free(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+    # Hôte IPv6 (contient « : ») : socket AF_INET6, sinon le bind échoue toujours.
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM) as s:
         s.settimeout(0.2)
         try:
             s.bind((host, port))
@@ -151,7 +205,6 @@ def global_search(q: str) -> dict:
         return {"results": []}
     results = []
 
-    from dashcore.workspace_io import list_workspaces  # import tardif (cycle)
     for w in list_workspaces():
         hay = f"{w.get('id','')} {w.get('label','')} {w.get('description','')}".lower()
         if q in hay:
@@ -254,7 +307,7 @@ OPEN_TARGETS = {
     "env-local": ENV_FILE,
     "workspaces-json": WORKSPACES_JSON,
     "global-memory": ROOT / "memory",
-    "mcp-recipes-local": ROOT / "dashboard" / "data" / "mcp_recipes.local.json",
+    "mcp-recipes-local": MCP_RECIPES_LOCAL_FILE,
 }
 
 
@@ -291,7 +344,7 @@ def open_target(key: str) -> tuple[int, dict]:
 
     if not p.exists():
         # Fichier absent : propose notepad pour les cas où on veut le créer
-        if key == "env-local":
+        if key == "env-local" and IS_WINDOWS:
             try:
                 subprocess.Popen(["notepad", str(p)])
                 return 200, {"ok": True, "message": f"Notepad ouvert (fichier sera créé au save) : {p}"}
@@ -299,14 +352,21 @@ def open_target(key: str) -> tuple[int, dict]:
                 return 500, {"ok": False, "error": f"Erreur : {e}"}
         return 404, {"ok": False, "error": f"Introuvable : {p}"}
     try:
-        if sys.platform == "win32":
+        if IS_WINDOWS:
             try:
                 os.startfile(str(p))  # noqa
             except OSError:
                 # Pas d'association pour .env ou .local → fallback notepad
                 subprocess.Popen(["notepad", str(p)])
         else:
-            subprocess.Popen(["xdg-open", str(p)])
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            if not shutil.which(opener):
+                # Poste sans environnement graphique (serveur, conteneur) :
+                # erreur claire plutôt qu'un 500 « No such file ».
+                return 501, {"ok": False, "error": (
+                    f"Ouverture impossible : « {opener} » introuvable sur ce système. "
+                    f"Chemin : {p}")}
+            subprocess.Popen([opener, str(p)])
         return 200, {"ok": True, "message": f"Ouvert : {p}"}
     except OSError as e:
         return 500, {"ok": False, "error": f"Erreur : {e}"}

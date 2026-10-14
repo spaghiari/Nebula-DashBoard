@@ -25,8 +25,15 @@ import os
 import subprocess
 import sys
 import tempfile
-from ctypes import wintypes
 from pathlib import Path
+
+try:
+    # Hors Windows, `ctypes.wintypes` ne sert à rien (DPAPI indisponible)
+    # et son import échoue sur certaines versions de Python : il ne doit
+    # jamais empêcher l'import du module, donc le démarrage du serveur.
+    from ctypes import wintypes
+except (ImportError, ValueError):  # pragma: no cover - hors Windows
+    wintypes = None
 
 from dashcore.config import log
 
@@ -46,7 +53,7 @@ class CryptoError(Exception):
 
 class _DATA_BLOB(ctypes.Structure):
     _fields_ = [
-        ("cbData", wintypes.DWORD),
+        ("cbData", wintypes.DWORD if wintypes is not None else ctypes.c_uint32),
         ("pbData", ctypes.POINTER(ctypes.c_ubyte)),
     ]
 

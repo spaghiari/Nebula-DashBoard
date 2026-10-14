@@ -1,40 +1,30 @@
 """Module extrait de server.py — ne pas éditer le script _split.py."""
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
-import glob
 import io
 import json
-import logging
-import logging.handlers
-import os
 import re
-import shlex
 import shutil
-import socket
 import subprocess
 import sys
-import threading
-import time
-import urllib.request
-import webbrowser
 import zipfile
 from pathlib import Path
 
 from dashcore.config import (
-    ROOT, USER_HOME, CLAUDE_HOME, CLAUDE_JSON, CLAUDE_SETTINGS, CLAUDE_PROJECTS,
-    BACKUPS_DIR, JOURNAL_FILE, TEMPLATES_DIR, DASHBOARD_DIR, WORKSPACES_DIR,
-    SCRIPTS_DIR, SNIPPETS_DIR, WORKSPACES_JSON, MCP_REGISTRY, ENV_FILE, LOGS_DIR,
-    TEXT_EXTENSIONS, SAFE_ID, SAFE_PLUGIN_SPEC, ENV_VAR_PATTERN, BAT_UNSAFE,
-    PATH_UNSAFE, STATIC_TYPES, ENV_KEY_RE, ALLOWED_TRANSPORTS, _MUTATION_LOCK, log,
+    ROOT, USER_HOME, CLAUDE_HOME, CLAUDE_SETTINGS, BACKUPS_DIR, TEMPLATES_DIR, DASHBOARD_DIR, WORKSPACES_DIR,
+    SCRIPTS_DIR, WORKSPACES_JSON, MCP_REGISTRY, ALLOWED_TRANSPORTS, _MUTATION_LOCK, log,
+    HOOK_ERRORS_LOG, IS_WINDOWS, WINDOWS_ONLY_MSG,
 )
 
 
 from dashcore.helpers import (
     _remove_dir_or_link, apply_template, list_workspaces,
-    project_dir_for_path, read_json, resolve_ws_dir, safe_id, safe_path,
+    project_dir_for_path, read_json, read_json_strict, resolve_ws_dir, safe_id, safe_path,
     sanitize_bat, validate_ws_path, write_json, write_launch_bat,
 )
+from dashcore.workspace_io import _ws_dir_from_entry, session_file_counts
 
 
 def list_templates() -> list[dict]:
@@ -221,6 +211,23 @@ def create_template(payload: dict) -> tuple[int, dict]:
 
 
 _KNOWN_PLACEHOLDERS = frozenset({"name", "label", "description", "tools", "emoji", "date"})
+# Tout placeholder `{{identifiant}}` (connu ou non). Contenu restreint a un
+# identifiant : `{{"a":1}}` (accolades doublees par erreur) n'en est PAS un.
+_ANY_PLACEHOLDER_RE = re.compile(r"\{\{\s*[A-Za-z_][\w.-]*\s*\}\}")
+
+
+def _json_ok_modulo_placeholders(content: str) -> bool:
+    """Vrai si `content` contient des placeholders `{{...}}` et devient un JSON
+    valide une fois chacun remplacé par un jeton neutre (`0` : valide hors
+    chaîne comme dans une chaîne). Distingue une invalidité volontaire
+    (placeholder non quoté) d'une vraie erreur de syntaxe."""
+    if not _ANY_PLACEHOLDER_RE.search(content):
+        return False
+    try:
+        json.loads(_ANY_PLACEHOLDER_RE.sub("0", content))
+        return True
+    except json.JSONDecodeError:
+        return False
 _PLACEHOLDER_RE = re.compile(r"\{\{(name|label|description|tools|emoji|date)\}\}")
 # Candidat placeholder : 1 ou 2 accolades, espaces tolérés, autour d'un mot.
 # Capture les formes mal écrites (accolade simple, espaces, nom inconnu) pour
@@ -510,13 +517,25 @@ def write_template_file(tpl_id: str, rel_path: str, content: str) -> tuple[int, 
     # Sinon un settings.json cassé se propagerait à CHAQUE workspace créé
     # depuis ce template (le copy ne re-valide pas). Aligné sur
     # save_workspace_settings qui valide déjà le JSON.
+    # Exception : un JSON invalide UNIQUEMENT à cause de placeholders `{{...}}`
+    # (ex. `"port": {{port}}` non quoté) est accepté (choix volontaire de
+    # l'auteur du template ; l'éditeur l'affiche en avertissement non
+    # bloquant). Une vraie erreur de syntaxe reste refusée.
+    warning = None
     if rel_path.lower().endswith(".json"):
         try:
             json.loads(content)
         except json.JSONDecodeError as e:
-            return 400, {"error": f"JSON invalide ({rel_path}) : {e}. "
-                                  "Corrige la syntaxe avant d'enregistrer - "
-                                  "ce fichier serait copié cassé dans chaque workspace."}
+            if not _json_ok_modulo_placeholders(content):
+                return 400, {"error": f"JSON invalide ({rel_path}) : {e}. "
+                                      "Corrige la syntaxe avant d'enregistrer - "
+                                      "ce fichier serait copié cassé dans chaque workspace."}
+            log.info("template json invalide hors placeholders accepté : %s / %s", tpl_id, rel_path)
+            warning = (f"{rel_path} n'est pas un JSON valide tel quel (placeholders hors "
+                       "guillemets). Il sera copié avec substitution de texte : le .json du "
+                       "workspace sera invalide si un placeholder n'est pas remplacé par une "
+                       "valeur JSON valide (les placeholders Nebula valent du texte, les "
+                       "inconnus ne sont pas remplacés).")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         # Backup si existant
@@ -524,7 +543,10 @@ def write_template_file(tpl_id: str, rel_path: str, content: str) -> tuple[int, 
             target.with_suffix(target.suffix + ".bak").write_bytes(target.read_bytes())
         target.write_text(content, encoding="utf-8")
         log.info("template file written: %s / %s", tpl_id, rel_path)
-        return 200, {"ok": True, "path": rel_path, "size": target.stat().st_size}
+        out = {"ok": True, "path": rel_path, "size": target.stat().st_size}
+        if warning:
+            out["warning"] = warning
+        return 200, out
     except OSError as e:
         return 500, {"error": str(e)}
 
@@ -556,7 +578,7 @@ def update_template_meta(tpl_id: str, payload: dict) -> tuple[int, dict]:
     if not base.exists():
         return 404, {"error": "template introuvable"}
     with _MUTATION_LOCK:
-        meta = read_json(base / ".template.json", {}) or {}
+        meta = read_json_strict(base / ".template.json", {}) or {}
         if "label" in payload: meta["label"] = (payload.get("label") or tpl_id).strip()
         if "description" in payload: meta["description"] = (payload.get("description") or "").strip()
         if "emoji" in payload: meta["emoji"] = (payload.get("emoji") or "📦").strip()
@@ -640,7 +662,7 @@ def patch_workspace_settings(ws_id: str, key: str, value) -> tuple[int, dict]:
 
     path = _workspace_settings_path(ws_id)
     with _MUTATION_LOCK:
-        settings = read_json(path, {}) or {}
+        settings = read_json_strict(path, {}) or {}
         if value is None or (isinstance(value, (dict, list)) and not value):
             settings.pop(key, None)
         else:
@@ -858,7 +880,7 @@ def get_hooks_errors(tail_lines: int = 200) -> tuple[int, dict]:
     depuis Nebula. Pour étendre la couverture : ajouter
     `>> dashboard/data/hook_errors.log` dans le hook concerné.
     """
-    log_path = ROOT / "dashboard" / "data" / "hook_errors.log"
+    log_path = HOOK_ERRORS_LOG
     if not log_path.exists():
         return 200, {
             "exists": False,
@@ -899,7 +921,7 @@ def set_global_hooks(hooks: dict) -> tuple[int, dict]:
     if errors:
         return 400, {"error": errors[0]["msg"], "hook_errors": errors, "hook_warnings": warnings}
     with _MUTATION_LOCK:
-        settings = read_json(CLAUDE_SETTINGS, {}) or {}
+        settings = read_json_strict(CLAUDE_SETTINGS, {}) or {}
         if CLAUDE_SETTINGS.exists():
             bak = CLAUDE_SETTINGS.with_suffix(".json.bak")
             bak.write_text(CLAUDE_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
@@ -922,33 +944,12 @@ def list_sessions_for_workspace(ws_id: str) -> list[dict]:
     out = []
     for jsonl in sorted(pdir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
-            mtime = jsonl.stat().st_mtime
-            first_msg = None
-            n = 0
-            inp = out_tokens = 0
-            with jsonl.open("r", encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if entry.get("type") == "user" and first_msg is None:
-                        msg = entry.get("message") or {}
-                        content = msg.get("content")
-                        if isinstance(content, str):
-                            first_msg = content[:200]
-                        elif isinstance(content, list):
-                            for c in content:
-                                if isinstance(c, dict) and c.get("type") == "text":
-                                    first_msg = c.get("text", "")[:200]; break
-                    if entry.get("type") in ("user", "assistant"):
-                        n += 1
-                    usage = (entry.get("message") or {}).get("usage") or entry.get("usage") or {}
-                    inp += int(usage.get("input_tokens") or 0)
-                    out_tokens += int(usage.get("output_tokens") or 0)
+            st = jsonl.stat()
+            mtime = st.st_mtime
+            # Une passe par fichier, mise en cache (clé mtime + taille) et
+            # partagée avec /api/stats : seuls les fichiers modifiés depuis
+            # le dernier appel sont relus (cf. workspace_io.session_file_counts).
+            n, inp, out_tokens, _cc, _cr, first_msg = session_file_counts(jsonl, st)
             out.append({
                 "file": jsonl.name,
                 "path": str(jsonl),
@@ -1125,35 +1126,83 @@ def duplicate_workspace(payload: dict) -> tuple[int, dict]:
 
     if not safe_id(source) or not safe_id(new_id):
         return 400, {"error": "id invalide"}
-    src = WORKSPACES_DIR / source
     dst = WORKSPACES_DIR / new_id
-    if not src.exists():
-        return 404, {"error": "source introuvable"}
-    if dst.exists():
-        return 409, {"error": "destination déjà existante"}
 
-    shutil.copytree(src, dst)
-    write_launch_bat(new_id, label, str(dst))
-
-    # registre
+    # Registre lu en STRICT avant toute écriture disque : un workspaces.json
+    # corrompu lève CorruptJsonError (409) sans laisser de dossier ni de .bat
+    # orphelins. Verrou (réentrant) tenu jusqu'à l'enregistrement.
     with _MUTATION_LOCK:
-        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        data = read_json_strict(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
         src_entry = next((w for w in data.get("workspaces", []) if w.get("id") == source), None)
-        data.setdefault("workspaces", []).append({
-            "id": new_id,
-            "label": label,
-            "emoji": emoji,
-            "description": description,
-            "path": str(dst),
-            "template": (src_entry or {}).get("template", "clone"),
-        })
-        write_json(WORKSPACES_JSON, data)
+        # Chemin RÉEL de la source (même règle que resolve_ws_dir, sur le
+        # registre déjà lu) : un workspace adopté vit hors de WORKSPACES_DIR,
+        # `WORKSPACES_DIR / source` le donnait pour « introuvable ».
+        src = _ws_dir_from_entry(src_entry) if src_entry else WORKSPACES_DIR / source
+        if not src.is_dir():
+            return 404, {"error": "source introuvable"}
+        # Source adoptée pointant vers un ancêtre de la destination (ex. C:\ ou
+        # le dossier workspaces lui-même) : copytree copierait dst dans dst.
+        if dst.resolve().is_relative_to(src.resolve()):
+            return 400, {"error": "la source contient le dossier de destination, duplication impossible"}
+        if any(w.get("id") == new_id for w in data.get("workspaces", [])):
+            return 409, {"error": f"Id déjà utilisé dans le registre : {new_id}"}
+        if dst.exists():
+            return 409, {"error": "destination déjà existante"}
+
+        # Coût assumé : la copie se fait sous _MUTATION_LOCK (choix du lot
+        # « Finitions » : registre lu en strict avant tout disque). Dupliquer
+        # un gros workspace adopté bloque les autres mutations le temps de
+        # la copie ; les lectures (GET) ne sont pas bloquées.
+        with _rollback_new_workspace(new_id, dst):
+            shutil.copytree(src, dst)
+            write_launch_bat(new_id, label, str(dst))
+            data.setdefault("workspaces", []).append({
+                "id": new_id,
+                "label": label,
+                "emoji": emoji,
+                "description": description,
+                "path": str(dst),
+                "template": (src_entry or {}).get("template", "clone"),
+            })
+            write_json(WORKSPACES_JSON, data)
     return 201, {"ok": True, "id": new_id}
+
+
+@contextlib.contextmanager
+def _rollback_new_workspace(ws_id: str, ws_dir: Path):
+    """Annule les créations disque d'UNE création/duplication qui échoue.
+
+    Ne supprime que ce que CET appel a créé : le dossier `ws_dir` (absent à
+    l'entrée, sinon on ne le touche jamais) et `scripts/launch-<id>.bat`
+    (idem). L'exception est relancée telle quelle (le serveur répond 500 /
+    409 comme avant), seul l'état disque est remis propre. L'ajout au
+    registre étant la dernière étape, il n'y a rien à retirer de
+    workspaces.json.
+    """
+    dir_existed = ws_dir.exists() or ws_dir.is_symlink()
+    bat = SCRIPTS_DIR / f"launch-{ws_id}.bat"
+    bat_existed = bat.exists()
+    try:
+        yield
+    except BaseException:
+        if not dir_existed and (ws_dir.exists() or ws_dir.is_symlink()):
+            try:
+                _remove_dir_or_link(ws_dir)
+            except OSError as e:
+                log.warning("rollback workspace %s : dossier non supprimé (%s)", ws_id, e)
+        if not bat_existed and bat.exists():
+            try:
+                bat.unlink()
+            except OSError as e:
+                log.warning("rollback workspace %s : .bat non supprimé (%s)", ws_id, e)
+        raise
 
 
 def launch_resume(ws_id: str) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"ok": False, "error": "id invalide"}
+    if not IS_WINDOWS:
+        return 501, {"ok": False, "error": WINDOWS_ONLY_MSG}
     w = next((x for x in list_workspaces() if x["id"] == ws_id), None)
     if not w:
         return 404, {"ok": False, "error": "workspace absent"}
@@ -1248,9 +1297,38 @@ def create_workspace(payload: dict) -> tuple[int, dict]:
                               f"(à passer via le champ `overlays`, pas `template`)"}
 
     ws_dir = WORKSPACES_DIR / ws_id
-    if ws_dir.exists():
-        return 409, {"error": f"Workspace déjà existant : {ws_id}"}
+    # Registre lu en STRICT avant toute écriture disque (dossier, fichiers,
+    # .bat) : un workspaces.json corrompu lève CorruptJsonError (409) sans
+    # laisser d'orphelins. Verrou réentrant tenu jusqu'à l'enregistrement.
+    with _MUTATION_LOCK:
+        data = read_json_strict(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        if any(w.get("id") == ws_id for w in data.get("workspaces", [])):
+            return 409, {"error": f"Id déjà utilisé dans le registre : {ws_id}"}
+        if ws_dir.exists():
+            return 409, {"error": f"Workspace déjà existant : {ws_id}"}
+        return _create_workspace_locked(
+            data, ws_id, ws_dir, label, emoji, desc, tools, template, tpl_dir,
+            overlays_in, apply_overlay)
 
+
+def _create_workspace_locked(data: dict, ws_id: str, ws_dir: Path, label: str,
+                             emoji: str, desc: str, tools: str, template: str,
+                             tpl_dir: Path, overlays_in: list,
+                             apply_overlay) -> tuple[int, dict]:
+    """Suite de create_workspace, appelée sous _MUTATION_LOCK avec le registre
+    `data` déjà lu en strict (aucune écriture disque avant cette lecture).
+    Tout échec après le mkdir supprime le dossier et le .bat créés par cet
+    appel (`_rollback_new_workspace`), jamais un dossier préexistant."""
+    with _rollback_new_workspace(ws_id, ws_dir):
+        return _create_workspace_steps(
+            data, ws_id, ws_dir, label, emoji, desc, tools, template, tpl_dir,
+            overlays_in, apply_overlay)
+
+
+def _create_workspace_steps(data: dict, ws_id: str, ws_dir: Path, label: str,
+                            emoji: str, desc: str, tools: str, template: str,
+                            tpl_dir: Path, overlays_in: list,
+                            apply_overlay) -> tuple[int, dict]:
     ws_dir.mkdir(parents=True, exist_ok=True)
 
     vars = {
@@ -1291,17 +1369,15 @@ def create_workspace(payload: dict) -> tuple[int, dict]:
 
     write_launch_bat(ws_id, label, str(ws_dir))
 
-    with _MUTATION_LOCK:
-        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
-        data.setdefault("workspaces", []).append({
-            "id": ws_id,
-            "label": label,
-            "emoji": emoji,
-            "description": desc,
-            "path": str(ws_dir),
-            "template": template,
-        })
-        write_json(WORKSPACES_JSON, data)
+    data.setdefault("workspaces", []).append({
+        "id": ws_id,
+        "label": label,
+        "emoji": emoji,
+        "description": desc,
+        "path": str(ws_dir),
+        "template": template,
+    })
+    write_json(WORKSPACES_JSON, data)
     return 201, {
         "ok": True, "id": ws_id, "template": template,
         "files": created, "overlays": overlays_applied,
@@ -1312,7 +1388,7 @@ def update_workspace(ws_id: str, payload: dict) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
     with _MUTATION_LOCK:
-        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        data = read_json_strict(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
         ws_list = data.get("workspaces", [])
         idx = next((i for i, w in enumerate(ws_list) if w.get("id") == ws_id), None)
         if idx is None:
@@ -1356,6 +1432,44 @@ def _backup_workspace_zip(ws_dir: Path, ws_id: str) -> Path:
     return dst
 
 
+def _purge_target_error(ws_dir: Path) -> str | None:
+    """Garde-fou de `delete_workspace(purge=True)` : None si la cible est
+    purgeable, sinon la raison du refus.
+
+    La cible doit être STRICTEMENT sous ROOT/workspaces, à la fois par son
+    emplacement (lien éventuel compris) et par sa cible résolue (un
+    lien/junction pointant ailleurs est refusé). Jamais ROOT, le home, une
+    racine de disque, ni un ancêtre du dépôt dashboard. Un workspace adopté
+    hors de ROOT/workspaces n'est donc jamais purgé (suppression du registre
+    seulement).
+    """
+    try:
+        base = WORKSPACES_DIR.resolve()
+        loc = ws_dir.parent.resolve() / ws_dir.name
+        real = ws_dir.resolve()
+    except OSError as e:
+        return f"chemin non résolu ({e})"
+    forbidden = set()
+    for f in (ROOT, USER_HOME, DASHBOARD_DIR, WORKSPACES_DIR):
+        try:
+            forbidden.add(Path(f).resolve())
+        except OSError:
+            pass
+    for cand in (loc, real):
+        if cand.parent == cand:
+            return "racine de disque"
+        if cand in forbidden:
+            return f"dossier protégé ({cand})"
+        if cand == base or not cand.is_relative_to(base):
+            return f"hors de {WORKSPACES_DIR} ({cand})"
+        try:
+            if DASHBOARD_DIR.resolve().is_relative_to(cand):
+                return "ancêtre du dépôt dashboard"
+        except OSError:
+            return "chemin non résolu"
+    return None
+
+
 def delete_workspace(ws_id: str, purge: bool = False) -> tuple[int, dict]:
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
@@ -1365,8 +1479,16 @@ def delete_workspace(ws_id: str, purge: bool = False) -> tuple[int, dict]:
     # suppression retomberait sur WORKSPACES_DIR/<id> -> purge sur la mauvaise
     # cible, voire suppression d'un dossier homonyme sans rapport (cf. #4).
     ws_dir = _resolve_ws_dir(ws_id)
+    # Garde-fou purge AVANT toute mutation (registre inchangé si refus).
+    if purge and ws_dir.exists():
+        why = _purge_target_error(ws_dir)
+        if why:
+            log.warning("purge %s refusée : %s (%s)", ws_id, why, ws_dir)
+            return 400, {"ok": False, "error": (
+                f"Purge refusée : {why}. Seuls les dossiers sous {WORKSPACES_DIR} "
+                "peuvent être supprimés depuis Nebula ; retire le workspace sans purge.")}
     with _MUTATION_LOCK:
-        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        data = read_json_strict(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
         before = len(data.get("workspaces", []))
         data["workspaces"] = [w for w in data.get("workspaces", []) if w.get("id") != ws_id]
         registered = len(data["workspaces"]) != before
@@ -1556,11 +1678,17 @@ def _is_path_root(path: Path) -> bool:
         return False
 
 
-def _parse_mcp_json_entries(mcp_json_path: Path) -> list[dict]:
+def _parse_mcp_json_entries(mcp_json_path: Path, *, mask: bool = True) -> list[dict]:
     """Extrait les entrees MCP d'un .mcp.json (format Claude Code standard).
 
     Format attendu : {"mcpServers": {"<name>": {transport?, command|url, ...}}}
     Tolere une absence totale ou une structure cassee : renvoie [] sans lever.
+
+    `mask=True` (défaut) : valeurs env/headers + url masquées -> pour toute
+    réponse API. `mask=False` : valeurs RÉELLES, usage serveur uniquement
+    (import dans le registre à l'adoption) -- ne jamais renvoyer au client.
+    Sans ça, l'adoption importait les « •••••• » dans le registre, puis la
+    sync réécrivait le .mcp.json avec les secrets masqués (perte de données).
     """
     try:
         data = read_json(mcp_json_path, {}) or {}
@@ -1583,10 +1711,12 @@ def _parse_mcp_json_entries(mcp_json_path: Path) -> list[dict]:
             "name": str(name),
             "transport": str(transport),
             "command": cfg.get("command") or "",
-            "url": _mask_url(url) if url else "",
+            "url": (_mask_url(url) if mask else url) if url else "",
             "args": cfg.get("args") or [],
-            "env": _mask_secret_values(cfg.get("env")),
-            "headers": _mask_secret_values(cfg.get("headers")),
+            "env": (_mask_secret_values(cfg.get("env")) if mask
+                    else (cfg.get("env") if isinstance(cfg.get("env"), dict) else {})),
+            "headers": (_mask_secret_values(cfg.get("headers")) if mask
+                        else (cfg.get("headers") if isinstance(cfg.get("headers"), dict) else {})),
         })
     return out
 
@@ -1785,14 +1915,16 @@ def adopt_workspace(payload: dict) -> tuple[int, dict]:
             hooks_present = isinstance(parsed, dict) and bool(parsed.get("hooks"))
         except (OSError, json.JSONDecodeError):
             hooks_present = False
-    mcp_entries = _parse_mcp_json_entries(p / ".mcp.json")
+    # Valeurs réelles (non masquées) : relues côté serveur, jamais renvoyées
+    # au client -- seuls les ids importés/sautés sortent dans la réponse.
+    mcp_entries = _parse_mcp_json_entries(p / ".mcp.json", mask=False)
 
     warnings: list[str] = []
 
     # Verrou + ecriture du registre. Garde-fous doublons sous lock pour eviter
     # une course entre 2 adoptions simultanees.
     with _MUTATION_LOCK:
-        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        data = read_json_strict(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
         ws_list = data.setdefault("workspaces", [])
 
         if any(w.get("id") == ws_id for w in ws_list):
@@ -1904,7 +2036,7 @@ def register_existing_workspace(payload: dict) -> tuple[int, dict]:
     path_exists = Path(path_norm).exists()
 
     with _MUTATION_LOCK:
-        data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
+        data = read_json_strict(WORKSPACES_JSON, {"version": "1.0", "workspaces": []})
         data.setdefault("workspaces", [])
 
         if any(w.get("path", "").lower() == path_norm.lower() for w in data["workspaces"]):

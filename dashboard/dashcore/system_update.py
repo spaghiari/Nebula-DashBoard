@@ -15,7 +15,6 @@ import shutil
 import subprocess
 import threading
 import time
-from pathlib import Path
 
 from dashcore.config import ROOT, log
 
@@ -103,6 +102,137 @@ def _git(*args: str, timeout: int = GIT_TIMEOUT_QUICK) -> tuple[int, str, str]:
 
 def _is_git_repo() -> bool:
     return (ROOT / ".git").exists()
+
+
+def _new_stash_label(prefix: str) -> str:
+    """Label unique (ms) : deux opérations dans la même seconde ne collisionnent pas."""
+    return f"{prefix}-{time.time_ns() // 1_000_000}"
+
+
+def _find_stash_ref_by_label(label: str) -> str | None:
+    """Ref `stash@{N}` du stash dont le message est EXACTEMENT `label`.
+
+    Les `stash@{N}` se décalent à chaque push/drop : on ne mémorise jamais
+    un index, on re-résout par le message juste avant chaque pop/apply.
+    Sujet git : « On <branche>: <label> » (ou « <label> » selon la version).
+    """
+    rc, out, _ = _git("stash", "list", "--format=%gd%x1f%gs")
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        ref, _, subject = line.partition("\x1f")
+        if subject.strip().rsplit(": ", 1)[-1] == label:
+            return ref.strip()
+    return None
+
+
+def _stash_push_verified(label: str, *, include_untracked: bool,
+                         exclude: tuple[str, ...] = ()) -> tuple[bool, str]:
+    """`git stash push -m <label>` puis VÉRIFIE que le stash existe par son message.
+
+    `git stash push` renvoie 0 même quand il n'a rien stashé (« No local
+    changes to save ») : sans vérification, un `stash pop` ultérieur
+    dépilerait le stash d'un AUTRE (stash utilisateur antérieur).
+    Retourne (créé, message d'erreur éventuel).
+    """
+    args = ["stash", "push"]
+    if include_untracked:
+        args.append("--include-untracked")
+    args += ["-m", label]
+    if exclude:
+        args += ["--", "."] + [f":(exclude){p}" for p in exclude]
+    rc, out, err = _git(*args, timeout=GIT_TIMEOUT_QUICK)
+    if rc != 0:
+        return False, err or out or "git stash push a échoué"
+    if _find_stash_ref_by_label(label) is None:
+        return False, out or "aucun stash créé (rien à sauvegarder)"
+    return True, ""
+
+
+def _status_paths() -> dict[str, str] | None:
+    """{chemin: code} du working tree via `git status --porcelain=v2`.
+
+    v2 et non v1 : `_git` fait un strip() de stdout, ce qui mange l'espace de
+    tête du code v1 « ␣M chemin » sur la 1re ligne et décale le chemin.
+    En v2 chaque ligne commence par un type (1/2/u/?) : aucun risque.
+    None si git échoue.
+    """
+    rc, out, _ = _git("status", "--porcelain=v2")
+    if rc != 0:
+        return None
+    paths: dict[str, str] = {}
+    for line in out.splitlines():
+        if line.startswith("? "):
+            paths[line[2:].strip('"')] = "??"
+        elif line.startswith("1 "):
+            parts = line.split(" ", 8)
+            if len(parts) == 9:
+                paths[parts[8].strip('"')] = parts[1]
+        elif line.startswith("2 "):
+            parts = line.split(" ", 9)
+            if len(parts) == 10:
+                paths[parts[9].split("\t", 1)[0].strip('"')] = parts[1]
+        elif line.startswith("u "):
+            parts = line.split(" ", 10)
+            if len(parts) == 11:
+                paths[parts[10].strip('"')] = parts[1]
+    return paths
+
+
+def _undo_partial_apply(pre: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Annule un `git stash apply` échoué SANS toucher aux modifs préexistantes.
+
+    Seuls les fichiers trackés absents de `pre` (donc propres avant l'apply)
+    sont restaurés depuis HEAD (index + working tree). Les fichiers non suivis
+    créés par l'apply ne sont PAS supprimés (ils sont aussi dans le stash) :
+    on les liste pour l'utilisateur. Retourne (restaurés, non_suivis_laissés).
+    """
+    post = _status_paths() or {}
+    reverted: list[str] = []
+    leftovers: list[str] = []
+    for path, code in post.items():
+        if path in pre:
+            continue
+        if code == "??":
+            leftovers.append(path)
+            continue
+        # Conflit (U/AA/DD) ou modif : sortir de l'index puis restaurer depuis HEAD.
+        _git("reset", "-q", "--", path)
+        rc_c, _, _ = _git("checkout", "HEAD", "--", path)
+        if rc_c == 0:
+            reverted.append(path)
+    if reverted or leftovers:
+        log.warning("Apply de stash annulé : %d restauré(s), %d non suivi(s) laissé(s)",
+                    len(reverted), len(leftovers))
+    return reverted, leftovers
+
+
+def _snapshot_user_data() -> dict[str, bytes]:
+    """Copie mémoire des USER_DATA_FILES présents (restaurés après un reset --hard)."""
+    snap: dict[str, bytes] = {}
+    for rel in USER_DATA_FILES:
+        p = ROOT / rel
+        try:
+            if p.is_file():
+                snap[rel] = p.read_bytes()
+        except OSError:
+            pass
+    return snap
+
+
+def _restore_user_data(snap: dict[str, bytes]) -> list[str]:
+    """Réécrit les USER_DATA_FILES dont le contenu a changé. Retourne la liste restaurée."""
+    restored = []
+    for rel, data in snap.items():
+        p = ROOT / rel
+        try:
+            if not p.is_file() or p.read_bytes() != data:
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(data)
+                restored.append(rel)
+        except OSError as e:
+            log.error("Restauration user-data %s impossible : %s", rel, e)
+    return restored
 
 
 def _current_branch() -> str:
@@ -317,7 +447,7 @@ def system_apply_update() -> tuple[int, dict]:
 
         stash_applied = False
         stash_pop_warning = None
-        stash_label = f"nebula-autostash-{int(time.time())}"
+        stash_label = _new_stash_label("nebula-autostash")
 
         # Avant de stasher, on détecte les fichiers de données utilisateur connus
         # (.env.local, registry.json, workspaces.json…) qui pourraient se retrouver
@@ -332,36 +462,44 @@ def system_apply_update() -> tuple[int, dict]:
                 if any(p in path for p in sensitive_patterns):
                     sensitive_in_stash.append(path)
 
-            rc_s, _, stash_err = _git(
-                "stash", "push", "--include-untracked", "-m", stash_label,
-                timeout=GIT_TIMEOUT_QUICK,
-            )
-            if rc_s == 0:
-                stash_applied = True
+            # Stash NOMMÉ et VÉRIFIÉ par son message (cf. _stash_push_verified).
+            stash_applied, stash_err = _stash_push_verified(stash_label, include_untracked=True)
+            if stash_applied:
                 log.info("Pre-pull stash effectué (%d entrées status, label=%s)",
                          len(status.splitlines()), stash_label)
                 if sensitive_in_stash:
                     log.warning("Stash contient des fichiers sensibles : %s — label %s",
                                 sensitive_in_stash, stash_label)
             else:
-                # Stash a échoué — on continue quand même, peut-être que pull marchera
-                log.warning("git stash a échoué (continuons quand même) : %s", stash_err)
+                # Pas de stash : on continue, `pull --ff-only` refuse de lui-même
+                # d'écraser des modifs locales (aucune perte possible).
+                log.warning("git stash non effectué (continuons quand même) : %s", stash_err)
 
-        # 3. Pull --ff-only sur état propre (ou presque)
-        rc_p, pull_out, pull_err = _git("pull", "--ff-only", timeout=GIT_TIMEOUT_PULL)
-
-        # 4. Si on a stashé, toujours essayer le pop (même si pull a échoué :
-        #    on veut restaurer l'état local plutôt que laisser le user en limbo)
-        if stash_applied:
-            rc_pop, _pop_out, pop_err = _git("stash", "pop", timeout=GIT_TIMEOUT_QUICK)
-            if rc_pop != 0:
-                stash_pop_warning = (
-                    f"Conflit lors de la restauration de tes modifs (`git stash pop`). "
-                    f"Elles sont SAUVES dans la pile (`git stash list` → label '{stash_label}'). "
-                    f"Pour les récupérer : `git stash pop` manuel quand tu auras résolu le conflit. "
-                    f"Détail: {pop_err[:300]}"
-                )
-                log.warning("git stash pop a échoué (label=%s) : %s", stash_label, pop_err)
+        # 3. Pull --ff-only sur état propre (ou presque). 4. Restauration
+        #    GARANTIE (finally) : même si le pull échoue ou lève, on dépile
+        #    NOTRE stash, retrouvé par son label (jamais `stash@{0}` à l'aveugle).
+        rc_p, pull_out, pull_err = -1, "", "pull non exécuté"
+        try:
+            rc_p, pull_out, pull_err = _git("pull", "--ff-only", timeout=GIT_TIMEOUT_PULL)
+        finally:
+            if stash_applied:
+                ref = _find_stash_ref_by_label(stash_label)
+                if ref is None:
+                    stash_pop_warning = (
+                        f"Stash « {stash_label} » introuvable au moment de la restauration : "
+                        "vérifie `git stash list` (aucun autre stash n'a été dépilé)."
+                    )
+                    log.error("Stash %s introuvable avant pop", stash_label)
+                else:
+                    rc_pop, _pop_out, pop_err = _git("stash", "pop", ref, timeout=GIT_TIMEOUT_QUICK)
+                    if rc_pop != 0:
+                        stash_pop_warning = (
+                            f"Conflit lors de la restauration de tes modifs (`git stash pop`). "
+                            f"Elles sont SAUVES dans la pile (`git stash list` → label '{stash_label}'). "
+                            f"Pour les récupérer : `git stash pop` manuel quand tu auras résolu le conflit. "
+                            f"Détail: {pop_err[:300]}"
+                        )
+                        log.warning("git stash pop a échoué (label=%s) : %s", stash_label, pop_err)
 
         # 5. Pull a échoué : on diagnostique et on rapporte
         if rc_p != 0:
@@ -646,12 +784,19 @@ def system_recover_stash() -> tuple[int, dict]:
             }
 
         # Apply (pas pop) : le stash reste dans la pile quoi qu'il arrive.
-        rc_a, _apply_out, apply_err = _git("stash", "apply", target["ref"], timeout=GIT_TIMEOUT_QUICK)
+        # Ref re-résolue par label juste avant (les stash@{N} se décalent).
+        apply_ref = _find_stash_ref_by_label(target["label"]) or target["ref"]
+        pre_status = _status_paths()
+        if pre_status is None:
+            return 500, {"ok": False, "error": "git status a échoué : récupération annulée"}
+        rc_a, _apply_out, apply_err = _git("stash", "apply", apply_ref, timeout=GIT_TIMEOUT_QUICK)
         if rc_a != 0:
-            # Conflit ou échec : on revient à un état propre pour ne pas laisser
-            # de marqueurs de conflit. checkout -- . annule les fichiers trackés
-            # modifiés par l'apply partiel ; le stash intact reste récupérable.
-            _git("checkout", "--", ".")
+            # Conflit ou échec : on annule UNIQUEMENT les fichiers trackés que
+            # l'apply partiel vient de modifier (propres avant). Jamais de
+            # `checkout -- .` global : il écraserait les modifs locales tolérées
+            # (USER_DATA_FILES : registre, workspaces.json...). Le stash intact
+            # reste récupérable.
+            reverted, leftovers = _undo_partial_apply(pre_status)
             return 409, {
                 "ok": False,
                 "error": "Conflit lors de la récupération du stash.",
@@ -663,6 +808,8 @@ def system_recover_stash() -> tuple[int, dict]:
                 "stash_label": target["label"],
                 "stash_ref": target["ref"],
                 "stashes": stashes,
+                "reverted_files": reverted,
+                "untracked_left": leftovers,
             }
 
         # Apply réussi. On laisse le stash dans la pile par prudence (l'utilisateur
@@ -825,28 +972,45 @@ def system_reset_to_upstream() -> tuple[int, dict]:
         # Lock orphelin
         _check_stale_lock()
 
-        # 1. Stash de sauvegarde (au cas où, label horodaté)
-        rc_st, status, _ = _git("status", "--porcelain")
-        stash_label = f"nebula-pre-reset-{int(time.time())}"
-        stash_applied = False
-        if status.strip():
-            rc_s, _, _ = _git("stash", "push", "--include-untracked", "-m", stash_label,
-                              timeout=GIT_TIMEOUT_QUICK)
-            if rc_s == 0:
-                stash_applied = True
-                log.info("Pre-reset stash effectué (label=%s)", stash_label)
-
-        # 2. Fetch
+        # 1. Fetch D'ABORD : s'il échoue (réseau, auth), rien n'a été touché
+        #    (avant : le stash -u était fait avant le fetch et un fetch KO
+        #    laissait les fichiers non suivis de l'utilisateur rangés dans la pile).
         rc_f, _, fetch_err = _git("fetch", "--quiet", timeout=GIT_TIMEOUT_FETCH)
         if rc_f != 0:
             return 500, {"ok": False, "error": "git fetch a échoué", "stderr": fetch_err}
 
-        # 3. Reset --hard sur upstream
+        # 2. Stash de sauvegarde des fichiers TRACKÉS modifiés uniquement :
+        #    `reset --hard` ne touche pas aux non suivis, inutile de les retirer
+        #    du disque. USER_DATA_FILES exclus du stash (préservés à part, cf. 3).
+        #    Stash nommé + vérifié par message ; si des modifs trackées existent
+        #    et que le stash n'est pas confirmé -> ABANDON (pas de reset).
+        rc_st, status, _ = _git("status", "--porcelain", "--untracked-files=no")
+        tracked_dirty = _filter_user_data(status.splitlines() if status.strip() else [])
+        stash_label = _new_stash_label("nebula-pre-reset")
+        stash_applied = False
+        if rc_st != 0:
+            return 500, {"ok": False, "error": "git status a échoué : reset annulé"}
+        if tracked_dirty:
+            stash_applied, stash_err = _stash_push_verified(
+                stash_label, include_untracked=False, exclude=tuple(sorted(USER_DATA_FILES)))
+            if not stash_applied:
+                return 500, {"ok": False,
+                             "error": "Sauvegarde (stash) des modifs locales impossible : reset annulé.",
+                             "stderr": stash_err, "dirty_files": tracked_dirty[:10]}
+            log.info("Pre-reset stash effectué (label=%s)", stash_label)
+
+        # 3. Reset --hard sur upstream, USER_DATA_FILES restaurés à l'identique
+        #    (registre, workspaces.json... s'ils sont trackés sans skip-worktree).
+        user_snap = _snapshot_user_data()
         rc_b, head_before, _ = _git("rev-parse", "HEAD")
-        rc_r, _, reset_err = _git("reset", "--hard", upstream)
+        try:
+            rc_r, _, reset_err = _git("reset", "--hard", upstream)
+        finally:
+            restored_user_data = _restore_user_data(user_snap)
         if rc_r != 0:
             return 500, {"ok": False, "error": "git reset --hard a échoué",
-                         "stderr": reset_err, "stash_applied": stash_applied}
+                         "stderr": reset_err, "stash_applied": stash_applied,
+                         "stash_label": stash_label if stash_applied else None}
 
         rc_a, head_after, _ = _git("rev-parse", "HEAD")
         rc_d, diff_out, _ = _git("diff", "--name-only", head_before, head_after)
@@ -870,6 +1034,7 @@ def system_reset_to_upstream() -> tuple[int, dict]:
             "needs_restart": needs_restart,
             "stash_applied": stash_applied,
             "stash_label": stash_label if stash_applied else None,
+            "user_data_restored": restored_user_data,
             "stashes_pruned": pruned["dropped"],
             "message": (
                 f"Repo réinitialisé sur {upstream}. "

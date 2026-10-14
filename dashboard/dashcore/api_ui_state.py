@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import json
 import threading
-from dashcore.config import DASHBOARD_DIR, log
+from dashcore.config import UI_STATE_FILE, log
 
-UI_STATE_FILE = DASHBOARD_DIR / "data" / "ui_state.json"
 _DEFAULTS: dict = {"theme": "nebula", "onboarded": False}
 _ALLOWED_KEYS = frozenset(_DEFAULTS)
 _THEME_LEGACY = {"atelier": "nebula", "atelier-clair": "nebula-clair"}

@@ -32,10 +32,10 @@ from dashcore.config import (
 
 
 from dashcore.helpers import (
-    _remove_dir_or_link, parse_skill_frontmatter, read_json,
+    _remove_dir_or_link, parse_skill_frontmatter, read_json, read_json_strict,
     resolve_cli, resolve_ws_dir, safe_id, write_json,
 )
-from dashcore.workspace_io import list_workspaces
+from dashcore.workspace_io import _ws_dir_from_entry, list_workspaces
 from dashcore.api_workspaces import _workspace_settings_path
 
 
@@ -387,17 +387,63 @@ def list_installed_plugins() -> dict:
     }
 
 
+# plugin_id = "<nom>" ou "<nom>@<marketplace>" : segments simples uniquement
+# (pas de séparateur de chemin, pas de lecteur, pas de "..").
+_PLUGIN_ID_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]{0,79}(@[A-Za-z0-9_][A-Za-z0-9._-]{0,79})?$")
+# Entrées racine de ~/.claude/plugins gérées par Claude Code : jamais des
+# dossiers de plugin, ne doivent JAMAIS être supprimées par un uninstall.
+_PLUGINS_RESERVED = {"cache", "data", "marketplaces", "store", "synced", "repos"}
+
+
+def _plugin_dir_candidates(plugins_dir: Path, plugin_id: str) -> list[Path]:
+    """Dossiers candidats (correspondance EXACTE, aucune sous-chaîne).
+
+    Layout actuel : plugins/cache/<marketplace>/<nom>/ ; legacy :
+    plugins/<plugin_id>/ ou plugins/<nom>/ (hors noms réservés).
+    """
+    name, _, mkt = plugin_id.partition("@")
+    out: list[Path] = []
+    if mkt:
+        out.append(plugins_dir / "cache" / mkt / name)
+    for legacy in (plugin_id, name):
+        if legacy.lower() not in _PLUGINS_RESERVED:
+            out.append(plugins_dir / legacy)
+    return out
+
+
+def _is_confined_plugin_dir(path: Path, plugins_dir: Path) -> bool:
+    """True si `path` est STRICTEMENT sous plugins_dir et n'est pas une entrée réservée."""
+    try:
+        base = plugins_dir.resolve()
+        # parent.resolve() / name : un plugin en symlink/junction est jugé
+        # sur son emplacement (seul le lien sera retiré par _remove_dir_or_link).
+        target = path.parent.resolve() / path.name
+    except OSError:
+        return False
+    if target == base or not target.is_relative_to(base):
+        return False
+    rel = target.relative_to(base)
+    if len(rel.parts) == 1 and rel.parts[0].lower() in _PLUGINS_RESERVED:
+        return False
+    # Sous cache/ : exiger cache/<mkt>/<nom> (jamais cache/ ou cache/<mkt>/).
+    if rel.parts[0].lower() == "cache" and len(rel.parts) < 3:
+        return False
+    return True
+
+
 def uninstall_plugin(plugin_id: str, remove_files: bool = False) -> tuple[int, dict]:
-    if not plugin_id or "\\" in plugin_id or ".." in plugin_id:
+    if not isinstance(plugin_id, str) or not _PLUGIN_ID_RE.match(plugin_id) or ".." in plugin_id:
         return 400, {"error": "plugin_id invalide"}
 
     with _MUTATION_LOCK:
+        # Lecture STRICTE avant tout backup : un settings.json corrompu ne
+        # doit ni écraser le .bak sain, ni être réécrit à partir d'un défaut vide.
+        settings = read_json_strict(CLAUDE_SETTINGS, {}) or {}
         # Backup settings.json
         if CLAUDE_SETTINGS.exists():
             bak = CLAUDE_SETTINGS.with_suffix(".json.bak")
             bak.write_text(CLAUDE_SETTINGS.read_text(encoding="utf-8"), encoding="utf-8")
 
-        settings = read_json(CLAUDE_SETTINGS, {}) or {}
         enabled = settings.get("enabledPlugins") or {}
         removed_from_config = plugin_id in enabled
         enabled.pop(plugin_id, None)
@@ -411,18 +457,13 @@ def uninstall_plugin(plugin_id: str, remove_files: bool = False) -> tuple[int, d
     removed_dir = None
     if remove_files:
         plugins_dir = CLAUDE_HOME / "plugins"
-        short = plugin_id.split("@")[0]
-        for entry in (plugins_dir / plugin_id, plugins_dir / short):
-            if entry.exists():
+        # Correspondance exacte + confinement resolve() : plus de fallback
+        # « sous-chaîne » qui pouvait viser un dossier sans rapport.
+        for entry in _plugin_dir_candidates(plugins_dir, plugin_id):
+            if entry.exists() and _is_confined_plugin_dir(entry, plugins_dir):
                 _remove_dir_or_link(entry)
                 removed_dir = str(entry)
                 break
-        if not removed_dir:
-            for d in plugins_dir.iterdir() if plugins_dir.exists() else []:
-                if d.is_dir() and (plugin_id in d.name or short in d.name):
-                    _remove_dir_or_link(d)
-                    removed_dir = str(d)
-                    break
 
     return 200, {
         "ok": True,
@@ -726,7 +767,8 @@ def list_skill_workspace_usage(skill_name: str) -> list[str]:
         return []
     out = []
     for w in list_workspaces():
-        skill_path = resolve_ws_dir(w["id"]) / ".claude" / "skills" / skill_name
+        # Entrée déjà lue : pas de relecture de workspaces.json par workspace.
+        skill_path = _ws_dir_from_entry(w) / ".claude" / "skills" / skill_name
         if skill_path.exists():
             out.append(w["id"])
     return out
@@ -1058,7 +1100,7 @@ def set_workspace_plugin(ws_id: str, plugin_id: str, enabled) -> tuple[int, dict
 
     path = _workspace_settings_path(ws_id)
     with _MUTATION_LOCK:
-        settings = read_json(path, {}) or {}
+        settings = read_json_strict(path, {}) or {}
         plugins = settings.setdefault("enabledPlugins", {})
         if enabled is None:
             # reset : retire l'override, revient au global

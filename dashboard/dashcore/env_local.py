@@ -104,6 +104,34 @@ def load_env_local() -> dict:
         return {}
 
 
+class EnvStoreUnreadable(RuntimeError):
+    """Le store d'env existe mais n'a pas pu être lu/déchiffré.
+
+    Levée par `load_env_local_strict` : toute écriture (set/delete) ou
+    génération (.mcp.json) basée sur un store illisible repartirait d'un dict
+    vide et ÉCRASERAIT les secrets réels -> on refuse explicitement.
+    """
+
+
+def load_env_local_strict() -> dict:
+    """Comme `load_env_local` mais lève `EnvStoreUnreadable` si le store
+    (chiffré ou clair) existe et est illisible. {} seulement si absent."""
+    if ENV_ENC_FILE.exists():
+        try:
+            plaintext = read_encrypted_file(ENV_ENC_FILE)
+            return _parse_env_text(plaintext.decode("utf-8"))
+        except CryptoError as e:
+            raise EnvStoreUnreadable(f"déchiffrement de {ENV_ENC_FILE.name} impossible : {e}") from e
+        except (OSError, UnicodeDecodeError) as e:
+            raise EnvStoreUnreadable(f"lecture de {ENV_ENC_FILE.name} impossible : {e}") from e
+    if not ENV_FILE.exists():
+        return {}
+    try:
+        return _parse_env_text(ENV_FILE.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as e:
+        raise EnvStoreUnreadable(f"lecture de {ENV_FILE.name} impossible : {e}") from e
+
+
 def _write_encrypted(env: dict) -> None:
     """Écrit le dict env dans le fichier chiffré (atomique + ACL stricte)."""
     write_encrypted_file(ENV_ENC_FILE, _serialize_env(env).encode("utf-8"))
@@ -144,8 +172,15 @@ def set_env_var(key: str, value: str) -> tuple[int, dict]:
 
     with _MUTATION_LOCK:
         if is_encrypted_mode():
+            # Lecture STRICTE : si le coffre ne se déchiffre pas (autre
+            # compte/poste, blob abîmé), load_env_local renverrait {} et la
+            # réécriture ne garderait que cette clé -> perte de tout le coffre.
             try:
-                env = load_env_local()
+                env = load_env_local_strict()
+            except EnvStoreUnreadable as e:
+                log.error("env: set %s refusé, coffre illisible : %s", key, e)
+                return 409, {"error": f"Coffre d'environnement illisible ({e}) : écriture refusée pour ne pas l'écraser."}
+            try:
                 env[key] = value
                 _write_encrypted(env)
             except CryptoError as e:
@@ -165,7 +200,11 @@ def delete_env_var(key: str) -> tuple[int, dict]:
 
     with _MUTATION_LOCK:
         if is_encrypted_mode():
-            env = load_env_local()
+            try:
+                env = load_env_local_strict()
+            except EnvStoreUnreadable as e:
+                log.error("env: delete %s refusé, coffre illisible : %s", key, e)
+                return 409, {"error": f"Coffre d'environnement illisible ({e}) : suppression refusée pour ne pas l'écraser."}
             if key not in env:
                 return 404, {"error": f"clé absente : {key}"}
             try:
