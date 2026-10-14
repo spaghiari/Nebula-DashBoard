@@ -144,8 +144,9 @@ claude-workspace/
 ├── dashboard/                   # Le dashboard web
 │   ├── server.py                # Serveur Python stdlib + dispatcher de routes
 │   ├── index.html               # Squelette SPA
-│   ├── app.css                  # Design system (5 thèmes)
-│   ├── app.js                   # SPA vanilla JS (router, pages, modales)
+│   ├── app.css                  # Design system : tokens (8 thèmes) + composants
+│   ├── css/                     # redesign.css (refonte 2026-10), editor-matrix.css, sessions.css
+│   ├── app.js                   # SPA vanilla JS (page workspace, modales, palette)
 │   ├── dashcore/                # Backend modulaire
 │   │   ├── config.py            # Constantes & chemins
 │   │   ├── helpers.py           # I/O, validation, fichiers
@@ -162,7 +163,8 @@ claude-workspace/
 │   │   ├── api_skills_library.py # Bibliothèque de skills centralisée (magasin)
 │   │   ├── api_ui_state.py      # Persistance thème + onboarding côté serveur
 │   │   └── system_update.py     # Auto-update bulletproof (auto-stash + reset)
-│   └── data/
+│   ├── tests/                   # Tests unittest stdlib + CI GitLab (cf. tests/README.md)
+│   └── data/                    # Déplaçable via NEBULA_DATA_DIR (sauf mcp_recipes.json)
 │       ├── workspaces.json      # ← LOCAL, gitignored
 │       ├── ui_state.json        # ← LOCAL, gitignored (thème, onboarded)
 │       ├── skills-library/      # Magasin central de skills (source de vérité)
@@ -206,7 +208,8 @@ claude-workspace/
 
 ## 📋 Prérequis
 
-- **Windows 10/11** — adaptable Linux/macOS (les scripts `.bat` sont à porter)
+- **Windows 10/11** -- le serveur tourne aussi sous Linux/macOS (`python3 server.py`),
+  sans les fonctions propres à Windows (cf. [Linux / macOS](#-linux--macos))
 - **Python 3.10+** — stdlib uniquement, aucun `pip install` requis
 - **Node.js** + **npx** — pour les MCPs qui s'installent via `npx -y …`
 - **Claude Code CLI** — `npm install -g @anthropic-ai/claude-code`
@@ -227,6 +230,46 @@ scripts\start-dashboard.bat
 Ouvre http://127.0.0.1:4777/ — au premier lancement, la **visite guidée**
 te montre les fonctions essentielles avec spotlight sur l'UI réelle (~2 min,
 9 étapes). Tu peux la relancer à tout moment depuis la page Aide.
+
+### ⚙️ Configuration (variables d'environnement)
+
+Toutes optionnelles ; sans elles, le comportement est celui d'origine.
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `NEBULA_PORT` | `4777` | Port d'écoute (`--port` prime ; valeur invalide = avertissement + défaut) |
+| `NEBULA_HOST` | `127.0.0.1` | Hôte d'écoute (`--host` prime). Hors boucle locale : **avertissement au démarrage**, l'API n'a pas d'authentification |
+| `NEBULA_ALLOWED_HOSTS` | (vide) | Noms supplémentaires acceptés dans l'en-tête `Host` (ex. `nas.lan`, **sans port**), séparés par des virgules |
+| `NEBULA_DATA_DIR` | `dashboard/data` | Dossier des données utilisateur (`workspaces.json`, `ui_state.json`, bibliothèque de skills, recettes locales, état de sync, sessions actives). Pour migrer : déplacer ces fichiers dans le nouveau dossier |
+| `ATELIER_ROOT` | parent de `dashboard/` | Racine de l'installation (registre MCP, templates, workspaces, `.env.local`) |
+
+Le contrôle anti DNS-rebinding accepte toujours `127.0.0.1` / `localhost`,
+plus l'hôte configuré (sauf adresse joker `0.0.0.0` / `::`) et
+`NEBULA_ALLOWED_HOSTS`. Pour un accès distant, préfère un tunnel SSH
+(`ssh -L 4777:127.0.0.1:4777 poste`) à une écoute réseau.
+
+### 🐧 Linux / macOS
+
+```sh
+cd claude-workspace/dashboard
+python3 server.py              # ou : NEBULA_PORT=4800 python3 server.py --no-browser
+```
+
+Tout le pilotage (workspaces, MCPs, skills, plugins, `.env.local` en clair)
+fonctionne. Restent propres à Windows et renvoient une erreur explicite
+(HTTP 501) : le lancement d'une session dans une console (`cmd`), et
+l'ouverture d'un fichier si `xdg-open` / `open` est absent. Le chiffrement
+du coffre (DPAPI) est indisponible hors Windows.
+
+### 🧪 Tests
+
+```sh
+python -m unittest discover -s dashboard/tests
+```
+
+Stdlib uniquement, en bac à sable (aucune donnée réelle lue ni écrite),
+Windows et Linux. Détail, couverture et CI GitLab (fichier dédié, inactif
+par défaut) : [`dashboard/tests/README.md`](dashboard/tests/README.md).
 
 ---
 
