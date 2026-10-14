@@ -314,7 +314,7 @@ async function route(opts) {
    Polling toutes les 5 s UNIQUEMENT si l'onglet est visible, + refresh
    immediat au retour de visibilite. Aucun re-render de page : seuls
    les noeuds marques sont mis a jour, et seulement si l'etat change :
-   - [data-ws-live=<id>]            : marqueur dot / badge idle
+   - [data-ws-state=<id>]           : marqueur d'etat (cellule, pastille, en-tete)
    - [data-ws-card=<id>]            : card / rangee / featured (presence)
    - [data-ws-session-actions=<id>] : boutons Stop vs Lancer (detail)
    ================================================================ */
@@ -322,21 +322,6 @@ function sessionState(id) {
   const s = (STATE.activeSessions || {})[id];
   if (!s) return null;
   return s.state === 'idle' ? 'idle' : 'running';
-}
-
-function liveMarkerInner(id, cls) {
-  const st = sessionState(id);
-  if (!st) return '';
-  if (st === 'idle') {
-    return `<span class="${cls} is-idle" title="Terminal ouvert, Claude Code fermé"></span>`
-      + `<span class="ws-idle-badge" title="La fenêtre cmd de ce workspace est encore ouverte mais Claude Code n'y tourne plus. Stop ferme la fenêtre.">Terminal ouvert</span>`;
-  }
-  return `<span class="${cls}" title="Session Claude Code active"></span>`;
-}
-
-// Wrapper display:contents : n'altere pas la mise en page du dot.
-function liveMarker(id, cls) {
-  return `<span class="ws-live-wrap" data-ws-live="${escapeHtml(id)}" data-live-cls="${escapeHtml(cls)}">${liveMarkerInner(id, cls)}</span>`;
 }
 
 // Date de lancement de la session (chronometre « depuis »), ISO ou ''.
@@ -433,9 +418,6 @@ function applyActiveSessions(next) {
   STATE.activeSessions = next;
   for (const id of changed) {
     const sel = CSS.escape(id);
-    for (const wrap of document.querySelectorAll(`[data-ws-live="${sel}"]`)) {
-      wrap['innerHTML'] = liveMarkerInner(id, wrap.dataset.liveCls || '');
-    }
     for (const wrap of document.querySelectorAll(`[data-ws-state="${sel}"]`)) {
       wrap['innerHTML'] = wsStateInner(id, wrap.dataset.stateKind || 'cell');
     }

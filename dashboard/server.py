@@ -90,6 +90,7 @@ from dashcore.system_update import (
     _list_nebula_stashes,
 )
 from dashcore.api_ui_state import get_ui_state, patch_ui_state
+from dashcore.plugin_updates import plugin_updates, refresh_marketplaces
 from dashcore.api_plugins import (
     list_plugins, list_marketplace_plugins, read_plugin_readme,
     list_installed_plugins, uninstall_plugin,
@@ -423,6 +424,10 @@ def h_post_enable_plugin(q, b):     return enable_plugin_cli(b.get("plugin_id", 
 def h_post_disable_plugin(q, b):    return disable_plugin_cli(b.get("plugin_id", ""))
 def h_post_uninstall_plugin(q, b):  return uninstall_plugin_cli(b.get("plugin_id", ""))
 def h_post_uninstall_soft(q, b):    return uninstall_plugin(b.get("plugin_id", ""), remove_files=bool(b.get("remove_files")))
+# Installé vs clone local du marketplace (aucun réseau) ; rafraîchissement du
+# clone à la demande via `claude plugin marketplace update`.
+def h_get_plugins_outdated(q, b):   return 200, plugin_updates()
+def h_post_refresh_marketplaces(q, b): return refresh_marketplaces(b.get("name") or None)
 
 # ── Agents & Commands ──────────────────────────────────────────────────────
 def h_get_agents(q, b):                  return 200, list_agents(None)
@@ -630,6 +635,7 @@ ROUTES_GET = [
     # Plugins
     (re.compile(r"^/api/plugins$"),                                                        h_get_plugins),
     (re.compile(r"^/api/plugins/installed$"),                                              h_get_plugins_installed),
+    (re.compile(r"^/api/plugins/outdated$"),                                               h_get_plugins_outdated),
     (re.compile(rf"^/api/plugins/marketplace/({_ID})/(plugins|external_plugins)/({_ID})/readme$"), h_get_marketplace_readme),
     (re.compile(rf"^/api/plugins/marketplace/({_ID})$"),                                    h_get_marketplace),
     # Agents & commands
@@ -712,6 +718,7 @@ ROUTES_POST = [
     (re.compile(r"^/api/plugins/disable$"),                                                h_post_disable_plugin),
     (re.compile(r"^/api/plugins/uninstall$"),                                              h_post_uninstall_plugin),
     (re.compile(r"^/api/plugins/uninstall-soft$"),                                         h_post_uninstall_soft),
+    (re.compile(r"^/api/plugins/marketplaces/refresh$"),                                   h_post_refresh_marketplaces),
     # Agents & commands
     (re.compile(r"^/api/agents$"),                                                         h_post_create_agent),
     (re.compile(r"^/api/commands$"),                                                       h_post_create_command),

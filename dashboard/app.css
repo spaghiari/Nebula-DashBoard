@@ -264,10 +264,6 @@ body {
 :root[data-theme="doux"] .input-search {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%234a4658' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='8'/><path d='m21 21-4.35-4.35'/></svg>");
 }
-/* Halos « nebuleuse » (--g1/--g2 poses par wsGradient) : HSL fixes en sat
-   78-82% qui jurent sur fond clair. On baisse drastiquement leur opacite
-   et celle des glows de gem en thème clair pour rester reposant. */
-
 /* Marine : dark + bleu profond */
 :root[data-theme="marine"] {
   --bg: #08101c;
@@ -642,20 +638,6 @@ body {
 /* Quand le badge est visible, il prend le margin-left:auto ; le kbd revient
    à une marge fixe pour ne pas se télescoper avec le badge. */
 .nav-badge:not([hidden]) ~ kbd { margin-left: var(--sp-2); }
-/* Pastille générique sur un onglet (compteur secondaire). */
-.tab-badge {
-  margin-left: 6px;
-  min-width: 16px; height: 16px;
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 0 4px;
-  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  line-height: 1;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid var(--accent);
-  border-radius: 8px;
-  vertical-align: middle;
-}
 
 .sidebar-footer {
   border-top: 1px solid var(--border);
@@ -768,10 +750,9 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 var(--sp-6);
 }
-.topbar-left, .topbar-right {
+.topbar-left {
   display: flex; align-items: center; gap: var(--sp-2);
 }
-.topbar-right { gap: var(--sp-2); }
 
 .breadcrumbs {
   display: flex; align-items: center; gap: var(--sp-2);
@@ -859,7 +840,6 @@ body {
   letter-spacing: 0.05em;
   font-size: 11px;
 }
-.section-label::after.section-label-no-rule { display: none; }
 
 /* === LOADER & SPINNER ========================================= */
 .page-loader {
@@ -891,28 +871,6 @@ body {
   animation: spin 700ms linear infinite;
 }
 
-.skeleton {
-  background: linear-gradient(90deg, var(--surface-1), var(--surface-2), var(--surface-1));
-  background-size: 200% 100%;
-  animation: skel 1.4s ease-in-out infinite;
-  border-radius: var(--r-sm);
-}
-@keyframes skel { 0% { background-position: -100% 0; } 100% { background-position: 200% 0; } }
-.skeleton-line { height: 12px; margin-bottom: 8px; }
-.skeleton-card {
-  height: 140px;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  position: relative; overflow: hidden;
-}
-.skeleton-card::after {
-  content: ""; position: absolute; inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.03), transparent);
-  background-size: 200% 100%;
-  animation: skel 1.4s ease-in-out infinite;
-}
-
 /* === TYPO UTILITIES =========================================== */
 .mono { font-family: var(--font-mono); }
 .tabular { font-variant-numeric: tabular-nums slashed-zero; }
@@ -921,8 +879,6 @@ body {
 .text-ok { color: var(--ok); }
 .text-warn { color: var(--warn); }
 .text-err { color: var(--err); }
-.text-info { color: var(--info); }
-.text-accent { color: var(--accent); }
 
 /* === BUTTONS ================================================== */
 .btn {
@@ -1016,11 +972,6 @@ body {
 .icon-btn:hover { background: var(--hover); color: var(--text); }
 .icon-btn svg { width: 16px; height: 16px; }
 
-.btn-group { display: inline-flex; }
-.btn-group .btn { border-radius: 0; border-right-width: 0; }
-.btn-group .btn:first-child { border-top-left-radius: var(--r-sm); border-bottom-left-radius: var(--r-sm); }
-.btn-group .btn:last-child { border-radius: 0 var(--r-sm) var(--r-sm) 0; border-right-width: 1px; }
-
 /* === CARDS ==================================================== */
 .card {
   background: var(--surface-1);
@@ -1029,11 +980,6 @@ body {
   padding: var(--sp-5);
   box-shadow: var(--shadow-1);
   transition: border-color var(--d-fast) var(--ease), transform var(--d-fast) var(--ease);
-}
-.card.hoverable { cursor: pointer; }
-.card.hoverable:hover {
-  border-color: var(--border-strong);
-  transform: translateY(-1px);
 }
 .card-header {
   display: flex; align-items: center; justify-content: space-between;
@@ -1077,7 +1023,6 @@ body {
 
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: var(--sp-4); }
 .field-label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
-.field-help { font-size: 11.5px; color: var(--text-dim); }
 .field-row { display: flex; gap: var(--sp-3); }
 .field-row > .field { flex: 1; margin: 0; }
 
@@ -1114,16 +1059,8 @@ body {
   background: var(--text-dim);
   flex-shrink: 0;
 }
-.dot-ok { background: var(--ok); }
-.dot-warn { background: var(--warn); }
 .dot-err { background: var(--err); }
 .dot-info { background: var(--info); }
-
-@keyframes pulse-dot {
-  0%,100% { box-shadow: 0 0 0 0 currentColor; }
-  50%     { box-shadow: 0 0 0 4px transparent; }
-}
-.dot-live { color: var(--ok); animation: pulse-dot 2s infinite; }
 
 /* === SWITCH (toggle) ========================================== */
 .switch {
@@ -1610,9 +1547,6 @@ body {
 }
 
 /* Topbar : badge de mise à jour visible et pulsant */
-.topbar-right {
-  display: flex; align-items: center; gap: var(--sp-2);
-}
 #topbar-actions {
   display: flex; align-items: center; gap: var(--sp-2);
   flex-wrap: wrap;
@@ -1648,100 +1582,6 @@ body {
 @keyframes badge-glow {
   0%, 100% { box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent); }
   50%      { box-shadow: 0 2px 14px color-mix(in srgb, var(--accent) 60%, transparent); }
-}
-
-/* Diagnostic MCP : modal avec sections */
-.diag-header {
-  padding: var(--sp-3);
-  border-radius: 8px;
-  margin-bottom: var(--sp-3);
-  border: 1px solid var(--border);
-}
-.diag-header.is-ok   { background: rgba(16, 185, 129, 0.08); border-color: rgba(16, 185, 129, 0.3); }
-.diag-header.is-fail { background: rgba(239, 68, 68, 0.08);  border-color: rgba(239, 68, 68, 0.3); }
-.diag-status-dot {
-  display: inline-block;
-  width: 10px; height: 10px;
-  border-radius: 50%;
-  background: var(--err);
-}
-.is-ok .diag-status-dot { background: var(--ok); animation: pulse 2s ease-in-out infinite; }
-.is-fail .diag-status-dot { background: var(--err); }
-
-.diag-section {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: var(--sp-3);
-  margin-bottom: var(--sp-2);
-}
-.diag-section-title {
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: var(--sp-2);
-  color: var(--text);
-}
-.diag-section-title code { font-size: 11px; }
-.diag-row {
-  display: flex; gap: var(--sp-2);
-  padding: 4px 0;
-  font-size: 12px;
-  align-items: baseline;
-  border-bottom: 1px dashed var(--border);
-}
-.diag-row:last-child { border-bottom: none; }
-.diag-key {
-  flex-shrink: 0;
-  min-width: 110px;
-  color: var(--text-muted);
-  font-size: 11.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-.diag-ok  { color: var(--ok); }
-.diag-bad { color: var(--err); font-weight: 500; }
-.diag-hint {
-  margin-top: var(--sp-2);
-  padding: var(--sp-2);
-  background: rgba(251, 191, 36, 0.08);
-  border-left: 3px solid var(--warn, #fbbf24);
-  border-radius: 4px;
-  font-size: 12px;
-  color: var(--text);
-}
-.diag-output {
-  font-family: var(--font-mono, monospace);
-  font-size: 11px;
-  background: var(--bg);
-  padding: var(--sp-2);
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  max-height: 200px;
-  overflow: auto;
-  white-space: pre-wrap;
-  margin: 0;
-}
-
-.diag-errors {
-  display: flex; flex-direction: column;
-  gap: var(--sp-2);
-  margin-top: var(--sp-2);
-  max-height: 240px;
-  overflow-y: auto;
-}
-.diag-error-item {
-  padding: var(--sp-2);
-  background: var(--bg);
-  border-left: 3px solid var(--err);
-  border-radius: 4px;
-}
-.diag-error-meta { font-size: 10.5px; color: var(--text-muted); margin-bottom: 4px; }
-.diag-error-snippet {
-  font-family: var(--font-mono, monospace);
-  font-size: 11.5px;
-  color: var(--text);
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
 /* Bandeau "Mise en route" sur Home (apparaît tant que la checklist n'est pas à 6/6) */
@@ -1869,24 +1709,6 @@ body {
 }
 .palette-input::placeholder { color: var(--text-dim); }
 .palette-list { max-height: 380px; overflow-y: auto; padding: var(--sp-2); }
-.palette-item {
-  display: flex; align-items: center; gap: var(--sp-3);
-  padding: var(--sp-2) var(--sp-3);
-  cursor: pointer;
-  border-radius: var(--r-sm);
-  transition: background var(--d-fast) var(--ease);
-}
-.palette-item:hover, .palette-item.active { background: var(--accent-soft); }
-.palette-item .kind {
-  font-family: var(--font-mono); font-size: 9.5px;
-  letter-spacing: 0.14em; text-transform: uppercase;
-  color: var(--text-dim);
-  min-width: 70px;
-}
-.palette-item .label { color: var(--text); flex: 1; }
-.palette-empty {
-  padding: var(--sp-6); text-align: center; color: var(--text-dim); font-size: 13px;
-}
 .palette-hint {
   display: flex; gap: var(--sp-3);
   padding: var(--sp-3) var(--sp-5);
@@ -1982,11 +1804,8 @@ body {
   margin-top: 2px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.list-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
 
 /* === PAGE: MCPs ============================================== */
-
-.filter-group { display: flex; gap: var(--sp-2); align-items: center; }
 
 .mcp-grid {
   display: grid;
@@ -3074,13 +2893,6 @@ body {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-.ws-pick-list {
-  display: flex; flex-direction: column;
-  gap: var(--sp-2);
-  max-height: 320px;
-  overflow-y: auto;
-}
-
 /* === TEMPLATE EDITOR ========================================== */
 .tpl-meta-bar {
   display: flex;
@@ -3369,7 +3181,6 @@ body {
 
 /* === MISC ==================================================== */
 .row { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
-.row-between { justify-content: space-between; }
 .stack { display: flex; flex-direction: column; gap: var(--sp-3); }
 .spacer { flex: 1; }
 
@@ -3381,12 +3192,6 @@ body {
   border-radius: 3px;
   border: 1px solid var(--border);
   color: var(--text-muted);
-}
-
-.divider {
-  height: 1px;
-  background: var(--border);
-  margin: var(--sp-5) 0;
 }
 
 .tabs {
@@ -3618,9 +3423,9 @@ body {
 /* Indicateur de focus clavier pour tous les controles cliquables
    non-btn (cards, lignes, onglets, segments). Les .btn et 2 textareas
    ont deja leur propre regle ; ceci comble le reste. */
-.nav-link:focus-visible, .card.hoverable:focus-visible,
+.nav-link:focus-visible,
 .mcp-card:focus-visible, .recipe-card:focus-visible,
-.list-row:focus-visible, .palette-item:focus-visible, .theme-card:focus-visible, .quick-btn:focus-visible, .tab:focus-visible,
+.list-row:focus-visible, .theme-card:focus-visible, .quick-btn:focus-visible, .tab:focus-visible,
 .seg-control button:focus-visible, .icon-btn:focus-visible, .help-hub-card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -3634,8 +3439,8 @@ body {
 }
 
 /* === A11Y : PREFERS-REDUCED-MOTION ============================= */
-/* Neutralise les animations decoratives (pulse-dot, badge-glow,
-   update-glow, *-live-pulse, spin, skel, pulse...) et les transitions
+/* Neutralise les animations decoratives (badge-glow,
+   update-glow, *-live-pulse, spin, pulse...) et les transitions
    pour les utilisateurs sensibles au mouvement. Place en fin de
    fichier pour primer dans la cascade. */
 @media (prefers-reduced-motion: reduce) {

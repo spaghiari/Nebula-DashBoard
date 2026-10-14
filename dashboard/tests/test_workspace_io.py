@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest import mock
 
-from _support import HOME, ROOT, SANDBOX, make_workspace, reset_sandbox
+from _support import HOME, ROOT, SANDBOX, make_workspace, reset_sandbox, rmtree, write_json_file
 from dashcore import workspace_io
 from dashcore.workspace_io import all_stats, project_dir_for_path
 
@@ -168,6 +169,75 @@ class StatsHistoryTests(unittest.TestCase):
         self.assertEqual(workspace_io.stats_history()["points"], [])
         self.assertTrue(workspace_io.record_stats_history(self._stats(1, 1)))
         self.assertEqual(len(workspace_io.stats_history()["points"]), 1)
+
+
+class SanityMigrationTests(unittest.TestCase):
+    """Indicateur « données à migrer » du sanity-check (bloc Santé)."""
+
+    def setUp(self):
+        reset_sandbox()
+        self.base = SANDBOX / "sanity-migration"
+        rmtree(self.base)
+        self.src = self.base / "defaut"
+        self.dst = self.base / "perso"
+        write_json_file(self.src / "workspaces.json", {"version": "1.0", "workspaces": []})
+        write_json_file(self.src / "ui_state.json", {"theme": "sobre"})
+        (self.src / "skills-library" / "s1").mkdir(parents=True)
+        (self.src / "skills-library" / "s1" / "SKILL.md").write_text("x\n", encoding="utf-8")
+        self.dst.mkdir(parents=True)
+
+    def tearDown(self):
+        rmtree(self.base)
+
+    def _patch(self, custom=True, src=None, dst=None):
+        return (
+            mock.patch.object(workspace_io._config, "DATA_DIR_IS_CUSTOM", custom),
+            mock.patch.object(workspace_io._config, "DATA_DIR", dst or self.dst),
+            mock.patch.object(workspace_io._data_migration, "DEFAULT_DATA_DIR", src or self.src),
+        )
+
+    def _pending(self, **kw):
+        a, b, c = self._patch(**kw)
+        with a, b, c:
+            return workspace_io.pending_data_migration()
+
+    def test_fichiers_a_copier_signales(self):
+        # Un fichier déjà identique et un en conflit : seuls les manquants comptent.
+        write_json_file(self.dst / "workspaces.json", {"version": "1.0", "workspaces": []})
+        write_json_file(self.dst / "ui_state.json", {"theme": "pop"})
+        before = sorted(p.name for p in self.dst.rglob("*"))
+        mig = self._pending()
+        self.assertEqual(mig["to_copy"], 1)
+        self.assertEqual(mig["conflicts"], 1)
+        self.assertEqual(mig["sample"], ["skills-library/s1/SKILL.md"])
+        self.assertEqual(mig["command"], "python server.py --migrate-data")
+        self.assertEqual(mig["data_dir"], str(self.dst))
+        # Lecture seule : rien n'est copié.
+        self.assertEqual(sorted(p.name for p in self.dst.rglob("*")), before)
+
+    def test_dossier_par_defaut_aucun_signal(self):
+        self.assertIsNone(self._pending(custom=False))
+
+    def test_tout_deja_migre_aucun_signal(self):
+        write_json_file(self.dst / "workspaces.json", {"version": "1.0", "workspaces": []})
+        write_json_file(self.dst / "ui_state.json", {"theme": "pop"})
+        (self.dst / "skills-library" / "s1").mkdir(parents=True)
+        (self.dst / "skills-library" / "s1" / "SKILL.md").write_text("x\n", encoding="utf-8")
+        self.assertIsNone(self._pending())
+
+    def test_variable_pointant_sur_le_defaut_aucun_signal(self):
+        self.assertIsNone(self._pending(dst=self.src))
+
+    def test_source_absente_aucun_signal(self):
+        self.assertIsNone(self._pending(src=self.base / "inexistant"))
+
+    def test_sanity_check_expose_la_cle(self):
+        a, b, c = self._patch()
+        with a, b, c:
+            r = workspace_io.sanity_check()
+        self.assertEqual(r["data_migration"]["to_copy"], 3)
+        # Bac à sable sans NEBULA_DATA_DIR : clé présente, valeur nulle.
+        self.assertIsNone(workspace_io.sanity_check()["data_migration"])
 
 
 if __name__ == "__main__":

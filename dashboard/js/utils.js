@@ -54,22 +54,7 @@ function nameHue(s) {
   for (const c of String(s ?? '')) h = (h * 33 + c.charCodeAt(0)) % 360;
   return h;
 }
-
-// Applique un degrade "nebuleuse" derive du nom sur un element : pose les
-// custom properties --g1/--g2 (deux teintes HSL voisines) que le CSS
-// consomme pour le halo radial + le gem. C'est la SEULE couleur "en dur"
-// autorisee par le brief (generee, pas codee). Retourne la teinte de base
-// pour reutilisation (ex. accent d'un sparkline si on en ajoute un).
-function wsGradient(el, name) {
-  const h = nameHue(name);
-  if (el) {
-    el.style.setProperty('--g1', `hsl(${h} 82% 64%)`);
-    el.style.setProperty('--g2', `hsl(${(h + 48) % 360} 78% 58%)`);
-  }
-  return h;
-}
 window.nameHue = nameHue;
-window.wsGradient = wsGradient;
 
 // Factory bouton standardise : icone optionnelle (SVG trust) + label escape via escapeHtml.
 function btn(label, cls = 'btn', icon = null) {
@@ -365,7 +350,8 @@ function selfImprovingMark(wsId) {
    element portant hcAttrs(groups) ; une seule carte partagee
    (#hovercard), delegation sur document.
      groups : [{ title, ws: [ids] }  -> pastille + libelle + id, lien
-               { title, items: [txt] } -> liste simple]
+               { title, items: [txt] } -> liste simple
+               { title, items: [txt], text: true } -> phrases, sans compteur]
    Ergonomie : ouverture 200 ms au survol (pas de clignotement en
    traversant une grille), immediate au focus clavier ; fermeture
    150 ms (le pointeur peut entrer dans la carte, liens cliquables) ;
@@ -403,9 +389,12 @@ function _hcRender(groups) {
           ? `<a class="hc-row" href="#/workspace/${encodeURIComponent(id)}" tabindex="-1">${wsGem(w)}<span class="hc-name">${escapeHtml(w.label || id)}</span><span class="hc-id">${escapeHtml(id)}</span></a>`
           : `<span class="hc-row"><span class="hc-ext" aria-hidden="true"></span><span class="hc-name">${escapeHtml(id)}</span></span>`;
       })
-      : g.items.map(t => `<span class="hc-row"><span class="hc-ext" aria-hidden="true"></span><span class="hc-name">${escapeHtml(t)}</span></span>`);
+      : g.text
+        // { title, items, text: true } : phrases explicatives (retour a la ligne, sans compteur).
+        ? g.items.map(t => `<p class="hc-text">${escapeHtml(t)}</p>`)
+        : g.items.map(t => `<span class="hc-row"><span class="hc-ext" aria-hidden="true"></span><span class="hc-name">${escapeHtml(t)}</span></span>`);
     const n = (g.ws || g.items).length;
-    return `<div class="hc-group"><div class="hc-title">${escapeHtml(g.title)} <b>${n}</b></div>${rows.join('')}</div>`;
+    return `<div class="hc-group"><div class="hc-title">${escapeHtml(g.title)}${g.text ? '' : ` <b>${n}</b>`}</div>${rows.join('')}</div>`;
   }).join('');
 }
 

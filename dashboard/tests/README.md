@@ -34,6 +34,8 @@ Durée : quelques secondes (serveurs HTTP et dépôts git temporaires inclus).
 | `test_mcps.py` | Sync `.mcp.json` non destructive (serveurs étrangers préservés, fichier illisible -> 409), refus des valeurs masquées |
 | `test_skills_library.py` | `list_library`, distribution / désynchronisation, cache de `_hash_dir` (hash identique à l'algorithme de référence, invalidation par mtime_ns + taille, aucune relecture sur cache valide) |
 | `test_overlays.py` | `list_overlays` / `apply_overlay` : exclusion `__pycache__` / `.pyc` (`_is_junk`), idempotence, fragment CLAUDE.md, profondeur, mode-gating, hook référencé absent ; copie de l'overlay réel |
+| `test_mcp_probe.py` | Verdict mémorisé de « Diagnostiquer » : signature de config (champs techniques seuls, normalisation aller-retour d'édition), écriture atomique dans `DATA_DIR`, élagage, fichier corrompu, fenêtre de 7 jours, `last_probe` exposé sans être persisté dans le registre |
+| `test_plugin_updates.py` | Plugins « à jour » : comparaison de versions, révision / contenu vs clone local du marketplace, sources distantes (épinglée, branche, version non vérifiable), confinement des sources relatives, rafraîchissement CLI (échec -> HTTP 502, verrou 409) |
 | `test_mcp_recipes.py` | Catalogue livré cohérent (ids, transport, `${KEY}` déclarés), recettes locales CRUD + validation, fichier corrompu jamais écrasé |
 | `test_files.py` | Explorateur : `.env*` / `.mcp.json` créables avec contenu réel, écrasement refusé (403) |
 | `test_data_migration.py` | Migration vers `NEBULA_DATA_DIR` : copie sans écrasement, source intacte, marqueur, `--migrate-data` ; démarrage serveur réel |

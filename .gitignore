@@ -46,6 +46,10 @@
 /dashboard/data/stats_history.json.*
 /dashboard/data/*.corrupt-*
 
+# Dernier verdict de « Diagnostiquer » par MCP (pastille « vérifié », runtime)
+/dashboard/data/mcp_probe_state.json
+/dashboard/data/mcp_probe_state.json.*
+
 # Bibliotheque de skills locale (runtime, contenu personnel)
 /dashboard/data/skills-library/
 

@@ -6,6 +6,9 @@
    la page MCPs : .pg-filters, .xcard, css/redesign.css section 10).
    loadInstalledPlugins / pluginCard : cartes avec interrupteur global
    et desinstallation ; pluginState : actif / desactive / casse / absent.
+   pluginUpdatesInfo / pluginUpdateBadge : mises a jour d'apres le clone
+   local du marketplace (GET /api/plugins/outdated), bouton « Rafraichir
+   les marketplaces » (POST /api/plugins/marketplaces/refresh).
    renderPluginScope : override par workspace (Actif / Inactif / Heriter).
    modalInstallPlugin : modal d'installation depuis marketplace.
    modalPluginReadme : visualisation du README d'un plugin.
@@ -74,10 +77,66 @@ function pluginState(p) {
     : { key: 'off', pill: '<span class="pill mute">désactivé</span>' };
 }
 
+// ── Mises a jour (GET /api/plugins/outdated, dashcore/plugin_updates.py) ──
+// Comparaison installe vs CLONE LOCAL du marketplace, sans reseau : le
+// libelle dit toujours d'ou vient l'information et de quand elle date.
+// Partage par le KPI plugins de l'Accueil (js/pages/home.js).
+function fmtDayMonth(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+}
+
+function pluginUpdatesInfo(upd) {
+  if (!upd || !upd.counts) {
+    return { short: 'mises à jour : état inconnu', cls: '', when: '', byId: {},
+      groups: [{ title: 'Mises à jour', text: true, items: ['Marketplace local illisible : état des mises à jour inconnu.'] }] };
+  }
+  const c = upd.counts, total = upd.total || 0;
+  const day = upd.checked_at ? fmtDayMonth(upd.checked_at) : '';
+  const src = day ? ` · marketplace du ${day}` : '';
+  let short, cls = '';
+  if (!total) short = 'aucun plugin installé';
+  else if (c.outdated) { short = `${c.outdated} mise${c.outdated > 1 ? 's' : ''} à jour dispo`; cls = 'warn'; }
+  else if (c.unknown === total) short = 'mises à jour : état inconnu';
+  else if (c.unknown) short = `${c.up_to_date}/${total} à jour${src}`;
+  else { short = `à jour${src}`; cls = 'ok'; }
+  const when = upd.checked_at
+    ? `rafraîchi le ${fmtDateTime(upd.checked_at)} (${fmtAgo(upd.checked_at)})`
+    : 'date de rafraîchissement inconnue';
+  const names = (st) => Object.entries(upd.plugins || {}).filter(([, r]) => r.state === st).map(([id]) => id.split('@')[0]);
+  const groups = [
+    { title: 'Mise à jour disponible', items: names('outdated') },
+    { title: 'Non vérifiables', items: names('unknown') },
+    { title: 'Source', text: true, items: [
+      `D'après le clone local du marketplace, ${when}.`,
+      'Claude Code ne le rafraîchit qu\'à son démarrage ou via « Rafraîchir les marketplaces » (page Plugins).',
+    ] },
+  ];
+  return { short, cls, when, groups, byId: upd.plugins || {} };
+}
+
+// Pastille / mention de mise a jour d'une carte de plugin.
+function pluginUpdateBadge(id, r) {
+  if (!r || r.state === 'up_to_date') return '';
+  const lines = [];
+  if (r.installed) lines.push(`Installé : ${r.installed}`);
+  if (r.available) lines.push(`Marketplace : ${r.available}`);
+  if (r.reason) lines.push(r.reason);
+  if (r.state === 'outdated') {
+    lines.push(`Pour l'appliquer : claude plugin update ${id} (puis redémarrer Claude Code).`);
+    const hc = hcAttrs([{ title: 'Mise à jour disponible', items: lines, text: true }]);
+    return `<span class="pill upd"${hc} aria-label="${escapeHtml('Mise à jour disponible. ' + lines.join(' '))}">mise à jour dispo</span>`;
+  }
+  const hc = hcAttrs([{ title: 'Mise à jour non vérifiable', items: lines, text: true }]);
+  return `<span class="xupd-unk"${hc}>mise à jour non vérifiable</span>`;
+}
+
 async function loadInstalledPlugins(host, opts = {}) {
   host['innerHTML'] = '<div class="page-loader"><div class="spinner"></div></div>';
   try {
-    const data = await API.get('/api/plugins/installed');
+    const [data, updRaw] = await Promise.all([API.get('/api/plugins/installed'), safe('/api/plugins/outdated', null)]);
+    const upd = pluginUpdatesInfo(updRaw);
+    const updOf = (p) => upd.byId[p.id] || null;
     // API renvoie {cross, on_disk, marketplaces, orphans_on_disk}
     const installed = data.cross || [];
     const orphans = data.orphans_on_disk || [];
@@ -111,8 +170,27 @@ async function loadInstalledPlugins(host, opts = {}) {
       chipGroup.setAttribute('aria-label', 'Filtrer par état');
       toolbar.appendChild(chipGroup);
       host.appendChild(toolbar);
+
+      // Etat des mises a jour + rafraichissement du clone a la demande
+      // (`claude plugin marketplace update`, reseau, jusqu'a 3 min).
+      const updBar = el('div', 'pg-upd');
+      updBar['innerHTML'] = `<p><span class="pg-upd-k">Mises à jour</span> <span class="k-t ${upd.cls}">${escapeHtml(upd.short)}</span>`
+        + `<span class="pg-upd-src"${hcAttrs(upd.groups)}>${upd.when ? `d'après le marketplace local, ${escapeHtml(upd.when)}` : 'marketplace local illisible'}</span></p>`;
+      const refreshBtn = btn('Rafraîchir les marketplaces', 'btn-sm', I.refresh);
+      refreshBtn.title = 'Télécharge la dernière version des marketplaces (claude plugin marketplace update), puis recompare';
+      refreshBtn.addEventListener('click', () => withBusy(refreshBtn, async () => {
+        try {
+          const r = await API.post('/api/plugins/marketplaces/refresh', {});
+          const n = ((r.updates || {}).counts || {}).outdated || 0;
+          toastOk(n ? `Marketplaces rafraîchis : ${n} mise${n > 1 ? 's' : ''} à jour disponible${n > 1 ? 's' : ''}` : 'Marketplaces rafraîchis : rien de nouveau');
+          loadInstalledPlugins(host, opts);
+        } catch (e) { toastErr(e.message); }
+      }));
+      updBar.appendChild(refreshBtn);
+      host.appendChild(updBar);
       const FILTERS = [['', 'Tous', () => true], ['on', 'Actifs', p => pluginState(p).key === 'on'],
-        ['off', 'Désactivés', p => pluginState(p).key === 'off'], ['bad', 'À réparer', p => !p.on_disk]];
+        ['off', 'Désactivés', p => pluginState(p).key === 'off'], ['bad', 'À réparer', p => !p.on_disk],
+        ['upd', 'Mise à jour dispo', p => (updOf(p) || {}).state === 'outdated']];
       let stateF = '';
       const drawChips = () => {
         chipGroup['innerHTML'] = FILTERS
@@ -124,7 +202,7 @@ async function loadInstalledPlugins(host, opts = {}) {
       const grid = el('div', 'xgrid');
       host.appendChild(grid);
       const cards = installed.map(p => {
-        const card = pluginCard(p, () => { drawChips(); refreshHeader(); applyFilter(); });
+        const card = pluginCard(p, () => { drawChips(); refreshHeader(); applyFilter(); }, updOf(p));
         grid.appendChild(card);
         return [p, card];
       });
@@ -174,10 +252,13 @@ async function loadInstalledPlugins(host, opts = {}) {
 
 // Carte d'un plugin installe : etat, interrupteur global, desinstallation.
 // onChange : rappel apres bascule reussie (compteurs / filtres de la page).
-function pluginCard(p, onChange) {
+function pluginCard(p, onChange, upd = null) {
   const card = el('article', 'xcard plugin-card');
   const [shortId, mkt] = p.id.includes('@') ? p.id.split('@') : [p.id, null];
   const meta = [];
+  const updBadge = pluginUpdateBadge(p.id, upd);
+  const updOutdated = upd && upd.state === 'outdated';
+  if (updBadge && !updOutdated) meta.push(updBadge);
   if (p.scope) meta.push(`<span>scope ${escapeHtml(p.scope)}</span>`);
   if (p.size_kb) meta.push(`<span>${fmtBytes(p.size_kb * 1024)}</span>`);
   if (p.installed_at) meta.push(`<span title="${escapeHtml(fmtDateTime(p.installed_at))}">installé ${escapeHtml(fmtAgo(p.installed_at))}</span>`);
@@ -188,7 +269,7 @@ function pluginCard(p, onChange) {
         <h3>${escapeHtml(shortId)}</h3>
         <div class="msub">${mkt ? `<small>${escapeHtml(mkt)}</small>` : ''}${p.version ? `<span class="chip">${escapeHtml(p.version)}</span>` : ''}</div>
       </div>
-      <div class="xstate" data-state>${pluginState(p).pill}</div>
+      <div class="xstate"><span data-state>${pluginState(p).pill}</span>${updOutdated ? updBadge : ''}</div>
     </div>
     <p class="xdesc ${p.description ? '' : 'none'}" title="${escapeHtml(p.description || '')}">${escapeHtml(p.description || 'Pas de description.')}</p>
     ${meta.length ? `<div class="xmeta">${meta.join('')}</div>` : ''}

@@ -1,7 +1,7 @@
 /* ================================================================
    Sessions actives : etat running vs idle (« Terminal ouvert »)
    ----------------------------------------------------------------
-   Les marqueurs sont generes par liveMarker() / wsStateMarker()
+   Les marqueurs sont generes par wsStateMarker()
    (js/router.js) dans un wrapper display:contents pour ne pas alterer la
    mise en page. L'etat idle = badge discret « Terminal ouvert ».
    (Les regles des anciens dots .featured-live / .ws-row-live /
@@ -10,12 +10,3 @@
 .ws-live-wrap,
 .ws-session-actions { display: contents; }
 
-.ws-idle-badge {
-  display: inline-flex; align-items: center;
-  margin-left: 6px; padding: 1px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
-  font-size: 10.5px; font-weight: 500; line-height: 1.5;
-  color: var(--text-muted, #999);
-  white-space: nowrap; vertical-align: middle;
-}

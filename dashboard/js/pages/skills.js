@@ -3,12 +3,11 @@
    ----------------------------------------------------------------
    renderSkills : bibliotheque en cartes .xcard + filtres (refonte 2026-10,
    langage de la page MCPs, css/redesign.css section 10).
-   librarySkillCard / skillCard : cartes bibliotheque / skill global.
+   librarySkillCard : carte d'un skill de la bibliotheque.
    modalDistributeSkill : copier un skill library vers N workspaces.
    modalAddSkillFromLibrary : ajouter au workspace courant.
    modalEditSkillFiles : navigateur de fichiers partagé (global/workspace/library).
    modalDeleteLibrarySkill : suppression library.
-   modalCopySkillToWorkspace : copier global -> workspace.
    modalEditSkillFiles : editeur tree + textarea du dossier skill.
 
    Dependances foundations : STATE, API, escapeHtml, el, btn, fmtBytes,
@@ -396,90 +395,6 @@ function modalDeleteLibrarySkill(s) {
       toastOk('Supprimé');
       close(); STATE.loading = true; route();
     } catch (e) { toastErr(e.message); }
-  });
-}
-
-function skillCard(s, usedInWorkspaces) {
-  const card = el('article', 'xcard skill-card');
-  const usageText = usedInWorkspaces.length
-    ? `<span class="pill info">${usedInWorkspaces.length} workspace${usedInWorkspaces.length > 1 ? 's' : ''}</span>`
-    : '<span class="pill mute">global seul</span>';
-  card['innerHTML'] = `
-    <div class="top">
-      <span class="xi" aria-hidden="true">${I.sparkle}</span>
-      <div class="xt">
-        <h3 class="skill-name">${escapeHtml(s.name || s.id)}</h3>
-        <div class="msub"><small>${escapeHtml(s.id)}</small></div>
-      </div>
-      <div class="xstate">${usageText}</div>
-    </div>
-    <p class="xdesc ${s.description ? '' : 'none'}">${escapeHtml(s.description || 'Pas de description')}</p>
-    ${usedInWorkspaces.length ? `<div class="used chips-wrap">${usedInWorkspaces.map(w => `<span class="chip">${escapeHtml(w)}</span>`).join('')}</div>` : ''}
-  `;
-  const actions = el('div', 'xfoot');
-  const ed = btn('Éditer', 'btn-sm btn-ghost xfoot-main', I.edit);
-  ed.addEventListener('click', () => modalEditSkillFiles('global', s.id));
-  const copy = btn('Copier dans…', 'btn-sm btn-ghost', I.copy);
-  copy.addEventListener('click', () => modalCopySkillToWorkspace(s));
-  const open = btn('', 'btn-sm btn-ghost btn-icon-only', I.folder);
-  open.title = 'Ouvrir le dossier';
-  open.setAttribute('aria-label', 'Ouvrir le dossier');
-  open.addEventListener('click', async () => {
-    try { const r = await API.post('/api/open', { target: `skill-global:${s.id}` }); toastOk(r.message); }
-    catch (e) { toastErr(e.message); }
-  });
-  const rm = btn('', 'btn-sm btn-ghost btn-icon-only btn-danger', I.trash);
-  rm.title = 'Supprimer';
-  rm.setAttribute('aria-label', `Supprimer ${s.id}`);
-  rm.addEventListener('click', () => confirmDialog(`Supprimer le skill ${s.id} ? (les copies dans les workspaces ne seront pas affectées)`, async () => {
-    try { await API.del(`/api/skills/global/${s.id}`); toastOk('Supprimé'); STATE.loading = true; route(); }
-    catch (e) { toastErr(e.message); }
-  }, { danger: true }));
-  actions.append(ed, copy, open, rm);
-  card.appendChild(actions);
-  return card;
-}
-
-function modalCopySkillToWorkspace(skill) {
-  const body = el('div');
-  if (!STATE.workspaces.length) {
-    body['innerHTML'] = '<p class="muted">Aucun workspace disponible.</p>';
-    const close = btn('Fermer', 'btn-ghost');
-    const { close: doClose } = openModal({ title: 'Copier dans un workspace', body, footer: close });
-    close.addEventListener('click', doClose);
-    return;
-  }
-  body['innerHTML'] = `
-    <p class="muted" style="margin-top:0">Choisis le ou les workspaces où copier <strong class="mono">${escapeHtml(skill.id)}</strong> :</p>
-    <div class="ws-pick-list"></div>
-  `;
-  const list = body.querySelector('.ws-pick-list');
-  for (const w of STATE.workspaces) {
-    const item = el('label', 'wizard-item');
-    item['innerHTML'] = `
-      <input type="checkbox" data-ws="${escapeHtml(w.id)}">
-      <div class="wizard-item-main">
-        <div class="wizard-item-name">${escapeHtml(w.emoji || '📁')} ${escapeHtml(w.label || w.id)}</div>
-        <div class="wizard-item-meta"><span class="dim mono" style="font-size:11px">${escapeHtml(w.id)}</span></div>
-      </div>
-    `;
-    list.appendChild(item);
-  }
-  const cancel = btn('Annuler', 'btn-ghost');
-  const ok = btn('Copier', 'btn-primary', I.copy);
-  const { close } = openModal({ title: `Copier ${skill.id}`, body, footer: [cancel, ok], wide: true });
-  cancel.addEventListener('click', close);
-  ok.addEventListener('click', async () => {
-    const targets = Array.from(body.querySelectorAll('input[type=checkbox]:checked')).map(cb => cb.dataset.ws);
-    if (!targets.length) { toastErr('Sélectionne au moins un workspace'); return; }
-    let okCount = 0, errs = [];
-    for (const wsId of targets) {
-      try { await API.post('/api/skills/copy', { name: skill.id, workspace: wsId }); okCount++; }
-      catch (e) { errs.push(`${wsId}: ${e.message}`); }
-    }
-    if (okCount) toastOk(`${okCount} copie(s) effectuée(s)`);
-    if (errs.length) toastErr(errs[0]);
-    close(); STATE.loading = true; route();
   });
 }
 

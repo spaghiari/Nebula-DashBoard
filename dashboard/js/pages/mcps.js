@@ -250,15 +250,51 @@ async function renderMCPs() {
   c.appendChild(page);
 }
 
+// Pastille d'etat d'un MCP : statut calcule (disponible / a configurer /
+// desactive) enrichi du dernier verdict de « Diagnostiquer » (m.last_probe,
+// dashcore/mcp_probe.py). Seul un MCP « disponible » est concerne. Etats :
+//   ok      -> « vérifié » (vert) : test OK, recent, config inchangee ;
+//   err     -> « en échec » (rouge) ; warn -> « à revérifier » (orange) ;
+//   expired / changed -> « disponible » (bleu), le verdict reste lisible
+//   dans l'infobulle mais n'affirme plus rien.
+// Age et validite dans une infobulle hcAttrs (pas de `title` natif).
+function mcpStatePill(m) {
+  const status = m.status || 'à configurer';
+  const base = status === 'disponible' ? 'info' : status === 'désactivé' ? 'mute' : 'warn';
+  const p = m.last_probe;
+  if (status !== 'disponible' || !p || !p.at) return `<span class="pill ${base}">${escapeHtml(status)}</span>`;
+  const iso = new Date(p.at * 1000).toISOString();
+  const when = `${fmtAgo(iso)} (${fmtDateTime(iso)})`;
+  const VERDICT = { ok: 'OK', warn: 'avec avertissements', err: 'en échec' };
+  const LOOK = {
+    ok: ['ok probe', 'vérifié'],
+    warn: ['warn probe', 'à revérifier'],
+    err: ['err probe', 'en échec'],
+    // Verdict perime : reste « disponible », point creux = « un ancien test existe ».
+    expired: ['info probe-old', status],
+    changed: ['info probe-old', status],
+  };
+  const [cls, label] = LOOK[p.state] || [base, status];
+  const lines = [`Résultat : ${VERDICT[p.verdict] || p.verdict}, ${when}.`];
+  if (p.state === 'changed') lines.push('Le MCP a été modifié depuis : ce verdict ne vaut plus.');
+  else if (p.state === 'expired') lines.push(`Plus vieux que ${p.fresh_days} jours : il ne vaut plus comme preuve.`);
+  else lines.push(`Valable ${p.fresh_days} jours, ou jusqu'à la prochaine modification du MCP.`);
+  lines.push('« Diagnostiquer » relance le test.');
+  const hc = hcAttrs([{ title: 'Dernier diagnostic', items: lines, text: true }]);
+  return `<span class="pill ${cls}"${hc} aria-label="${escapeHtml(`${label}. ${lines[0]}`)}">${escapeHtml(label)}</span>`;
+}
+
 function mcpCard(m) {
   const card = el('article', 'mcp-card');
+  card.dataset.mcpId = m.id;
   // Statut réel calculé par compute_mcp_status (back) : disponible /
-  // à configurer / désactivé. « connecté » n'est jamais retourné (pas de
-  // test live), donc pas de pastille verte ici — ce serait un faux signal.
+  // à configurer / désactivé. « connecté » n'est jamais retourné (aucune
+  // sonde automatique) : pas de vert sans test explicite.
   // Lot E item 2 : « désactivé » est un choix VOLONTAIRE -> neutre (gris),
   // pas rouge. Le rouge est réservé aux états réellement cassés (env
   // manquant ci-dessous), pour ne pas mélanger « off » et « KO ».
-  const statusClass = m.status === 'disponible' ? 'info' : m.status === 'désactivé' ? 'mute' : 'warn';
+  // Le vert (« vérifié ») vient du dernier verdict de « Diagnostiquer »
+  // mémorisé côté serveur (last_probe), cf. mcpStatePill.
   const transport = m.transport || 'stdio';
   const isHttp = transport === 'http' || transport === 'sse';
   const cmd = isHttp ? (m.url || '—') : (m.command || '—') + (m.args && m.args.length ? ' ' + m.args.join(' ') : '');
@@ -305,7 +341,7 @@ function mcpCard(m) {
         <h3 class="mcp-name">${escapeHtml(m.name || m.id)}</h3>
         <div class="msub"><small>${escapeHtml(m.id)}</small>${chips.join('')}</div>
       </div>
-      <div class="mstate"><span class="pill ${statusClass}">${escapeHtml(m.status || 'à configurer')}</span>${missingBadge}</div>
+      <div class="mstate">${mcpStatePill(m)}${missingBadge}</div>
     </div>
     <p class="mcp-desc ${m.description ? '' : 'none'}">${m.description ? escapeHtml(m.description) : 'Pas de description.'}</p>
     <div class="used">${used}</div>
@@ -451,6 +487,13 @@ function modalDiagnoseMCP(m) {
       for (const c of (r.checks || [])) list.appendChild(renderCheck(c));
       const nb = (r.checks || []).length;
       setVerdict(r.verdict, `${nb} vérification(s) effectuée(s) sur ${m.id}.`);
+      // Verdict memorise cote serveur : la pastille de la carte suit tout de suite.
+      if (r.last_probe) {
+        const cur = (STATE.mcps || []).find(x => x.id === m.id);
+        for (const x of new Set([m, cur].filter(Boolean))) x.last_probe = r.last_probe;
+        const old = document.querySelector(`.mcp-card[data-mcp-id="${CSS.escape(m.id)}"]`);
+        if (old) old.replaceWith(mcpCard(cur || m));
+      }
     } catch (e) {
       loadingRow.remove();
       setVerdict('err', 'Le diagnostic a échoué (voir ci-dessous).');

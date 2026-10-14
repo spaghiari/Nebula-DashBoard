@@ -20,6 +20,7 @@ from dashcore.config import (
 )
 from dashcore.env_local import load_env_local
 from dashcore import config as _config
+from dashcore import data_migration as _data_migration
 from dashcore.helpers import CorruptJsonError, read_json, read_json_strict, write_json
 
 
@@ -443,7 +444,40 @@ def sanity_check() -> dict:
         if miss:
             missing_env[m["id"]] = miss
 
-    return {"findings": findings, "missing_env": missing_env}
+    return {"findings": findings, "missing_env": missing_env,
+            "data_migration": pending_data_migration()}
+
+
+def pending_data_migration() -> dict | None:
+    """Migration des données encore à faire vers `NEBULA_DATA_DIR`, ou None.
+
+    Signalée seulement quand le dossier de données est personnalisé et que
+    l'ancien dossier par défaut contient des fichiers absents de la
+    destination (`plan_migration`, lecture seule). La migration elle-même
+    reste un geste de démarrage (`python server.py --migrate-data`), d'où
+    l'absence de route d'action. Chemins lus à l'appel (bac à sable / tests).
+    """
+    if not _config.DATA_DIR_IS_CUSTOM:
+        return None
+    src = Path(_data_migration.DEFAULT_DATA_DIR)
+    dst = Path(_config.DATA_DIR)
+    try:
+        if src.resolve() == dst.resolve():
+            return None
+        plan = _data_migration.plan_migration(src, dst)
+    except OSError as e:
+        log.warning("sanity_check : plan de migration illisible (%s)", e)
+        return None
+    if not plan["copy"]:
+        return None
+    return {
+        "source": str(src),
+        "data_dir": str(dst),
+        "to_copy": len(plan["copy"]),
+        "conflicts": len(plan["conflicts"]),
+        "sample": plan["copy"][:5],
+        "command": "python server.py --migrate-data",
+    }
 
 
 # --- Historique quotidien des totaux (sparklines / tendances de l'Accueil) ---

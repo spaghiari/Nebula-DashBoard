@@ -25,6 +25,7 @@ from dashcore.helpers import (
     load_env_local, read_json, read_json_strict, CorruptJsonError, resolve_cli, resolve_ws_dir, safe_id,
     strip_invisible, substitute_env, write_json,
 )
+from dashcore.mcp_probe import probe_summary, read_probe_entries, record_probe
 from dashcore.workspace_io import list_workspaces, ws_mcp_info
 
 
@@ -344,7 +345,16 @@ def diagnose_mcp(mcp_id: str) -> tuple[int, dict]:
     else:
         verdict = "ok"
 
-    return 200, {"id": mcp_id, "verdict": verdict, "checks": checks}
+    # Mémorise le verdict (pastille « vérifié » de la carte). Un échec
+    # d'écriture ne doit pas masquer le diagnostic : il est seulement journalisé.
+    last_probe = None
+    try:
+        entry = record_probe(mcp, verdict, known_ids=[m.get("id") for m in registry])
+        last_probe = probe_summary(mcp, entry)
+    except (OSError, ValueError) as e:
+        log.warning("Verdict du diagnostic %s non mémorisé : %s", mcp_id, e)
+
+    return 200, {"id": mcp_id, "verdict": verdict, "checks": checks, "last_probe": last_probe}
 
 
 def _probe_http(url: str, headers: dict) -> dict:
@@ -818,10 +828,19 @@ def compute_mcp_status(mcp: dict) -> str:
 
 
 def list_mcps_with_computed_status() -> dict:
-    """Lit le registre et override status par la valeur calculée."""
+    """Lit le registre et override status par la valeur calculée.
+
+    `last_probe` : dernier verdict de « Diagnostiquer » (cf. `mcp_probe`),
+    absent si le MCP n'a jamais été diagnostiqué. Champ calculé, jamais
+    réécrit dans le registre (`clean_mcp_payload` ne le reprend pas).
+    """
     data = read_json(MCP_REGISTRY, {"version": "1.0", "mcps": []})
+    probes = read_probe_entries()
     for m in data.get("mcps", []):
         m["status"] = compute_mcp_status(m)
+        summary = probe_summary(m, probes.get(m.get("id")))
+        if summary:
+            m["last_probe"] = summary
     return data
 
 

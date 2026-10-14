@@ -45,6 +45,7 @@ MIGRATABLE_FILES = (
     "active_sessions.json",
     "mcp_recipes.local.json",
     "stats_history.json",
+    "mcp_probe_state.json",
 )
 MIGRATABLE_DIRS = ("skills-library",)
 MARKER_NAME = ".nebula-migration.json"

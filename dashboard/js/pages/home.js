@@ -237,6 +237,9 @@ async function renderHome() {
   // (distinct de « 0 session ») : le KPI l'affiche au lieu d'un 0 trompeur.
   // Juste apres un loadAll (cf. js/router.js), les deux sont deja en vol ou
   // charges : on les reprend (usage unique, 10 s max) au lieu de refetcher.
+  // Plugins « a jour » (installe vs clone local du marketplace) : lancee ici
+  // pour courir en parallele des stats ; lecture disque seule (~15 ms).
+  const pluginUpdP = safe('/api/plugins/outdated', null);
   const pre = STATE.homePrefetch;
   STATE.homePrefetch = null;
   const [statsRaw, sanity, history] = pre && Date.now() - pre.at < 10000
@@ -256,15 +259,15 @@ async function renderHome() {
   const activeWs = STATE.workspaces.filter(w => (_wsStats(w.id).messages || 0) > 0).length;
   const orphans = STATE.mcps.filter(m => !(m.workspaces || []).length);
   const disabled = STATE.mcps.filter(m => m.status === 'désactivé').length;
-  const nSkills = (STATE.skills || []).length;
+  const plugUpd = pluginUpdatesInfo(await pluginUpdP);
 
   // Tendances reelles (historique) : sessions et messages. Repli : textes d'origine.
   const sessSeries = statsRaw ? kpiSeries(history, 'sessions', totalSessions) : [];
   const msgSeries = statsRaw ? kpiSeries(history, 'messages', totalMsgs) : [];
   const sessTr = kpiTrend(sessSeries);
   const msgTr = kpiTrend(msgSeries);
-  const kpi = (i, icon, n, label, trend, cls, count = true, spark = '', tip = '') => `
-    <div class="card kpi rise" style="--i:${i}"${tip ? ` title="${escapeHtml(tip)}"` : ''}><span class="ic">${icon}</span>
+  const kpi = (i, icon, n, label, trend, cls, count = true, spark = '', tip = '', attrs = '') => `
+    <div class="card kpi rise" style="--i:${i}"${tip ? hcAttrs([{ title: 'Détail', items: [tip], text: true }]) : ''}${attrs}><span class="ic">${icon}</span>
       <div style="min-width:0"><div class="k-n"><b class="tab-num" ${count ? `data-count="${n}"` : ''}>${count ? fmtNum(n) : escapeHtml(String(n))}</b><span class="k-l">${escapeHtml(label)}</span></div>
       <span class="k-t ${cls}">${escapeHtml(trend)}</span></div>${spark}</div>`;
   const sessText = `${totalSessions} session${totalSessions > 1 ? 's' : ''} cumulée${totalSessions > 1 ? 's' : ''}`;
@@ -275,7 +278,7 @@ async function renderHome() {
     kpi(1, I.folder, wsCount, 'workspaces', statsRaw ? (sessTr ? kpiTrendText(sessTr, 'session') : sessText) : 'Statistiques indisponibles', statsRaw ? (sessTr && sessTr.delta > 0 ? 'ok' : '') : 'err',
       true, kpiSpark(sessSeries), sessTr ? sessText : '')
     + kpi(2, I.box, STATE.mcps.length, 'MCPs', orphans.length ? `${orphans.length} sans workspace` : (disabled ? `${disabled} désactivé${disabled > 1 ? 's' : ''}` : 'tous utilisés'), orphans.length ? 'warn' : (disabled ? '' : 'ok'))
-    + kpi(3, I.plug, pluginCount, pluginCount > 1 ? 'plugins' : 'plugin', `${nSkills} skill${nSkills > 1 ? 's' : ''} global${nSkills > 1 ? 'aux' : ''}`, '')
+    + kpi(3, I.plug, pluginCount, pluginCount > 1 ? 'plugins' : 'plugin', plugUpd.short, plugUpd.cls, true, '', '', hcAttrs(plugUpd.groups))
     + kpi(4, I.message, statsRaw ? totalMsgs : '-', 'messages', statsRaw ? (msgTr ? kpiTrendText(msgTr, 'message') : actText) : 'Statistiques indisponibles', statsRaw ? (msgTr && msgTr.delta > 0 ? 'ok' : '') : 'err',
       !!statsRaw, kpiSpark(msgSeries), msgTr ? actText : '');
   page.appendChild(kpis);
@@ -733,7 +736,8 @@ async function loadSanity(host) {
 }
 
 // Bloc Sante : sanity-check serveur (desync registre <-> .mcp.json, env
-// manquant, reparation 1 clic) + controles calcules cote client depuis
+// manquant, reparation 1 clic, migration NEBULA_DATA_DIR en attente)
+// + controles calcules cote client depuis
 // STATE (workspaces references par des MCPs mais inconnus de Nebula, MCPs
 // sans workspace). `r` null = echec du sanity-check.
 function renderHealth(host, r) {
@@ -793,6 +797,17 @@ function renderHealth(host, r) {
     }
     for (const [mcpId, vars] of missingEnv) {
       line('err', I.key, `${escapeHtml(mcpId)} : variable d'env manquante`, `${vars.map(escapeHtml).join(', ')} absente(s) de .env.local.`);
+    }
+    // Migration NEBULA_DATA_DIR en attente : information seule, la copie se
+    // fait au démarrage du serveur (aucun bouton d'action).
+    const mig = r.data_migration;
+    if (mig && mig.to_copy) {
+      const n = mig.to_copy;
+      const code = (s) => `<code class="mono" style="overflow-wrap:anywhere">${escapeHtml(s)}</code>`;
+      line('warn', I.folder, `${n} fichier${n > 1 ? 's' : ''} de données à migrer`,
+        `L'ancien dossier ${code(mig.source || '')} contient des données absentes de ${code(mig.data_dir || '')} (NEBULA_DATA_DIR). `
+        + `Arrête Nebula puis relance-le avec <code class="mono" style="white-space:nowrap">${escapeHtml(mig.command || 'python server.py --migrate-data')}</code> : copie sans jamais écraser.`
+        + (mig.conflicts ? ` ${mig.conflicts} fichier${mig.conflicts > 1 ? 's' : ''} déjà présent${mig.conflicts > 1 ? 's' : ''} avec un contenu différent ser${mig.conflicts > 1 ? 'ont' : 'a'} laissé${mig.conflicts > 1 ? 's' : ''} tel${mig.conflicts > 1 ? 's' : ''} quel${mig.conflicts > 1 ? 's' : ''}.` : ''));
     }
   }
   // Controles cote client (aucune requete).
