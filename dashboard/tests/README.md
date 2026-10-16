@@ -46,7 +46,6 @@ Durée : quelques secondes (serveurs HTTP et dépôts git temporaires inclus).
 | `test_config.py` | Variables `NEBULA_*`, hôtes autorisés, garde-fous des fonctions Windows-only |
 | `ui/cdp.py` | Client CDP minimal (WebSocket stdlib) |
 | `ui/test_ui_smoke.py` | Front headless (facultatif : `NEBULA_UI_TESTS=1` + navigateur trouvé, sinon ignoré) : accueil + requête agrégée, erreur réseau, rendu de chaque route sans erreur ni 5xx, aucune exception JS |
-| (`.forgejo/workflows/tests.yml`, racine du dépôt) | CI Forgejo Actions minimale (Python 3.11 + 3.10, minimum annoncé), déclenchement manuel tant qu'aucun runner n'existe (voir l'en-tête du fichier) |
 
 ## Règle
 
