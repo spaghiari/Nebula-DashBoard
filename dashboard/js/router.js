@@ -424,8 +424,25 @@ function applyActiveSessions(next) {
       wrap['innerHTML'] = wsStateInner(id, wrap.dataset.stateKind || 'cell');
     }
     refreshSessionNodes(id);
+    // Session terminée : STATE.stats date du chargement de la page. Un
+    // workspace à 0 session à ce moment-là (premier lancement) n'affichait
+    // jamais « Reprendre » après fermeture du terminal. On relit son compteur.
+    if (prev[id] && !next[id]) refreshSessionCount(id);
   }
   renderRecentWorkspaces();
+}
+
+async function refreshSessionCount(id) {
+  try {
+    const r = await API.get(`/api/workspaces/${encodeURIComponent(id)}/sessions`);
+    const n = ((r && r.sessions) || []).length;
+    STATE.stats = STATE.stats || {};
+    const cur = STATE.stats[id] || {};
+    if (cur.sessions === n) return;
+    STATE.stats[id] = { ...cur, sessions: n };
+    // Relancé entre-temps : refreshSessionNodes affiche déjà Stop + Reprendre.
+    if (!(STATE.activeSessions || {})[id]) refreshSessionNodes(id);
+  } catch { /* silencieux : prochain chargement complet */ }
 }
 
 // Re-rendu cible des noeuds d'un workspace dont la session a change (aucun
