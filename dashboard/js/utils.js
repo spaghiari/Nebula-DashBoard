@@ -332,14 +332,33 @@ if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => docu
 // Overlay « Auto-amelioration de Claude » actif sur un workspace (donnee
 // /api/overview overlays_active, aucune requete par workspace).
 const SELF_IMPROVING_ID = 'claude-self-improving';
+// Overlay « Equipe d'agents et amelioration mesuree » (requiert le precedent).
+const CLAUDE_TEAM_ID = 'claude-team';
 function wsHasOverlay(wsId, ovId = SELF_IMPROVING_ID) {
   const m = (typeof STATE !== 'undefined' && STATE.overlaysActive) || {};
   return (m[wsId] || []).includes(ovId);
 }
+// Indicateurs discrets des modules actifs (ligne / carte de l'accueil) :
+// auto-amelioration puis equipe d'agents.
 function selfImprovingMark(wsId) {
-  return wsHasOverlay(wsId)
-    ? '<span class="si" title="Auto-amélioration de Claude active" role="img" aria-label="Auto-amélioration active">' + (typeof I !== 'undefined' && I.selfImprove ? I.selfImprove : '') + '</span>'
-    : '';
+  let out = '';
+  if (wsHasOverlay(wsId)) {
+    out += '<span class="si" title="Auto-amélioration de Claude active" role="img" aria-label="Auto-amélioration active">' + (typeof I !== 'undefined' && I.selfImprove ? I.selfImprove : '') + '</span>';
+  }
+  if (wsHasOverlay(wsId, CLAUDE_TEAM_ID)) {
+    // Mode de routage (GET /api/overview team_routing, aucune requete en
+    // plus) : hovercard themable plutot qu'un title natif.
+    const mode = teamRoutingLabel(wsId);
+    const items = ["Équipe d'agents et amélioration mesurée active", mode ? `Routage : ${mode}` : 'Routage : non déclaré (ré-appliquer ou activer dans Configuration)'];
+    out += '<span class="si team" role="img" aria-label="Équipe d\'agents active' + (mode ? ', routage ' + escapeHtml(mode) : '') + '"' + hcAttrs([{ title: "Équipe d'agents", items, text: true }]) + '>' + (typeof I !== 'undefined' && I.cpu ? I.cpu : '') + '</span>';
+  }
+  return out;
+}
+// Libelle francais d'un mode de routage claude-team ('' si inconnu).
+const TEAM_ROUTING_LABELS = { manuel: 'Manuel', assiste: 'Assisté', auto: 'Auto' };
+function teamRoutingLabel(wsId) {
+  const m = (typeof STATE !== 'undefined' && STATE.teamRouting) || {};
+  return TEAM_ROUTING_LABELS[m[wsId]] || '';
 }
 
 /* ================================================================

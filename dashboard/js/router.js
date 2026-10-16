@@ -60,6 +60,8 @@ async function loadAll({ sanity = false } = {}) {
   STATE.workspaces = overview.workspaces || [];
   STATE.wsMcps = overview.ws_mcps || {};
   STATE.overlaysActive = overview.overlays_active || {};
+  // Mode de routage de l'equipe claude-team par workspace (pill de l'accueil).
+  STATE.teamRouting = overview.team_routing || {};
   if (stats) STATE.stats = stats;
   STATE.statsFailed = !stats;
   STATE.homePrefetch = sanityPromise ? { at: Date.now(), stats, sanity: sanityPromise, history: historyPromise } : null;

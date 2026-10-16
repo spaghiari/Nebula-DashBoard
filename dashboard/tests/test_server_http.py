@@ -60,6 +60,55 @@ class ServerSecurityTests(unittest.TestCase):
         payload = json.loads(data)
         self.assertEqual([w["id"] for w in payload["workspaces"]], ["ws1"])
         self.assertIn("ws1", payload["ws_mcps"])
+        self.assertEqual(payload["team_routing"], {})  # aucun module claude-team actif
+
+    def test_route_team_routing(self):
+        """POST /api/workspaces/<id>/team/routing : garde XHR, 404 sans manifeste,
+        écriture de la section par défaut puis du mode, 400 si invalide."""
+        self.assertEqual(self.req("POST", "/api/workspaces/ws1/team/routing", body={"mode": "auto"})[0], 403)
+        status, _, data = self.req("POST", "/api/workspaces/ws1/team/routing", body={"mode": "auto"}, headers=XHR)
+        self.assertEqual(status, 404)
+        self.assertIn("inactif", json.loads(data)["error"])
+        self.assertEqual(self.req("POST", "/api/workspaces/absent/team/routing", body={}, headers=XHR)[0], 404)
+        manifest = self.srv.root / "workspaces" / "ws1" / ".claude" / "team.json"
+        manifest.write_text(json.dumps({"team": {"name": "t", "prefix": "ws1"}, "agents": []}), encoding="utf-8")
+        try:
+            status, _, data = self.req("POST", "/api/workspaces/ws1/team/routing", body={"mode": "assiste"}, headers=XHR)
+            self.assertEqual(status, 200, data)
+            payload = json.loads(data)
+            self.assertTrue(payload["written"])
+            self.assertEqual((payload["routing"]["mode"], payload["routing"]["declared"]), ("assiste", True))
+            saved = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(saved["routing"]["mode"], "assiste")
+            self.assertEqual(saved["routing"]["modes"], ["manuel", "assiste", "auto"])
+            status, _, data = self.req("POST", "/api/workspaces/ws1/team/routing", body={"review_gate": "parfois"}, headers=XHR)
+            self.assertEqual(status, 400)
+            self.assertIn("relecture", json.loads(data)["error"])
+            status, _, data = self.req("GET", "/api/workspaces/ws1/team")
+            self.assertEqual(json.loads(data)["routing"]["mode"], "assiste")
+        finally:
+            manifest.unlink()
+
+    def test_overlays_avec_usage(self):
+        status, _, data = self.req("GET", "/api/overlays")
+        self.assertEqual(status, 200)
+        payload = json.loads(data)
+        self.assertIn("overlays", payload)
+        self.assertIsInstance(payload["usage"], dict)
+
+    def test_routes_claude_team(self):
+        # Workspace sans manifeste : routes 200, module inactif ; id inconnu : 404.
+        status, _, data = self.req("GET", "/api/workspaces/ws1/team")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data), {"active": False, "agents": [], "manifest": None})
+        status, _, data = self.req("GET", "/api/workspaces/ws1/improvement")
+        self.assertEqual(status, 200)
+        payload = json.loads(data)
+        self.assertFalse(payload["active"])
+        self.assertEqual(payload["stats"]["iterations"], 0)
+        self.assertIn("registers", payload)
+        self.assertEqual(self.req("GET", "/api/workspaces/absent/team")[0], 404)
+        self.assertEqual(self.req("GET", "/api/workspaces/absent/improvement")[0], 404)
 
     def test_localhost_accepte(self):
         self.assertEqual(self.req("GET", "/api/overview", host=f"localhost:{self.port}")[0], 200)

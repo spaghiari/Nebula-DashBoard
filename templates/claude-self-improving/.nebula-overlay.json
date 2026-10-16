@@ -5,6 +5,15 @@
   "emoji": "🧠",
   "signature_file": ".claude/improvements.md",
 
+  "_comment_features": "Liste rendue par l'UI (onglet Configuration du workspace, section Modules de la page Templates). icon = clé de js/icons.js (I.<icon>) ; text accepte <code>. after_apply = phrase affichée sous la liste.",
+  "features": [
+    { "icon": "book", "title": "Mémoire structurée", "text": "<code>.claude/memory/</code> : hubs architecture, pitfalls, conventions..." },
+    { "icon": "activity", "title": "Pipeline d'amélioration", "text": "<code>ideas</code> -> <code>backlog</code> -> <code>improvements</code>, + roadmap" },
+    { "icon": "cpu", "title": "Agents et commandes", "text": "expert, validateur, auditeur ; <code>/pipeline</code>, <code>/brainstorm</code>, <code>/check-all</code>..." },
+    { "icon": "shield", "title": "Hooks Python pré-commit", "text": "em-dash, Co-Authored-By, fichiers protégés" }
+  ],
+  "after_apply": "Après activation : lancer Claude et dire « bootstrap le projet ». N'écrase aucun fichier existant.",
+
   "_comment_claude_md": "CLAUDE.md est traité spécialement par apply_overlay (cf. dashcore/api_overlays.py) : si l'hôte n'a pas de CLAUDE.md -> écrire le complet rendu ; s'il en a un sans le marqueur -> appender le fragment CLAUDE.self-improving.md (borné par les marqueurs ci-dessous) ; si le marqueur est déjà présent -> skip (idempotent). Le fragment source n'est jamais copié tel quel dans le workspace.",
   "claude_md": {
     "full_file": "CLAUDE.md",

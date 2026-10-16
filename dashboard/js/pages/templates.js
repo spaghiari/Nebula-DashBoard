@@ -180,7 +180,152 @@ Créé : 2026-04-27</pre>
   searchInput.addEventListener('input', debounce(applyFilter, 100));
   drawChips();
   applyFilter();
+  renderModulesSection(page, 4);
   c.appendChild(page);
+}
+
+/* ---- Section « Modules » (overlays) -----------------------------------
+   Une carte .xcard par overlay : emoji, libelle, description, usage (actif
+   sur N / M workspaces, hovercard), prerequis, features du marker, Dossier,
+   « Activer sur un workspace... » (selecteur puis modale d'activation de
+   app.js). Usage : GET /api/overlays -> usage {overlay_id: [ws_id]}. */
+function renderModulesSection(page, i) {
+  const overlays = sortOverlays(STATE.overlays || []);
+  if (!overlays.length) return;
+  const sec = el('section', 'mods-sec rise');
+  sec.style.setProperty('--i', i);
+  sec['innerHTML'] = `
+    <div class="page-header-text" style="margin-bottom:var(--gap)">
+      <h2 class="mods-title">Modules</h2>
+      <p class="page-subtitle">${overlays.length} module${overlays.length > 1 ? 's' : ''}. Un module se pose <strong>par-dessus</strong> un template (à la création du workspace ou plus tard, onglet Configuration) : il n'écrase aucun fichier déjà présent et se ré-applique sans risque.</p>
+    </div>`;
+  const grid = el('div', 'xgrid');
+  const byId = new Map(overlays.map(o => [o.id, o]));
+  const cards = new Map();
+  const usage = {};  // overlay_id -> [ws_id], rempli par refreshUsage
+  for (const ov of overlays) {
+    const card = moduleCard(ov, byId, () => usage[ov.id] || [], () => refreshUsage());
+    cards.set(ov.id, card);
+    grid.appendChild(card);
+  }
+  sec.appendChild(grid);
+  page.appendChild(sec);
+
+  // Usage par module (une requete, mise a jour en place).
+  const refreshUsage = async () => {
+    try {
+      const r = await API.get('/api/overlays');
+      STATE.overlays = r.overlays || STATE.overlays;
+      Object.assign(usage, r.usage || {});
+      for (const [id, card] of cards) {
+        const slot = card.querySelector('[data-usage]');
+        if (slot) slot.replaceChildren(moduleUsagePill(usage[id] || []));
+      }
+    } catch (e) {
+      for (const card of cards.values()) {
+        const slot = card.querySelector('[data-usage]');
+        if (slot) slot['innerHTML'] = `<span class="pill warn" title="${escapeHtml(e.message)}">usage inconnu</span>`;
+      }
+    }
+  };
+  refreshUsage();
+}
+
+// Pill « actif sur N / M workspaces » + hovercard listant les workspaces
+// (meme donnee que hcAttrs, posee directement en data-hc).
+function moduleUsagePill(wsIds) {
+  const total = (STATE.workspaces || []).length;
+  const n = wsIds.length;
+  const pill = el('span', 'pill ' + (n ? 'ok' : 'mute'), `actif sur ${n} / ${total} workspace${total > 1 ? 's' : ''}`);
+  if (n) { pill.dataset.hc = JSON.stringify([{ title: 'Actif sur', ws: wsIds }]); pill.tabIndex = 0; }
+  return pill;
+}
+
+function moduleCard(ov, byId, getUsage, onChange) {
+  const card = el('article', 'xcard module-card');
+  card.dataset.overlay = ov.id;
+  const reqs = (ov.requires || []).map(r => (byId.get(r) || {}).label || r);
+  const feats = (ov.features || []).filter(f => f && f.title);
+  card['innerHTML'] = `
+    <div class="top">
+      <span class="gem" style="--h:${nameHue(ov.label || ov.id)}" aria-hidden="true">${escapeHtml(ov.emoji || '🧩')}</span>
+      <div class="xt">
+        <h3>${escapeHtml(ov.label || ov.id)}</h3>
+        <div class="msub"><small>${escapeHtml(ov.id)}</small><span class="chip">${ov.file_count || 0} fichier${(ov.file_count || 0) > 1 ? 's' : ''}</span>${(ov.generators || []).includes('team_agents') ? `<span class="chip">${(ov.agents || []).length} agents</span>` : ''}</div>
+      </div>
+      <div class="xstate"><span data-usage><span class="pill mute">usage…</span></span></div>
+    </div>
+    ${reqs.length ? `<div class="xmeta"><span>${I.alert} Requiert <b>${escapeHtml(reqs.join(', '))}</b> (activé d'abord, automatiquement à la création)</span></div>` : ''}
+    <p class="xdesc ${ov.description ? '' : 'none'}">${escapeHtml(ov.description || 'Pas de description.')}</p>
+    ${feats.length ? `<ul class="mod-feat compact">${feats.map(f => `<li><span class="fi">${overlayFeatureIcon(f.icon)}</span><span><b>${escapeHtml(f.title)}</b></span></li>`).join('')}</ul>` : ''}
+  `;
+  const actions = el('div', 'xfoot');
+  const open = btn('Dossier', 'btn-sm btn-ghost', I.folder);
+  open.title = "Ouvrir le dossier du module dans l'explorateur";
+  open.addEventListener('click', async () => {
+    try { const r = await API.post('/api/open', { target: `template:${ov.dir_id || ov.id}` }); toastOk(r.message || 'Ouvert'); }
+    catch (e) { toastErr(e.message); }
+  });
+  const act = btn('Activer sur un workspace…', 'btn-sm btn-primary', I.plus);
+  act.addEventListener('click', () => modalActivateModuleOn(ov, getUsage(), onChange));
+  actions.append(open, act);
+  card.appendChild(actions);
+  return card;
+}
+
+// Selecteur de workspace (parmi ceux ou le module n'est pas actif), puis
+// modale d'activation existante (modalApplyOverlay, app.js). Le prerequis
+// inactif est signale et propose en premier.
+function modalActivateModuleOn(ov, activeOn, onChange) {
+  const candidates = (STATE.workspaces || []).filter(w => !activeOn.includes(w.id) && w.path_exists !== false);
+  const body = el('div');
+  if (!candidates.length) {
+    body['innerHTML'] = `<p class="muted">Ce module est déjà actif sur tous les workspaces${(STATE.workspaces || []).length ? '' : ' (aucun workspace)'}.</p>`;
+    const close1 = btn('Fermer', 'btn-ghost');
+    const { close } = openModal({ title: `Activer ${ov.label || ov.id}`, body, footer: close1 });
+    close1.addEventListener('click', close);
+    return;
+  }
+  body['innerHTML'] = `
+    <div class="muted" style="font-size:12px;margin-bottom:10px">${escapeHtml(ov.emoji || '🧩')} <strong>${escapeHtml(ov.label || ov.id)}</strong> : ${escapeHtml(ov.description || '')}</div>
+    <div class="field">
+      <label class="field-label">Workspace</label>
+      <select class="select" name="ws">${candidates.map(w => `<option value="${escapeHtml(w.id)}">${escapeHtml(w.emoji || '📁')} ${escapeHtml(w.label || w.id)} (${escapeHtml(w.id)})</option>`).join('')}</select>
+      <div class="muted" style="font-size:11px;margin-top:4px" data-req-note></div>
+    </div>`;
+  const sel = body.querySelector('[name=ws]');
+  const note = body.querySelector('[data-req-note]');
+  const reqs = ov.requires || [];
+  const missingFor = (wsId) => reqs.filter(r => !wsHasOverlay(wsId, r));
+  const syncNote = () => {
+    const miss = missingFor(sel.value);
+    note.textContent = miss.length
+      ? `Prérequis inactif sur ce workspace : ${miss.map(r => ((STATE.overlays || []).find(o => o.id === r) || {}).label || r).join(', ')}. Il sera proposé en premier.`
+      : (reqs.length ? 'Prérequis actif sur ce workspace.' : '');
+  };
+  sel.addEventListener('change', syncNote);
+  syncNote();
+  const cancel = btn('Annuler', 'btn-ghost');
+  const next = btn('Continuer', 'btn-primary', I.right);
+  const { close } = openModal({ title: `Activer ${ov.label || ov.id}`, body, footer: [cancel, next] });
+  cancel.addEventListener('click', close);
+  next.addEventListener('click', () => {
+    const wsId = sel.value;
+    close();
+    const miss = missingFor(wsId);
+    const onDone = () => {
+      // Etat global des overlays actifs (badges, onglets) + usage des cartes.
+      API.get(`/api/workspaces/${wsId}/overlays`).then(r => {
+        const act = (r.overlays || []).filter(o => o.active).map(o => o.id);
+        if (act.length) STATE.overlaysActive[wsId] = act; else delete STATE.overlaysActive[wsId];
+      }).catch(() => {}).finally(() => { if (onChange) onChange(); });
+    };
+    if (miss.length) {
+      const req = (STATE.overlays || []).find(o => o.id === miss[0]);
+      if (req) { modalApplyOverlay(wsId, { ...req, active: false }, null, { then: ov, onDone }); return; }
+    }
+    modalApplyOverlay(wsId, { ...ov, active: false }, null, { onDone });
+  });
 }
 
 function templateCard(t, onQuality) {

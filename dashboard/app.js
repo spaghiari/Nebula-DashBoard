@@ -38,10 +38,16 @@ const WS_TABS = [
   ['extensions', 'Extensions'],
   ['sessions', 'Sessions'],
   ['fichiers', 'Fichiers'],
+  // Onglet optionnel : present seulement si le module claude-team est actif
+  // (STATE.overlaysActive). 3e element = overlay requis.
+  ['amelioration', 'Amélioration', CLAUDE_TEAM_ID],
 ];
-const WS_TAB_KEYS = WS_TABS.map(t => t[0]);
-// Page workspace courante : { wsId, root, tab, panels: {key: {el, mounted,
-// isDirty}} }. null hors page workspace.
+// Onglets a afficher pour un workspace (les optionnels selon les modules actifs).
+function wsTabsFor(wsId) {
+  return WS_TABS.filter(t => !t[2] || wsHasOverlay(wsId, t[2]));
+}
+// Page workspace courante : { wsId, root, tab, keys, panels: {key: {el,
+// mounted, isDirty}} }. null hors page workspace.
 let WS_PAGE = null;
 
 // Actions de session (en-tete du detail). Reconstruites en place par le
@@ -147,7 +153,9 @@ async function renderWorkspace(wsId, tab) {
 
   const stats = (STATE.stats || {})[w.id] || {};
   const counts = wsTabCounts(w);
-  const current = WS_TAB_KEYS.includes(tab) ? tab : (prev && prev.tab) || 'memoire';
+  const tabsDef = wsTabsFor(wsId);
+  const tabKeys = tabsDef.map(t => t[0]);
+  const current = tabKeys.includes(tab) ? tab : (prev && tabKeys.includes(prev.tab) && prev.tab) || 'memoire';
   const animate = !prev;
   const r = (i) => animate ? ` rise" style="--i:${i}` : '';
 
@@ -173,12 +181,11 @@ async function renderWorkspace(wsId, tab) {
       <div class="ws-stat"><span>Dernière activité</span><b class="s">${escapeHtml(stats.last ? fmtDateTime(stats.last) : 'jamais')}</b></div>
     </section>
     <div class="ws-tabbar${r(3)}">
-      <div class="ws-tabs" role="tablist" aria-label="Sections du workspace">${WS_TABS.map(([k, l]) =>
-        `<button class="ws-tab" type="button" role="tab" id="ws-tab-${k}" aria-controls="ws-panel-${k}" aria-selected="${k === current}" tabindex="${k === current ? 0 : -1}" data-tab="${k}">${l}${counts[k] != null ? `<span class="ct">${counts[k]}</span>` : ''}<span class="dirty" hidden title="Modifications non sauvegardées"></span></button>`).join('')}</div>
+      <div class="ws-tabs" role="tablist" aria-label="Sections du workspace">${tabsDef.map(([k, l]) => wsTabButtonHtml(k, l, k === current, counts[k])).join('')}</div>
       <span class="ws-tab-ind" aria-hidden="true"></span>
       <div class="ws-maint"></div>
     </div>
-    ${WS_TABS.map(([k]) => `<section class="ws-tabpanel" id="ws-panel-${k}" role="tabpanel" aria-labelledby="ws-tab-${k}" tabindex="0" data-panel="${k}" hidden></section>`).join('')}
+    ${tabsDef.map(([k]) => wsTabPanelHtml(k)).join('')}
   `;
 
   // Copier le chemin
@@ -224,15 +231,16 @@ async function renderWorkspace(wsId, tab) {
   tabs.addEventListener('keydown', (e) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
     e.preventDefault();
-    let i = WS_TAB_KEYS.indexOf(WS_PAGE.tab);
-    i = e.key === 'Home' ? 0 : e.key === 'End' ? WS_TAB_KEYS.length - 1
-      : (i + (e.key === 'ArrowRight' ? 1 : -1) + WS_TAB_KEYS.length) % WS_TAB_KEYS.length;
-    wsSelectTab(WS_TAB_KEYS[i], true);
-    page.querySelector(`#ws-tab-${WS_TAB_KEYS[i]}`).focus();
+    const keys = WS_PAGE.keys;
+    let i = keys.indexOf(WS_PAGE.tab);
+    i = e.key === 'Home' ? 0 : e.key === 'End' ? keys.length - 1
+      : (i + (e.key === 'ArrowRight' ? 1 : -1) + keys.length) % keys.length;
+    wsSelectTab(keys[i], true);
+    page.querySelector(`#ws-tab-${keys[i]}`).focus();
   });
 
   const panels = {};
-  for (const [k] of WS_TABS) {
+  for (const k of tabKeys) {
     const host = page.querySelector(`#ws-panel-${k}`);
     if (keep[k]) {
       host.replaceChildren(...keep[k].el.childNodes);
@@ -244,19 +252,71 @@ async function renderWorkspace(wsId, tab) {
 
   const c = $('#content');
   c.replaceChildren(page);
-  WS_PAGE = { wsId, w, root: page, tab: current, panels };
+  WS_PAGE = { wsId, w, root: page, tab: current, keys: tabKeys, panels };
   wsRefreshSiBadge();
   wsSelectTab(current, false);
   if (animate) countUp(page);
   wsUpdateDirtyDots();
   if (current !== 'extensions' && !prev) wsPrefetchExtCounts(wsId);
+  if (tabKeys.includes('amelioration') && current !== 'amelioration') wsPrefetchImprovementCount(wsId);
+}
+
+function wsTabButtonHtml(k, l, on, count) {
+  return `<button class="ws-tab" type="button" role="tab" id="ws-tab-${k}" aria-controls="ws-panel-${k}" aria-selected="${on}" tabindex="${on ? 0 : -1}" data-tab="${k}">${l}${count != null ? `<span class="ct">${count}</span>` : ''}<span class="dirty" hidden title="Modifications non sauvegardées"></span></button>`;
+}
+function wsTabPanelHtml(k) {
+  return `<section class="ws-tabpanel" id="ws-panel-${k}" role="tabpanel" aria-labelledby="ws-tab-${k}" tabindex="0" data-panel="${k}" hidden></section>`;
+}
+
+// Badge de l'onglet Amelioration = nombre d'iterations du journal (GET leger).
+function wsPrefetchImprovementCount(wsId) {
+  API.get(`/api/workspaces/${wsId}/improvement`)
+    .then(r => wsSetTabCount(wsId, 'amelioration', ((r.stats || {}).iterations) || 0)).catch(() => {});
+}
+function wsSetTabCount(wsId, key, n) {
+  if (!WS_PAGE || WS_PAGE.wsId !== wsId || !WS_PAGE.root.isConnected) return;
+  const tab = WS_PAGE.root.querySelector(`#ws-tab-${key}`);
+  if (!tab) return;
+  let ct = tab.querySelector('.ct');
+  if (!ct) { ct = el('span', 'ct'); tab.insertBefore(ct, tab.querySelector('.dirty')); }
+  ct.textContent = String(n);
+  requestAnimationFrame(placeWsTabInd);
+}
+
+// Ajoute / retire les onglets optionnels apres un changement de modules
+// (activation de claude-team depuis l'onglet Configuration) sans re-rendre
+// la page : les panneaux montes sont conserves.
+function wsSyncOptionalTabs() {
+  if (!WS_PAGE || !WS_PAGE.root.isConnected) return;
+  const want = wsTabsFor(WS_PAGE.wsId);
+  const wantKeys = want.map(t => t[0]);
+  if (wantKeys.join() === WS_PAGE.keys.join()) return;
+  const bar = WS_PAGE.root.querySelector('.ws-tabs');
+  const lastPanel = () => [...WS_PAGE.root.querySelectorAll('.ws-tabpanel')].pop();
+  for (const [k, l] of want) {
+    if (WS_PAGE.panels[k]) continue;
+    bar.insertAdjacentHTML('beforeend', wsTabButtonHtml(k, l, false));
+    lastPanel().insertAdjacentHTML('afterend', wsTabPanelHtml(k));
+    WS_PAGE.panels[k] = { el: WS_PAGE.root.querySelector(`#ws-panel-${k}`), mounted: false, isDirty: () => false };
+    if (k === 'amelioration') wsPrefetchImprovementCount(WS_PAGE.wsId);
+  }
+  for (const k of Object.keys(WS_PAGE.panels)) {
+    if (wantKeys.includes(k)) continue;
+    const b = WS_PAGE.root.querySelector(`#ws-tab-${k}`);
+    if (b) b.remove();
+    WS_PAGE.panels[k].el.remove();
+    delete WS_PAGE.panels[k];
+    if (WS_PAGE.tab === k) wsSelectTab('config', false);
+  }
+  WS_PAGE.keys = wantKeys;
+  requestAnimationFrame(placeWsTabInd);
 }
 
 // Bascule d'onglet depuis le hash (lien, palette, historique) sans re-rendu.
 function wsSwitchTabFromHash(hash) {
   const m = hash.match(/^#\/workspace\/([a-zA-Z0-9_-]+)(?:\/([a-z]+))?$/);
   if (!m || !WS_PAGE || WS_PAGE.wsId !== m[1] || !WS_PAGE.root.isConnected) return false;
-  wsSelectTab(WS_TAB_KEYS.includes(m[2]) ? m[2] : 'memoire', false);
+  wsSelectTab(WS_PAGE.keys.includes(m[2]) ? m[2] : 'memoire', false);
   return true;
 }
 
@@ -271,7 +331,7 @@ window.addEventListener('resize', debounce(placeWsTabInd, 80));
 
 function wsSelectTab(key, user) {
   if (!WS_PAGE) return;
-  if (!WS_TAB_KEYS.includes(key)) key = 'memoire';
+  if (!WS_PAGE.keys.includes(key)) key = 'memoire';
   const { root, panels } = WS_PAGE;
   WS_PAGE.tab = key;
   root.querySelectorAll('.ws-tab').forEach(b => {
@@ -305,6 +365,7 @@ function wsMountPanel(key) {
   else if (key === 'extensions') mountWsExtensionsTab(w, p);
   else if (key === 'sessions') mountWsSessionsTab(w, p);
   else if (key === 'fichiers') mountWsFilesTab(w, p);
+  else if (key === 'amelioration') mountWsImprovementTab(w, p);  // js/pages/improvement.js
 }
 
 // Rafraichit des onglets apres une action (au lieu d'un route() qui
@@ -362,19 +423,32 @@ function wsUpdateDirtyDots() {
   }
 }
 
-// Badge « Auto-amelioration » de l'en-tete (etat /api/overview) : renvoie
-// vers le module dans l'onglet Configuration.
+// Badges de modules de l'en-tete (etat /api/overview) : « Auto-amelioration »
+// renvoie vers le module dans l'onglet Configuration, « Equipe d'agents »
+// (claude-team) vers l'onglet Amelioration.
 function wsRefreshSiBadge() {
   if (!WS_PAGE) return;
   const slot = WS_PAGE.root.querySelector('[data-ws-si]');
   if (!slot) return;
-  if (!wsHasOverlay(WS_PAGE.wsId)) { slot.replaceChildren(); return; }
-  slot['innerHTML'] = `<button type="button" class="pill info" title="Auto-amélioration de Claude active : voir le module dans l'onglet Configuration">${I.selfImprove}Auto-amélioration</button>`;
-  slot.firstElementChild.addEventListener('click', () => {
-    wsSelectTab('config', true);
-    const mod = WS_PAGE.root.querySelector('#ws-panel-config .mods');
-    if (mod) mod.scrollIntoView({ behavior: motionOK() ? 'smooth' : 'auto', block: 'nearest' });
-  });
+  slot.replaceChildren();
+  if (wsHasOverlay(WS_PAGE.wsId)) {
+    const b = el('button', 'pill info', `${I.selfImprove}Auto-amélioration`);
+    b.type = 'button';
+    b.title = "Auto-amélioration de Claude active : voir le module dans l'onglet Configuration";
+    b.addEventListener('click', () => {
+      wsSelectTab('config', true);
+      const mod = WS_PAGE.root.querySelector('#ws-panel-config .mods');
+      if (mod) mod.scrollIntoView({ behavior: motionOK() ? 'smooth' : 'auto', block: 'nearest' });
+    });
+    slot.appendChild(b);
+  }
+  if (wsHasOverlay(WS_PAGE.wsId, CLAUDE_TEAM_ID)) {
+    const b = el('button', 'pill accent', `${I.cpu}Équipe d'agents`);
+    b.type = 'button';
+    b.title = "Équipe d'agents et amélioration mesurée active : voir l'onglet Amélioration";
+    b.addEventListener('click', () => wsSelectTab('amelioration', true));
+    slot.appendChild(b);
+  }
 }
 
 // Carte d'editeur : barre de fichier + corps + pied (etat, Annuler / Sauvegarder).
@@ -595,17 +669,110 @@ function mountWsFilesTab(w, panel) {
 /* ================================================================
    MODULES OPTIONNELS (overlays) -- onglet Configuration
    ================================================================
-   Bloc « Auto-amelioration de Claude » (overlay claude-self-improving) et
-   tout autre overlay disponible : etat actif / inactif, ce que le module
-   installe, Activer (modale de bootstrap) ou Re-appliquer (ne copie que
-   les fichiers manquants). Idempotent cote backend.
+   Tout overlay disponible, rendu depuis son marker (.nebula-overlay.json :
+   features, after_apply, requires, generators -- rien de code en dur par
+   overlay) : etat actif / inactif, ce que le module installe, Activer
+   (modale) ou Re-appliquer (ne copie que les fichiers manquants).
+   Idempotent cote backend. Un overlay dont le prerequis (`requires`) est
+   inactif ne peut pas etre active : lien vers la modale du prerequis.
    ================================================================ */
-const SELF_IMPROVING_FEATURES = [
-  [I.book, 'Mémoire structurée', '<code>.claude/memory/</code> : hubs architecture, pitfalls, conventions…'],
-  [I.activity, "Pipeline d'amélioration", '<code>ideas</code> → <code>backlog</code> → <code>improvements</code>, + roadmap'],
-  [I.cpu, 'Agents et commandes', 'expert, validateur, auditeur ; <code>/pipeline</code>, <code>/brainstorm</code>, <code>/check-all</code>…'],
-  [I.shield, 'Hooks Python pré-commit', 'em-dash, Co-Authored-By, fichiers protégés'],
-];
+// Icone d'une feature de marker (cle de I.*), repli sur une etincelle.
+function overlayFeatureIcon(name) {
+  return (name && /^[a-zA-Z]+$/.test(name) && I[name]) ? I[name] : I.sparkle;
+}
+// Liste des features + phrase post-activation (HTML). `text` du marker est
+// du HTML de confiance (fichier livre par Nebula) limite a <code> : tout
+// autre balisage est echappe.
+function overlayFeaturesHtml(ov) {
+  const feats = (ov.features || []).filter(f => f && f.title);
+  if (!feats.length) return '';
+  const safeText = (t) => escapeHtml(String(t || '')).replace(/&lt;(\/?)code&gt;/g, '<$1code>');
+  return `<ul class="mod-feat">${feats.map(f => `<li><span class="fi">${overlayFeatureIcon(f.icon)}</span><span><b>${escapeHtml(f.title)}</b>${safeText(f.text)}</span></li>`).join('')}</ul>`
+    + (ov.after_apply ? `<div class="mod-foot">${I.sparkle}<span>${escapeHtml(ov.after_apply)}</span></div>` : '');
+}
+// Tri des modules : sans prerequis d'abord, puis par libelle.
+function sortOverlays(list) {
+  return list.slice().sort((a, b) => ((a.requires || []).length - (b.requires || []).length)
+    || String(a.label || a.id).localeCompare(String(b.label || b.id), 'fr'));
+}
+
+// Routage always-on du module claude-team (routing = GET
+// /api/workspaces/<id>/overlays -> entree du module : {declared, mode, modes,
+// review_gate, review_gate_values}). Pill d'etat visible sur la ligne du
+// module ; selecteurs segmentes (aria-pressed, clavier) qui appellent
+// POST /api/workspaces/<id>/team/routing et mettent la pill a jour en place.
+const TEAM_ROUTING_MODES = [['manuel', 'Manuel', 'Délègue seulement sur /team ou demande explicite'], ['assiste', 'Assisté', 'Le hook suggère un routage, le fil principal le suit sauf raison explicite'], ['auto', 'Auto', 'Le fil principal applique la table de routage sans qu\'on le lui demande']];
+const TEAM_REVIEW_GATES = [['always', 'toujours', 'Tout code livré est relu à froid par le reviewer'], ['from_3_files', 'dès 3 fichiers', 'Relecture à partir de 3 fichiers touchés'], ['never', 'jamais', 'Relecture seulement sur demande']];
+const TEAM_ROUTING_PILL = { auto: ['accent', 'Routage auto'], assiste: ['info', 'Routage assisté'], manuel: ['mute', 'Routage manuel'] };
+
+function teamRoutingPillHtml(routing) {
+  if (!routing.declared) return '<span class="pill warn" data-routing-pill title="Section routing absente de .claude/team.json : activer le routage ci-dessous">Routage non déclaré</span>';
+  const [cls, label] = TEAM_ROUTING_PILL[routing.mode] || TEAM_ROUTING_PILL.manuel;
+  return `<span class="pill ${cls}" data-routing-pill title="routing.mode = ${escapeHtml(routing.mode)} (.claude/team.json)">${escapeHtml(label)}</span>`;
+}
+
+function teamRoutingSegHtml(name, label, options, allowed, current) {
+  const opts = options.filter(([v]) => (allowed || []).includes(v));
+  if (!opts.length) return '';
+  return `<span class="seg" role="group" aria-label="${escapeHtml(label)}" data-seg="${escapeHtml(name)}"><span class="thumb"></span>${opts.map(([v, l, t]) => `<button type="button" data-v="${escapeHtml(v)}" aria-pressed="${v === current}" title="${escapeHtml(t)}">${escapeHtml(l)}</button>`).join('')}</span>`;
+}
+
+function teamRoutingBlockHtml(routing) {
+  if (!routing.declared) {
+    return `<div class="mod-routing" data-routing>
+      <div class="mod-routing-row"><span class="mod-routing-l">Routage</span><span class="muted">Module activé avant le routage automatique : la section <code>routing</code> manque dans <code>.claude/team.json</code>.</span><button type="button" class="btn btn-sm" data-routing-enable>${I.zap}Activer le routage</button></div>
+    </div>`;
+  }
+  return `<div class="mod-routing" data-routing>
+    <div class="mod-routing-row"><span class="mod-routing-l">Routage</span>${teamRoutingSegHtml('mode', 'Mode de routage', TEAM_ROUTING_MODES, routing.modes, routing.mode)}<span class="muted mod-routing-h" data-routing-help>${escapeHtml((TEAM_ROUTING_MODES.find(([v]) => v === routing.mode) || ['', '', ''])[2])}</span></div>
+    <div class="mod-routing-row"><span class="mod-routing-l">Relecture du code</span>${teamRoutingSegHtml('review_gate', 'Relecture du code livré', TEAM_REVIEW_GATES, routing.review_gate_values, routing.review_gate)}<span class="muted mod-routing-h">par <code>reviewer</code> avant de présenter</span></div>
+  </div>`;
+}
+
+function bindTeamRouting(wsId, row, routing) {
+  const post = (payload) => API.post(`/api/workspaces/${wsId}/team/routing`, payload);
+  const applyState = (r) => {
+    const pill = row.querySelector('[data-routing-pill]');
+    if (pill) pill.outerHTML = teamRoutingPillHtml(r);
+    const help = row.querySelector('[data-routing-help]');
+    if (help) help.textContent = (TEAM_ROUTING_MODES.find(([v]) => v === r.mode) || ['', '', ''])[2];
+    if (STATE.teamRouting) STATE.teamRouting[wsId] = r.mode;
+  };
+  const enable = row.querySelector('[data-routing-enable]');
+  if (enable) {
+    enable.addEventListener('click', () => withBusy(enable, async () => {
+      try {
+        const r = await post({ mode: 'auto' });
+        toastOk('Routage activé (mode auto) : section routing écrite dans .claude/team.json');
+        applyState(r.routing);
+        const block = row.querySelector('[data-routing]');
+        if (block) { block.outerHTML = teamRoutingBlockHtml(r.routing); bindTeamRouting(wsId, row, r.routing); }
+      } catch (e) { toastErr(e.message); }
+    }));
+    return;
+  }
+  for (const seg of row.querySelectorAll('[data-routing] .seg')) {
+    const key = seg.dataset.seg;
+    bindSeg(seg, async (v) => {
+      const prev = key === 'mode' ? routing.mode : routing.review_gate;
+      seg.querySelectorAll('button').forEach(b => { b.disabled = true; });
+      try {
+        const r = await post({ [key]: v });
+        routing = r.routing;
+        applyState(r.routing);
+        const label = ((key === 'mode' ? TEAM_ROUTING_MODES : TEAM_REVIEW_GATES).find(([x]) => x === v) || ['', v])[1];
+        toastOk(key === 'mode' ? `Routage : ${label}` : `Relecture du code : ${label}`);
+      } catch (e) {
+        toastErr(e.message);
+        // Retour a l'etat serveur (le clic a deja bascule aria-pressed).
+        seg.querySelectorAll('button[data-v]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === prev)));
+        placeSegThumb(seg);
+      } finally {
+        seg.querySelectorAll('button').forEach(b => { b.disabled = false; });
+      }
+    });
+  }
+}
 
 async function renderWsOverlays(wsId, host) {
   // Re-fetch l'etat actif/inactif pour ce workspace specifiquement (les
@@ -619,40 +786,62 @@ async function renderWsOverlays(wsId, host) {
     return;
   }
   if (!overlays.length) { host.innerHTML = ''; return; }
-  // Auto-amelioration en tete (module mis en avant).
-  overlays.sort((a, b) => (b.id === SELF_IMPROVING_ID) - (a.id === SELF_IMPROVING_ID));
-  // Etat local (badge en-tete + indicateur accueil) aligne sur la reponse.
+  overlays = sortOverlays(overlays);
+  // Etat local (badge en-tete + indicateur accueil + onglets optionnels)
+  // aligne sur la reponse.
   const act = overlays.filter(o => o.active).map(o => o.id);
   if (act.length) STATE.overlaysActive[wsId] = act; else delete STATE.overlaysActive[wsId];
-  if (WS_PAGE && WS_PAGE.wsId === wsId) wsRefreshSiBadge();
+  if (WS_PAGE && WS_PAGE.wsId === wsId) { wsRefreshSiBadge(); wsSyncOptionalTabs(); }
+  const byId = new Map(overlays.map(o => [o.id, o]));
 
   const box = el('section', 'card mods');
   box.setAttribute('aria-label', 'Modules optionnels');
   for (const ov of overlays) {
-    const si = ov.id === SELF_IMPROVING_ID;
     const n = ov.file_count || 0;
+    const missing = (ov.requires || []).filter(r => !(byId.get(r) || {}).active);
     const row = el('div', 'mod' + (ov.active ? ' on' : ''));
     row.dataset.mod = ov.id;
+    const reqPills = (ov.requires || []).map(r => {
+      const req = byId.get(r);
+      const ok = req && req.active;
+      return `<span class="pill ${ok ? 'mute' : 'warn'}" title="${ok ? 'Prérequis actif' : 'Prérequis inactif'}">requiert ${escapeHtml(req ? req.label : r)}</span>`;
+    }).join('');
+    // Routage always-on (claude-team actif) : pill d'etat dans l'en-tete de
+    // la ligne + selecteurs sur la ligne (jamais enterres dans une modale).
+    const routing = ov.active && ov.routing ? ov.routing : null;
     row['innerHTML'] = `
       <span class="mod-ic" aria-hidden="true">${escapeHtml(ov.emoji || '🧩')}</span>
       <div style="min-width:0">
-        <div class="mod-h"><h3>${escapeHtml(ov.label || ov.id)}</h3>${ov.active ? '<span class="pill ok"><span class="sdot"></span>Actif</span>' : '<span class="pill mute">Inactif</span>'}</div>
-        <p>${si ? "Claude tient une mémoire de projet, trie ses propres idées d'amélioration et vérifie son travail avant chaque commit." : escapeHtml(ov.description || '')}</p>
-        ${si && ov.active ? '<button type="button" class="mod-more" aria-expanded="false">Ce que le module installe ' + I.right + '</button>' : ''}
-        ${si ? `<ul class="mod-feat">${SELF_IMPROVING_FEATURES.map(([ic, t, d]) => `<li><span class="fi">${ic}</span><span><b>${escapeHtml(t)}</b>${d}</span></li>`).join('')}</ul>
-        <div class="mod-foot">${I.sparkle}<span>Après activation : lancer Claude et dire « bootstrap le projet ». N'écrase aucun fichier existant.</span></div>` : ''}
+        <div class="mod-h"><h3>${escapeHtml(ov.label || ov.id)}</h3>${ov.active ? '<span class="pill ok"><span class="sdot"></span>Actif</span>' : '<span class="pill mute">Inactif</span>'}${routing ? teamRoutingPillHtml(routing) : ''}${reqPills}</div>
+        <p>${escapeHtml(ov.description || '')}</p>
+        ${routing ? teamRoutingBlockHtml(routing) : ''}
+        ${ov.active && (ov.features || []).length ? '<button type="button" class="mod-more" aria-expanded="false">Ce que le module installe ' + I.right + '</button>' : ''}
+        ${overlayFeaturesHtml(ov)}
+        ${missing.length && !ov.active ? `<div class="mod-req">${I.alert}<span>Requiert ${missing.map(r => `<b>${escapeHtml((byId.get(r) || {}).label || r)}</b>`).join(', ')} : <button type="button" class="linklike" data-req="${escapeHtml(missing[0])}">activer d'abord ce module</button>.</span></div>` : ''}
       </div>
       <div class="mod-act"><small>${n} fichier${n > 1 ? 's' : ''}${ov.active ? '' : ', idempotent'}</small></div>`;
+    if (routing) bindTeamRouting(wsId, row, routing);
     const actions = row.querySelector('.mod-act');
     const applyBtn = ov.active ? btn('Ré-appliquer', 'btn-sm', I.refresh) : btn('Activer', 'btn-primary', I.plus);
     applyBtn.title = ov.active
       ? "Ré-applique le module : ne copie que les fichiers absents, n'écrase rien."
       : `Copie ${n} fichier(s) dans ce workspace (idempotent, n'écrase rien).`;
     if (!ov.active) applyBtn.setAttribute('aria-label', `Activer ${ov.label || ov.id}`);
-    // Le clic ouvre une modale de bootstrap qui collecte mode / langue /
-    // auteur / profondeur AVANT d'appliquer (cf. P3).
+    if (missing.length && !ov.active) {
+      applyBtn.disabled = true;
+      applyBtn.title = `Requiert ${missing.map(r => (byId.get(r) || {}).label || r).join(', ')}`;
+      applyBtn.textContent = `Requiert ${(byId.get(missing[0]) || {}).label || missing[0]}`;
+    }
+    // Le clic ouvre une modale qui collecte les options (mode / langue /
+    // auteur / profondeur si l'overlay les exploite, modeles par role si
+    // generateur team_agents) AVANT d'appliquer.
     applyBtn.addEventListener('click', () => modalApplyOverlay(wsId, ov, host));
     actions.prepend(applyBtn);
+    const reqLink = row.querySelector('[data-req]');
+    if (reqLink) reqLink.addEventListener('click', () => {
+      const req = byId.get(reqLink.dataset.req);
+      if (req) modalApplyOverlay(wsId, req, host, { then: ov });
+    });
     const more = row.querySelector('.mod-more');
     if (more) more.addEventListener('click', () => {
       row.classList.toggle('open');
@@ -663,16 +852,26 @@ async function renderWsOverlays(wsId, host) {
   host.replaceChildren(box);
 }
 
-// Modale de bootstrap d'un overlay : mode projet, langue, convention
-// auteur (si equipe), profondeur d'install. Pre-remplit les defauts
-// suggeres (solo -> minimale ; equipe -> complete) et applique au submit.
-function modalApplyOverlay(wsId, ov, host) {
+// Modale d'activation d'un overlay. Champs selon le marker : mode projet,
+// langue, convention auteur (si equipe), profondeur d'install quand
+// l'overlay exploite ces options (bootstrap_options) ; « Modeles par
+// role » + « Regenerer » quand il genere des agents (team_agents).
+// opts.then : overlay a proposer juste apres (activation d'un prerequis
+// depuis la modale d'un module dependant) ; opts.onDone : rappel apres
+// application reussie (page Templates).
+function modalApplyOverlay(wsId, ov, host, opts = {}) {
   const body = el('div');
+  const hasBoot = ov.bootstrap_options !== false;
+  const hasTeam = (ov.generators || []).includes('team_agents');
+  const agents = hasTeam ? (ov.agents || []) : [];
+  const MODELS = [['sonnet', 'sonnet (rapide)'], ['opus', 'opus (profond)'], ['haiku', 'haiku (léger)']];
   body.innerHTML = `
     <div class="muted" style="font-size:12px;margin-bottom:10px">
-      ${escapeHtml(ov.emoji || '🧩')} <strong>${escapeHtml(ov.label || ov.id)}</strong> —
+      ${escapeHtml(ov.emoji || '🧩')} <strong>${escapeHtml(ov.label || ov.id)}</strong> :
       ${escapeHtml(ov.description || '')}
     </div>
+    ${opts.then ? `<div class="callout callout-info" style="margin-bottom:var(--sp-3)"><div>Prérequis de <strong>${escapeHtml(opts.then.label || opts.then.id)}</strong> : après activation, la modale de ce module s'ouvrira.</div></div>` : ''}
+    ${hasBoot ? `
     <div class="field">
       <label class="field-label">Mode projet</label>
       <select class="select" name="mode">
@@ -709,51 +908,96 @@ function modalApplyOverlay(wsId, ov, host) {
       <div class="muted" style="font-size:11px;margin-top:4px">
         Identifiant utilisé dans les champs <code>par &lt;author&gt;</code> des registres.
       </div>
+    </div>` : ''}
+    ${hasTeam ? `
+    <div class="field">
+      <label class="field-label">Préfixe des agents</label>
+      <input class="input mono" name="prefix" maxlength="40" pattern="[a-zA-Z0-9_-]{1,40}" value="${escapeHtml(ov.prefix || wsId)}" placeholder="${escapeHtml(wsId)}">
+      <div class="muted" style="font-size:11px;margin-top:4px">
+        ex. <code>dash</code> pour obtenir <code>dash-orchestrator</code> à côté de <code>dash-expert</code>. Lettres, chiffres, <code>-</code> et <code>_</code> (40 max) ; mémorisé dans <code>.claude/team.json</code> (<code>team.prefix</code>).
+      </div>
+    </div>` : ''}
+    ${agents.length ? `
+    <div class="field">
+      <label class="field-label">Modèles par rôle</label>
+      <div class="muted" style="font-size:11px;margin-bottom:6px">Pré-rempli depuis le manifeste. Un agent déjà généré n'est pas réécrit sans « Régénérer ».</div>
+      <div class="team-models">${agents.map(a => `
+        <label><span><b>${escapeHtml(a.id)}</b>${a.role ? `<small>${escapeHtml(a.role)}</small>` : ''}</span>
+          <select class="select" name="model-${escapeHtml(a.id)}" data-agent="${escapeHtml(a.id)}">${MODELS.map(([v, l]) => `<option value="${v}"${v === a.model ? ' selected' : ''}>${l}</option>`).join('')}</select>
+        </label>`).join('')}</div>
     </div>
+    ${ov.active ? `<label class="xswitch" style="padding:0"><input type="checkbox" name="regenerate"> Régénérer les agents générés par Nebula (ceux qui portent encore le marqueur généré)</label>` : ''}` : ''}
   `;
   const modeSel = body.querySelector('[name=mode]');
   const depthSel = body.querySelector('[name=depth]');
   const authorField = body.querySelector('[data-author-field]');
-  // Defauts suggeres + champ auteur conditionnel au mode equipe.
-  const syncMode = () => {
-    const m = modeSel.value;
-    const team = (m === 'equipe' || m === 'equipe-hierarchique');
-    authorField.style.display = team ? '' : 'none';
-    // Defaut de profondeur suggere selon le mode (modifiable ensuite).
-    depthSel.value = (m === 'solo') ? 'minimal' : 'complete';
-  };
-  modeSel.addEventListener('change', syncMode);
-  syncMode();
+  if (modeSel) {
+    // Defauts suggeres + champ auteur conditionnel au mode equipe.
+    const syncMode = () => {
+      const m = modeSel.value;
+      const team = (m === 'equipe' || m === 'equipe-hierarchique');
+      authorField.style.display = team ? '' : 'none';
+      // Defaut de profondeur suggere selon le mode (modifiable ensuite).
+      depthSel.value = (m === 'solo') ? 'minimal' : 'complete';
+    };
+    modeSel.addEventListener('change', syncMode);
+    syncMode();
+  }
 
   const cancel = btn('Annuler', 'btn-ghost');
   const apply = btn(ov.active ? 'Ré-appliquer' : 'Activer', 'btn-primary', ov.active ? I.refresh : I.plus);
   const { close } = openModal({ title: `Module : ${ov.label || ov.id}`, body, footer: [cancel, apply] });
   cancel.addEventListener('click', close);
   apply.addEventListener('click', () => withBusy(apply, async () => {
-    const payload = {
-      mode: modeSel.value,
-      language: body.querySelector('[name=language]').value,
-      depth: depthSel.value,
-      author: body.querySelector('[name=author]').value.trim(),
-    };
+    const payload = {};
+    if (modeSel) {
+      payload.mode = modeSel.value;
+      payload.language = body.querySelector('[name=language]').value;
+      payload.depth = depthSel.value;
+      payload.author = body.querySelector('[name=author]').value.trim();
+    }
+    if (agents.length) {
+      payload.models = {};
+      for (const sel of body.querySelectorAll('select[data-agent]')) payload.models[sel.dataset.agent] = sel.value;
+      const regen = body.querySelector('[name=regenerate]');
+      payload.regenerate = !!(regen && regen.checked);
+    }
+    const prefixInput = body.querySelector('[name=prefix]');
+    if (prefixInput) {
+      // Meme regle que safe_id cote serveur ; vide = id du workspace.
+      const prefix = prefixInput.value.trim();
+      if (prefix && !/^[a-zA-Z0-9_-]{1,40}$/.test(prefix)) {
+        prefixInput.focus();
+        toastErr('Préfixe invalide : lettres, chiffres, « - » et « _ » seulement (40 caractères max).');
+        return;
+      }
+      if (prefix) payload.prefix = prefix;
+    }
     try {
       const r = await API.post(`/api/workspaces/${wsId}/overlays/${ov.id}`, payload);
       const nc = (r.copied || []).length;
       const na = (r.appended || []).length;
       const nseed = (r.seeded || []).length;
+      const ng = (r.generated || []).length;
+      const np = (r.settings_patched || []).length;
       const ns = (r.skipped || []).length;
       const parts = [];
       if (nc) parts.push(`${nc} ajouté(s)`);
       if (na) parts.push(`${na} fragment(s) CLAUDE.md`);
       if (nseed) parts.push(`${nseed} exemple(s)`);
+      if (ng) parts.push(`${ng} agent(s) généré(s)${r.prefix ? ` (${r.prefix}-*)` : ''}`);
+      if (np) parts.push('settings.json complété');
       if (ns) parts.push(`${ns} ignoré(s)`);
-      if (!nc && !na && !nseed) {
+      if (!nc && !na && !nseed && !ng && !np) {
         toastOk(`Module déjà complet (${ns} fichier(s) déjà présent(s))`);
       } else {
         toastOk(`Module appliqué · ${parts.join(', ')}`);
       }
       close();
-      renderWsOverlays(wsId, host);  // refresh badges + etat (en-tete, accueil)
+      if (opts.onDone) opts.onDone(r);
+      if (host) renderWsOverlays(wsId, host);  // refresh badges + etat (en-tete, accueil, onglets)
+      // Prerequis active depuis la modale d'un module dependant : enchainer.
+      if (opts.then) modalApplyOverlay(wsId, { ...opts.then, active: false }, host, { onDone: opts.onDone });
       // Le module a pu creer / completer CLAUDE.md : l'onglet Memoire est
       // remonte s'il n'est pas en cours d'edition, sinon on previent (un
       // enregistrement ecraserait le fragment ajoute).
@@ -3516,8 +3760,11 @@ function modalNewWorkspace() {
   // Section "Modules optionnels" : checkboxes des overlays disponibles.
   // L'overlay est applique APRES le template de base (idempotent, ne
   // touche pas aux fichiers deja generes par le template).
-  const overlays = (STATE.overlays || []).slice()
-    .sort((a, b) => (b.id === SELF_IMPROVING_ID) - (a.id === SELF_IMPROVING_ID));
+  // Tri : modules sans prerequis d'abord (sortOverlays). Cocher un module
+  // coche et verrouille ses prerequis ; l'ordre d'application est resolu
+  // cote backend (order_by_requires).
+  const overlays = sortOverlays(STATE.overlays || []);
+  const ovById = new Map(overlays.map(o => [o.id, o]));
   const overlaysSection = overlays.length ? `
     <div class="field">
       <label class="field-label" id="ov-pick-label">Modules optionnels</label>
@@ -3527,15 +3774,14 @@ function modalNewWorkspace() {
       <div class="ov-pick" role="group" aria-labelledby="ov-pick-label" data-overlays-host>
         ${overlays.map(o => {
           const si = o.id === SELF_IMPROVING_ID;
+          const reqs = (o.requires || []).map(r => (ovById.get(r) || {}).label || r);
           return `
           <label class="ov-opt${si ? ' featured' : ''}">
-            <input type="checkbox" name="overlay" value="${escapeHtml(o.id)}">
+            <input type="checkbox" name="overlay" value="${escapeHtml(o.id)}" data-requires="${escapeHtml((o.requires || []).join(' '))}">
             <span class="ov-e" aria-hidden="true">${escapeHtml(o.emoji || '🧩')}</span>
             <span style="min-width:0">
-              <b>${escapeHtml(o.label || o.id)}${si ? '<span class="pill accent ov-tag">Recommandé</span>' : ''}</b>
-              <span class="ov-d" style="display:block">${si
-                ? "Mémoire structurée (.claude/memory), pipeline ideas → backlog → improvements, agents et commandes (/pipeline, /check-all…), hooks Python pré-commit. Après création : lancer Claude et dire « bootstrap le projet »."
-                : escapeHtml(o.description || '')}</span>
+              <b>${escapeHtml(o.label || o.id)}${si ? '<span class="pill accent ov-tag">Recommandé</span>' : ''}${reqs.length ? `<span class="pill mute ov-tag">requiert ${escapeHtml(reqs.join(', '))}</span>` : ''}</b>
+              <span class="ov-d" style="display:block">${escapeHtml(o.description || '')}</span>
             </span>
           </label>`;
         }).join('')}
@@ -3553,6 +3799,26 @@ function modalNewWorkspace() {
     <div class="field"><label class="field-label">Template</label><select class="select" name="template">${STATE.templates.map(t => `<option value="${escapeHtml(t.id)}">${escapeHtml(t.emoji || '📦')} ${escapeHtml(t.label || t.id)}</option>`).join('') || '<option value="blank">Blank</option>'}</select></div>
     ${overlaysSection}
   `;
+  // Dependances entre modules : cocher un module coche et verrouille ses
+  // prerequis ; decocher un prerequis decoche les modules qui le requierent.
+  const ovInputs = Array.from(body.querySelectorAll('input[name="overlay"]'));
+  const syncOverlayDeps = () => {
+    const checked = new Set(ovInputs.filter(i => i.checked).map(i => i.value));
+    for (const i of ovInputs) {
+      const neededBy = ovInputs.filter(o => o.checked && (o.dataset.requires || '').split(' ').includes(i.value));
+      i.disabled = neededBy.length > 0;
+      i.closest('.ov-opt').title = neededBy.length ? `Requis par ${neededBy.map(o => (ovById.get(o.value) || {}).label || o.value).join(', ')}` : '';
+      if (neededBy.length) i.checked = true;
+    }
+    for (const i of ovInputs) {
+      const reqs = (i.dataset.requires || '').split(' ').filter(Boolean);
+      if (i.checked && reqs.some(r => !checked.has(r) && ovById.has(r))) {
+        for (const r of reqs) { const ri = ovInputs.find(o => o.value === r); if (ri) { ri.checked = true; ri.disabled = true; } }
+      }
+    }
+  };
+  for (const i of ovInputs) i.addEventListener('change', syncOverlayDeps);
+
   const cancel = btn('Annuler', 'btn-ghost');
   const create = btn('Créer', 'btn-primary', I.plus);
   const { close } = openModal({ title: 'Nouveau workspace', body, footer: [cancel, create] });

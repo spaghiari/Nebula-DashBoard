@@ -1093,6 +1093,113 @@ a.hc-row:hover { background: var(--hover); }
   .page-header > .page-actions { margin-left: 0; }
 }
 
+/* === 11b. MODULES (overlays declaratifs) + ONGLET AMELIORATION ========
+   Modules : prerequis (`requires`), lien « activer d'abord », modeles par
+   role (modale), section Modules de la page Templates, indicateur equipe.
+   Onglet Amelioration (claude-team, js/pages/improvement.js) : KPI, courbe
+   SVG, journal, evals, registres. Couleurs = tokens uniquement. */
+.mod-req { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; font-size: 12.5px; color: var(--text-muted); }
+.mod-req svg { width: 14px; height: 14px; flex: none; margin-top: 2px; color: var(--warn); }
+.mod-req b { color: var(--text); font-weight: 600; }
+.linklike { font: inherit; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer; padding: 0; background: none; border: 0; }
+.linklike:hover { color: var(--text); }
+.linklike:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+/* Routage always-on (ligne du module claude-team) : selecteurs segmentes
+   sur la ligne, pill d'etat dans l'en-tete (jamais dans une modale). */
+.mod-routing { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-1); }
+.mod-routing-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; font-size: 12.5px; }
+.mod-routing-l { min-width: 128px; font-weight: 600; color: var(--text); }
+.mod-routing-h { font-size: 12px; min-width: 0; flex: 1 1 220px; }
+.mod-routing .seg { height: 30px; background: var(--surface-2); }
+.mod-routing .seg button { padding: 0 10px; font-size: 12px; }
+.mod-routing .seg button:disabled { opacity: 0.6; cursor: progress; }
+.mod-routing .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mod-routing .btn svg { width: 14px; height: 14px; }
+.mod-routing code { font-size: 11.5px; }
+@media (max-width: 700px) { .mod-routing-l { min-width: 100%; } }
+.mod.on .mod-req { display: none; }
+.mod-feat.compact { grid-template-columns: 1fr; gap: 6px; margin-top: 4px; }
+.mod-feat.compact li b { font-size: 12.5px; }
+.mod-feat.compact .fi { width: 22px; height: 22px; border-radius: 6px; }
+.mod-feat.compact .fi svg { width: 12px; height: 12px; }
+.team-models { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; }
+.team-models label { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 8px; align-items: center; font-size: 12.5px; min-width: 0; }
+.team-models label > span { min-width: 0; display: flex; flex-direction: column; }
+.team-models label b { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--text); }
+.team-models label small { color: var(--text-dim); font-size: 11px; }
+.team-models .select { height: 30px; font-size: 12px; min-width: 0; }
+.mods-sec { margin-top: calc(var(--gap) * 2); padding-top: var(--gap); border-top: 1px solid var(--border); }
+.mods-title { margin: 0; font-size: var(--fs-h2); font-weight: 650; letter-spacing: -0.01em; }
+.module-card .xstate .pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.si.team { background: var(--info-soft); color: var(--info); }
+.si.team svg { width: 11px; height: 11px; }
+
+/* Onglet Amelioration */
+.impr { display: flex; flex-direction: column; gap: var(--gap); }
+.impr-head { display: flex; align-items: flex-start; gap: 12px; }
+.impr-head > div { flex: 1; min-width: 0; }
+.impr-head h2 { margin: 0; font-size: var(--fs-h2); font-weight: 650; letter-spacing: -0.01em; }
+.impr-head p { margin: 4px 0 0; font-size: 13px; max-width: 78ch; }
+.impr-head .pill { margin-left: 6px; vertical-align: 1px; }
+.impr-kpis .kpi { min-height: 84px; }
+.impr-empty { padding: var(--sp-8) var(--sp-6); }
+.impr-empty p { max-width: 62ch; margin: 0 auto; }
+.impr-curve { padding: 0; overflow: hidden; }
+.impr-curve-body { padding: 6px var(--card-pad) 10px; }
+.impr-svg { display: block; width: 100%; height: auto; max-height: 190px; }
+.impr-svg .g { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 3 4; }
+.impr-svg .t { fill: var(--text-dim); font: 500 11px var(--font-mono); }
+.impr-svg .a { fill: var(--accent); opacity: 0.12; }
+.impr-svg .l { fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
+.impr-svg .d { fill: var(--surface-1); stroke: var(--accent); stroke-width: 2.2; }
+.impr-svg .d:hover { fill: var(--accent); }
+.impr-journal .tr { grid-template-columns: 34px 92px minmax(120px, 1fr) minmax(160px, 1.6fr) 150px 86px 84px 80px; cursor: default; }
+.impr-journal .tr:not(.h):hover { background: var(--hover); }
+.impr-journal .tr > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.impr-journal .impr-target { font-size: 11.5px; color: var(--text-muted); }
+.impr-journal .impr-hyp[data-hc] { cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.impr-journal small.ok { color: var(--ok); }
+.impr-journal small.err { color: var(--err); }
+.impr-journal [data-hc] .pill { cursor: help; }
+.impr-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap); align-items: start; }
+.impr-grid .card { padding-bottom: var(--card-pad); }
+.impr-grid .card-h h3 { white-space: nowrap; }
+.impr-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px var(--card-pad) 0; }
+.impr-facts > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.impr-facts b { font-size: 21px; font-weight: 650; letter-spacing: -0.02em; line-height: 1; }
+.impr-facts span { font-size: 11.5px; color: var(--text-dim); }
+.impr-note { margin: 10px var(--card-pad) 0; font-size: 12px; line-height: 1.45; }
+.impr-agents { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px var(--card-pad) 0; }
+.impr-agents .chip b { font-weight: 600; color: var(--text); margin-left: 2px; }
+.impr-agents .chip.missing { border: 1px dashed var(--warn); color: var(--warn); }
+.impr-agents .chip svg { width: 11px; height: 11px; }
+.impr-reg-rows { display: flex; flex-direction: column; padding: 8px 0 0; }
+.impr-reg-row { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 4px var(--card-pad); border-top: 1px solid var(--border); }
+.impr-reg-row > code { font-size: 11.5px; color: var(--text-muted); flex: none; min-width: 120px; }
+.impr-reg-row .chips { flex-wrap: wrap; overflow: visible; }
+.impr-reg-row .chip b { font-weight: 600; color: var(--text); }
+.impr-reg-row .chip.todo { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.impr-reg-row .chip.done { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.impr-reg-row .chip.prog { background: var(--info-soft); color: var(--info); border-color: transparent; }
+.impr-reg-row .chip.todo b, .impr-reg-row .chip.done b, .impr-reg-row .chip.prog b { color: inherit; }
+.impr-steps { margin: 10px 0 0; padding: 0 var(--card-pad) 0 calc(var(--card-pad) + 18px); font-size: 12.5px; color: var(--text-muted); display: flex; flex-direction: column; gap: 6px; }
+.impr-steps code { color: var(--text); }
+@media (max-width: 1100px) {
+  .impr-grid { grid-template-columns: 1fr; }
+  .impr-journal .tr { grid-template-columns: 34px 92px minmax(0, 1.4fr) 140px 70px 84px; }
+  .impr-journal .tr > :nth-child(3), .impr-journal .tr > :nth-child(8) { display: none; }
+}
+@media (max-width: 900px) {
+  .team-models { grid-template-columns: 1fr; }
+  .impr-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .impr-journal .tr { grid-template-columns: 34px minmax(0, 1fr) 84px; }
+  /* Le masquage generique mobile (.tr > *:not(.wn):not(.ra)) est leve pour
+     les 3 colonnes gardees : #, hypothese, statut. */
+  .impr-journal .tr > :nth-child(1), .impr-journal .tr > :nth-child(4), .impr-journal .tr > :nth-child(7) { display: block; }
+  .impr-journal .tr > :not(:nth-child(1)):not(:nth-child(4)):not(:nth-child(7)) { display: none; }
+  .impr-facts { grid-template-columns: 1fr; }
+}
+
 /* === 12. MOUVEMENT REDUIT ========================================== */
 @media (prefers-reduced-motion: reduce) {
   .rise, .fade-in, .tok i, .palette, .palette-overlay, .toast, .mx-bar { animation: none !important; }

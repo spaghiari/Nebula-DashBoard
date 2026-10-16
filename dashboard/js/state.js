@@ -29,6 +29,7 @@ const STATE = {
   stats: {},
   wsMcps: {},      // ws_id -> {active, has_file}
   overlaysActive: {}, // ws_id -> [overlay_id actif] (/api/overview, badge « Auto-amélioration »)
+  teamRouting: {},   // ws_id -> mode de routage claude-team (manuel | assiste | auto), /api/overview team_routing
   homePrefetch: null, // { at, stats, sanity: Promise, history: Promise } pose par loadAll pour renderHome
   loadErrors: {},  // ressource -> message d'erreur du dernier loadAll (cf. js/router.js loadErrorsFor)
   activeSessions: {},  // ws_id -> {pid, launched_at, label} - sessions Claude Code lancees depuis Nebula

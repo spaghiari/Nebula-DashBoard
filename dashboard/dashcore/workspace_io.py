@@ -87,6 +87,35 @@ def workspaces_overview() -> dict:
             ws_mcps[ws_id] = {"active": [], "has_file": False}
     out["ws_mcps"] = ws_mcps
     out["overlays_active"] = overlays_active_map(out.get("workspaces", []))
+    out["team_routing"] = team_routing_map(out.get("workspaces", []), out["overlays_active"])
+    return out
+
+
+def team_routing_map(workspaces: list[dict], overlays_active: dict[str, list[str]]) -> dict[str, str]:
+    """{ws_id: mode de routage} pour les workspaces où un overlay à
+    générateur `team_agents` (claude-team) est actif : enrichit la pill
+    « Équipe » de l'accueil sans requête par workspace. Coût : une lecture
+    de `.claude/team.json` par workspace concerné. Sans section `routing`
+    (activé avant le routage) : `manuel`."""
+    from dashcore.api_overlays import list_overlays
+    from dashcore.api_team import load_manifest, routing_state
+    try:
+        team_ids = {ov["id"] for ov in list_overlays() if "team_agents" in (ov.get("generators") or [])}
+    except OSError:
+        return {}
+    if not team_ids:
+        return {}
+    out: dict[str, str] = {}
+    for w in workspaces:
+        ws_id = w.get("id")
+        if not ws_id or ws_id in out or not (team_ids & set(overlays_active.get(ws_id) or [])):
+            continue
+        try:
+            manifest = load_manifest(_ws_dir_from_entry(w))
+        except OSError:
+            continue
+        if manifest is not None:
+            out[ws_id] = routing_state(manifest)["mode"]
     return out
 
 

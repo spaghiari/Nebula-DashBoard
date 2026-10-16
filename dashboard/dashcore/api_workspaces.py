@@ -1341,15 +1341,23 @@ def _create_workspace_steps(data: dict, ws_id: str, ws_dir: Path, label: str,
     }
     created = apply_template(tpl_dir, ws_dir, vars)
 
-    # Application des overlays dans l'ordre soumis. Chaque overlay est
-    # idempotent (ne reecrit jamais un fichier deja present), donc l'ordre
-    # n'affecte que les conflits inter-overlays (premier servi). On collecte
-    # un resume par overlay pour le retour API.
+    # Application des overlays dans l'ordre des DÉPENDANCES (un overlay
+    # requis passe avant celui qui le requiert, cf. order_by_requires) ; un
+    # overlay dont le prérequis n'est pas coché est refusé avec un message
+    # clair dans overlays[].error (la création du workspace n'échoue pas).
+    # Chaque overlay est idempotent (ne reecrit jamais un fichier deja
+    # present), donc l'ordre n'affecte que les conflits inter-overlays
+    # (premier servi). On collecte un resume par overlay pour le retour API.
+    from dashcore.api_overlays import order_by_requires
     overlays_applied: list[dict] = []
+    valid_ids = [o for o in overlays_in if isinstance(o, str) and safe_id(o)]
     for ov_id in overlays_in:
         if not isinstance(ov_id, str) or not safe_id(ov_id):
             overlays_applied.append({"id": ov_id, "ok": False, "error": "id invalide"})
-            continue
+    ordered, req_errors = order_by_requires(valid_ids)
+    for ov_id, err in req_errors.items():
+        overlays_applied.append({"id": ov_id, "ok": False, "error": err})
+    for ov_id in ordered:
         # Profondeur COMPLÈTE à la création : cocher l'overlay dans le
         # formulaire signifie « je veux le kit annoncé » (agents, commands,
         # registres ideas/backlog/roadmap, mémoire complète). Sans option,

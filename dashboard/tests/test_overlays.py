@@ -177,6 +177,196 @@ class ApplyOverlayTests(unittest.TestCase):
         self.assertEqual(p["missing_hooks"], [".claude/hooks/absent.py"])
 
 
+HOOK_CMD = 'python "${CLAUDE_PROJECT_DIR}/.claude/hooks/h2.py"'
+OTHER_CMD = 'python "${CLAUDE_PROJECT_DIR}/.claude/hooks/other.py"'
+
+
+def _build_dependent(marker_extra: dict | None = None) -> Path:
+    """Second overlay `ov2` qui requiert `ov1`, avec settings_patch + generators."""
+    d = TEMPLATES_DIR / "ov2"
+    marker = {
+        "id": "ov2", "label": "Dépendant", "signature_file": ".claude/sig2.md",
+        "requires": ["ov1"],
+        "features": [{"icon": "cpu", "title": "F1", "text": "t1"}, "pas un dict"],
+        "after_apply": "Ensuite...",
+        "settings_patch": {
+            "hooks": {"PreToolUse": [{"matcher": "Edit|Write", "hooks": [
+                {"type": "command", "command": HOOK_CMD, "timeout": 5}]}]},
+            "permissions": {"allow": ["Bash(echo:*)"]},
+            "newKey": "posée",
+        },
+        "generators": ["inconnu"],
+    }
+    marker.update(marker_extra or {})
+    write_json_file(d / ov.OVERLAY_MARKER, marker)
+    _write(d / ".claude" / "sig2.md", "sig2\n")
+    _write(d / ".claude" / "hooks" / "h2.py", "print('h2')\n")
+    return d
+
+
+class RequiresAndPatchTests(unittest.TestCase):
+    def setUp(self):
+        reset_sandbox()
+        # ov1 exploite les options de bootstrap (profondeur déclarée) : il
+        # pose settings.local.json ; ov2 (sans) ne doit pas le réécrire.
+        _build_overlay({"depth": {"minimal_keep": ["CLAUDE.md", ".claude/sig.md"]}})
+        _build_dependent()
+        self.ws = make_workspace("w1")
+        self.vars = {"name": "w1", "label": "W"}
+
+    def test_liste_expose_le_declaratif(self):
+        o2 = ov.get_overlay("ov2")
+        self.assertEqual(o2["requires"], ["ov1"])
+        self.assertEqual(o2["features"], [{"icon": "cpu", "title": "F1", "text": "t1"}])
+        self.assertEqual(o2["after_apply"], "Ensuite...")
+        self.assertEqual(o2["generators"], ["inconnu"])
+        self.assertTrue(o2["has_settings_patch"])
+        self.assertFalse(o2["bootstrap_options"])
+        o1 = ov.get_overlay("ov1")
+        self.assertEqual(o1["requires"], [])
+        self.assertEqual(o1["features"], [])
+        self.assertFalse(o1["has_settings_patch"])
+
+    def test_prerequis_inactif_409_sans_ecriture(self):
+        status, p = ov.apply_overlay("w1", "ov2", self.vars)
+        self.assertEqual(status, 409)
+        self.assertIn("Overlay test", p["error"])
+        self.assertEqual(p["missing_requires"], [{"id": "ov1", "label": "Overlay test"}])
+        self.assertFalse((self.ws / ".claude" / "sig2.md").exists())
+        self.assertFalse((self.ws / ".claude" / "settings.json").exists())
+
+    def test_settings_patch_fusion_idempotente(self):
+        ov.apply_overlay("w1", "ov1", self.vars, {"depth": "complete"})
+        settings = self.ws / ".claude" / "settings.json"
+        write_json_file(settings, {
+            "permissions": {"allow": ["Bash(git status)"], "deny": ["Bash(rm -rf:*)"]},
+            "hooks": {"PreToolUse": [{"matcher": "Edit|Write", "hooks": [
+                {"type": "command", "command": OTHER_CMD}]},
+                {"matcher": "Bash", "hooks": []}]},
+            "newKey": "à moi",
+        })
+        _write(self.ws / ".claude" / "hooks" / "other.py", "")
+        status, p = ov.apply_overlay("w1", "ov2", self.vars)
+        self.assertEqual(status, 200, p.get("error"))
+        self.assertEqual(p["settings_patched"], [".claude/settings.json"])
+        self.assertIn({"path": "generator:inconnu", "reason": "générateur inconnu"}, p["skipped"])
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        edit = next(e for e in data["hooks"]["PreToolUse"] if e["matcher"] == "Edit|Write")
+        self.assertEqual([h["command"] for h in edit["hooks"]], [OTHER_CMD, HOOK_CMD])
+        self.assertEqual(data["permissions"]["allow"], ["Bash(git status)", "Bash(echo:*)"])
+        self.assertEqual(data["permissions"]["deny"], ["Bash(rm -rf:*)"])
+        self.assertEqual(data["newKey"], "à moi")  # scalaire utilisateur jamais écrasé
+        self.assertTrue(any(e["matcher"] == "Bash" for e in data["hooks"]["PreToolUse"]))
+        # Deuxième application : aucune écriture, aucun doublon.
+        before = settings.read_text(encoding="utf-8")
+        status, p = ov.apply_overlay("w1", "ov2", self.vars)
+        self.assertEqual(p["settings_patched"], [])
+        self.assertEqual(settings.read_text(encoding="utf-8"), before)
+        data = json.loads(before)
+        edit = next(e for e in data["hooks"]["PreToolUse"] if e["matcher"] == "Edit|Write")
+        self.assertEqual(len(edit["hooks"]), 2)
+
+    def test_settings_patch_cree_si_absent(self):
+        ov.apply_overlay("w1", "ov1", self.vars, {"depth": "complete"})
+        self.assertFalse((self.ws / ".claude" / "settings.json").exists())
+        status, p = ov.apply_overlay("w1", "ov2", self.vars)
+        self.assertEqual(status, 200, p.get("error"))
+        data = json.loads((self.ws / ".claude" / "settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["hooks"]["PreToolUse"][0]["hooks"][0]["command"], HOOK_CMD)
+        self.assertEqual(data["newKey"], "posée")
+        self.assertEqual(ov._missing_hook_refs(self.ws), [])
+
+    def test_fusion_groupe_sans_matcher(self):
+        """Un événement sans `matcher` (UserPromptSubmit) : la clé absente,
+        `null` et `""` désignent le même groupe ; aucun doublon à la
+        ré-application, les hooks utilisateur du groupe sont gardés."""
+        patch = [{"hooks": [{"type": "command", "command": HOOK_CMD, "timeout": 5}]}]
+        existing = [{"matcher": "", "hooks": [{"type": "command", "command": OTHER_CMD}]}]
+        self.assertTrue(ov._merge_hook_lists(existing, patch))
+        self.assertEqual(len(existing), 1)
+        self.assertEqual([h["command"] for h in existing[0]["hooks"]], [OTHER_CMD, HOOK_CMD])
+        self.assertFalse(ov._merge_hook_lists(existing, patch))  # idempotent
+        self.assertEqual(len(existing[0]["hooks"]), 2)
+        existing = [{"matcher": None, "hooks": []}]
+        self.assertTrue(ov._merge_hook_lists(existing, patch))
+        self.assertEqual(len(existing), 1)
+        self.assertFalse(ov._merge_hook_lists(existing, patch))
+        # Liste vide : le groupe est copié tel quel (sans clé matcher).
+        existing = []
+        self.assertTrue(ov._merge_hook_lists(existing, patch))
+        self.assertEqual(existing, patch)
+        self.assertFalse(ov._merge_hook_lists(existing, patch))
+        # Un groupe AVEC matcher reste distinct du groupe sans matcher.
+        existing = [{"matcher": "Bash", "hooks": [{"type": "command", "command": HOOK_CMD}]}]
+        self.assertTrue(ov._merge_hook_lists(existing, patch))
+        self.assertEqual(len(existing), 2)
+        # Bout en bout : settings_patch avec UserPromptSubmit, deux applications.
+        _build_dependent({"settings_patch": {"hooks": {"UserPromptSubmit": patch}}})
+        ov.apply_overlay("w1", "ov1", self.vars, {"depth": "complete"})
+        settings = self.ws / ".claude" / "settings.json"
+        write_json_file(settings, {"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": OTHER_CMD}]}]}})
+        _write(self.ws / ".claude" / "hooks" / "other.py", "")
+        status, p = ov.apply_overlay("w1", "ov2", self.vars)
+        self.assertEqual(status, 200, p.get("error"))
+        self.assertEqual(p["settings_patched"], [".claude/settings.json"])
+        data = json.loads(settings.read_text(encoding="utf-8"))
+        self.assertEqual(len(data["hooks"]["UserPromptSubmit"]), 1)
+        self.assertEqual([h["command"] for h in data["hooks"]["UserPromptSubmit"][0]["hooks"]], [OTHER_CMD, HOOK_CMD])
+        before = settings.read_text(encoding="utf-8")
+        status, p = ov.apply_overlay("w1", "ov2", self.vars)
+        self.assertEqual(p["settings_patched"], [])
+        self.assertEqual(settings.read_text(encoding="utf-8"), before)
+
+    def test_settings_json_corrompu_409_jamais_ecrase(self):
+        ov.apply_overlay("w1", "ov1", self.vars, {"depth": "complete"})
+        settings = self.ws / ".claude" / "settings.json"
+        settings.write_text("{corrompu", encoding="utf-8")
+        status, p = ov.apply_overlay("w1", "ov2", self.vars)
+        self.assertEqual(status, 409)
+        self.assertIn("illisible", p["error"])
+        self.assertEqual(settings.read_text(encoding="utf-8"), "{corrompu")
+
+    def test_second_overlay_ne_reecrit_pas_le_mode(self):
+        ov.apply_overlay("w1", "ov1", self.vars, {"mode": "equipe", "depth": "complete"})
+        local = self.ws / ".claude" / "settings.local.json"
+        self.assertEqual(json.loads(local.read_text(encoding="utf-8")), {"validate_author": True})
+        ov.apply_overlay("w1", "ov2", self.vars, {})  # mode solo par défaut
+        self.assertEqual(json.loads(local.read_text(encoding="utf-8")), {"validate_author": True})
+
+    def test_sans_profondeur_declaree_rien_exclu(self):
+        ov.apply_overlay("w1", "ov1", self.vars, {"depth": "complete"})
+        status, p = ov.apply_overlay("w1", "ov2", self.vars, {"depth": "minimal"})
+        self.assertEqual(status, 200, p.get("error"))
+        self.assertIn(".claude/hooks/h2.py", p["copied"])
+
+    def test_no_copy(self):
+        """Un chemin `no_copy` n'est ni liste, ni compte, ni copie."""
+        d = TEMPLATES_DIR / "ov1"
+        marker = json.loads((d / ov.OVERLAY_MARKER).read_text(encoding="utf-8"))
+        marker["no_copy"] = ["DOC.md"]
+        write_json_file(d / ov.OVERLAY_MARKER, marker)
+        _write(d / "DOC.md", "doc du module\n")
+        listed = ov.get_overlay("ov1")
+        self.assertNotIn("DOC.md", listed["files"])
+        status, p = ov.apply_overlay("w1", "ov1", self.vars, {"depth": "complete"})
+        self.assertEqual(status, 200, p.get("error"))
+        self.assertNotIn("DOC.md", p["copied"])
+        self.assertFalse((self.ws / "DOC.md").exists())
+        self.assertNotIn("DOC.md", [s["path"] for s in p["skipped"]])
+
+    def test_usage_et_ordre(self):
+        make_workspace("w2")
+        ov.apply_overlay("w1", "ov1", self.vars, {"depth": "complete"})
+        ov.apply_overlay("w1", "ov2", self.vars)
+        ov.apply_overlay("w2", "ov1", {"name": "w2", "label": "W2"}, {"depth": "complete"})
+        self.assertEqual(ov.overlays_usage(), {"ov1": ["w1", "w2"], "ov2": ["w1"]})
+        self.assertEqual(ov.order_by_requires(["ov2", "ov1"]), (["ov1", "ov2"], {}))
+        ordered, errors = ov.order_by_requires(["ov2"])
+        self.assertEqual(ordered, [])
+        self.assertIn("Overlay test", errors["ov2"])
+        self.assertEqual(ov.order_by_requires(["inconnu", "ov1"]), (["inconnu", "ov1"], {}))
+
+
 @unittest.skipUnless((REAL_OVERLAY / ov.OVERLAY_MARKER).is_file(), "overlay réel absent")
 class RealOverlayTests(unittest.TestCase):
     """L'overlay livré, avec un `__pycache__` comme après exécution de ses hooks."""

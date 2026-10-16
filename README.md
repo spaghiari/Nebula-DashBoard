@@ -37,7 +37,9 @@ serveur Python sur `127.0.0.1`, sans aucune dépendance à installer.
 Il te faut :
 
 - **Windows 10/11** (Linux et macOS marchent aussi, cf. plus bas) ;
-- **Python 3.10+**, rien d'autre côté Python ;
+- **Python 3.10+**, rien d'autre côté Python. Il doit répondre au nom
+  `python` : les hooks des modules l'appellent ainsi (sous macOS/Linux, si
+  seul `python3` existe, installe `python-is-python3` ou crée un alias) ;
 - **Node.js** avec `npx`, pour les MCPs qui s'installent via `npx -y …` ;
 - **git**, pour les mises à jour ;
 - **Claude Code** : `npm install -g @anthropic-ai/claude-code`.
@@ -220,6 +222,24 @@ Tu choisis le mode (`solo`, `équipe`, `équipe-hiérarchique`) et la
 profondeur (`minimale` ou `complète`). Réappliquer l'overlay ne touche
 qu'aux fichiers manquants.
 
+<!-- claude-team -->
+L'overlay **`claude-team`** (qui requiert le précédent) ajoute une **équipe
+de 7 agents** générés depuis `.claude/team.json` : orchestrateur,
+chercheur, architecte, exécutant, relecteur, évaluateur et critique, avec un
+modèle choisi par rôle. Il apporte aussi une **boucle d'amélioration
+mesurée** : un jeu d'évals verrouillé, `/eval`, `/improve` (un seul
+changement par itération, gardé seulement s'il gagne au moins 0,02 sans
+régression) et `/eval-add`. Scores et journal sont visibles dans l'onglet
+« Amélioration » du workspace.
+
+Un **routage always-on** oriente chaque demande vers le bon agent. Il est
+livré en mode `auto`, avec une relecture systématique par le relecteur
+(modèle opus) : c'est le plus complet, mais aussi le plus gourmand en
+tokens. Sur la ligne du module, dans l'onglet Configuration du workspace,
+tu peux passer le routage en « assisté » (suggestions seulement) ou
+« manuel », et la relecture du code en « dès 3 fichiers » ou « jamais ».
+<!-- /claude-team -->
+
 </details>
 
 <details>
@@ -358,6 +378,7 @@ claude-workspace/
 │   │   ├── active_sessions.py   # Sessions Claude Code actives
 │   │   ├── api_workspaces.py    # Workspaces, templates, settings
 │   │   ├── api_overlays.py      # Overlays
+│   │   ├── api_team.py          # Module claude-team : agents, boucle d'amélioration
 │   │   ├── api_files.py         # Explorateur de fichiers
 │   │   ├── api_mcps.py          # MCPs, conflits, scan, sync, recettes
 │   │   ├── api_plugins.py       # Plugins, skills, agents, commandes

@@ -9,12 +9,24 @@ normal, mais est marque par un fichier `.nebula-overlay.json` a la racine
         "label": "Auto-amelioration de Claude",
         "description": "...",
         "emoji": "...",
-        "signature_file": ".claude/memory/MEMORY.md"
+        "signature_file": ".claude/memory/MEMORY.md",
+        "requires": ["autre-overlay"],          # optionnel : prérequis actifs
+        "features": [{"icon","title","text"}], # optionnel : rendu par l'UI
+        "after_apply": "...",                   # optionnel : phrase post-activation
+        "settings_patch": {...},                # optionnel : fusionné dans settings.json
+        "generators": ["team_agents"]           # optionnel : post-application
     }
 
 Le `signature_file` (optionnel) sert a la detection "deja active" : si ce
 fichier existe dans le workspace cible, on considere l'overlay deja
 applique (afficher "Active" cote UI, masquer le bouton, etc.).
+
+`requires` : apply_overlay refuse (409) si un prérequis n'est pas actif ;
+create_workspace ordonne les overlays cochés par dépendances
+(order_by_requires). `settings_patch` : fusion récursive dans le
+`.claude/settings.json` du workspace, hooks fusionnés par matcher sans
+doublon de command (idempotent). `generators` : hooks de post-application
+(`team_agents` -> dashcore/api_team.generate_agents).
 
 Contraintes :
   - Idempotent : copie uniquement les fichiers absents (jamais d'ecrasement
@@ -26,13 +38,14 @@ Contraintes :
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 from dashcore.config import TEMPLATES_DIR, _MUTATION_LOCK, log
 from dashcore.helpers import (
-    apply_template, is_text_file, read_json, read_json_strict, render_placeholders,
-    resolve_ws_dir, safe_id, write_json,
+    CorruptJsonError, apply_template, is_text_file, read_json, read_json_strict,
+    render_placeholders, resolve_ws_dir, safe_id, write_json,
 )
 
 
@@ -74,8 +87,9 @@ def list_overlays() -> list[dict]:
             if not entry.is_file() or entry.name == OVERLAY_MARKER:
                 continue
             rel = entry.relative_to(d)
-            if not _is_junk(rel):
+            if not _is_junk(rel) and not _is_no_copy(rel.as_posix(), meta):
                 files.append(rel.as_posix())
+        generators = [g for g in (meta.get("generators") or []) if isinstance(g, str)]
         out.append({
             "id": meta.get("id") or d.name,
             "dir_id": d.name,
@@ -85,8 +99,99 @@ def list_overlays() -> list[dict]:
             "signature_file": meta.get("signature_file") or "",
             "files": files,
             "file_count": len(files),
+            # Déclaratif (rendu par l'UI, plus rien de codé en dur par overlay).
+            "features": [f for f in (meta.get("features") or []) if isinstance(f, dict)],
+            "after_apply": meta.get("after_apply") or "",
+            "requires": [r for r in (meta.get("requires") or []) if isinstance(r, str) and safe_id(r)],
+            "generators": generators,
+            "has_settings_patch": isinstance(meta.get("settings_patch"), dict),
+            # Vrai si la modale doit proposer mode / langue / profondeur.
+            "bootstrap_options": _uses_bootstrap_options(meta),
+            "agents": _overlay_agents(d) if "team_agents" in generators else [],
         })
     return out
+
+
+def _uses_bootstrap_options(marker: dict) -> bool:
+    """Vrai si l'overlay exploite les options de bootstrap (mode / profondeur /
+    seeds). Sinon settings.local.json et overview.md ne sont pas touchés :
+    un second overlay ne doit pas réécrire le choix de mode du premier."""
+    return any(marker.get(k) for k in ("mode_gated", "depth", "seeds"))
+
+
+def _overlay_agents(d: Path) -> list[dict]:
+    """Agents du manifeste `.claude/team.json` livré par l'overlay (pour la
+    section « Modèles par rôle » de la modale d'activation)."""
+    from dashcore.api_team import load_manifest, manifest_agents
+    manifest = load_manifest(d)
+    if not manifest:
+        return []
+    default = (manifest.get("models") or {}).get("default") or "sonnet"
+    return [{"id": a["id"], "role": a.get("role") or "", "model": a.get("model") or default}
+            for a in manifest_agents(manifest)]
+
+
+def overlays_usage() -> dict[str, list[str]]:
+    """{overlay_id: [ws_id où il est actif]} pour tous les overlays (section
+    « Modules » de la page Templates). Registre lu une fois ; un `exists()`
+    par couple workspace x overlay."""
+    from dashcore.workspace_io import list_workspaces, _ws_dir_from_entry
+    overlays = list_overlays()
+    out: dict[str, list[str]] = {ov["id"]: [] for ov in overlays}
+    if not overlays:
+        return out
+    for w in list_workspaces():
+        ws_id = w.get("id")
+        if not ws_id:
+            continue
+        try:
+            ws_dir = _ws_dir_from_entry(w)
+            if not ws_dir.is_dir():
+                continue
+            for ov in overlays:
+                if overlay_is_active(ws_dir, ov):
+                    out[ov["id"]].append(ws_id)
+        except OSError:
+            continue
+    return out
+
+
+def order_by_requires(ids: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Ordonne une sélection d'overlays pour que chaque prérequis passe avant
+    l'overlay qui le requiert (création de workspace). Retourne (ordre,
+    erreurs) ; un overlay dont un prérequis n'est pas dans la sélection est
+    retiré de l'ordre et expliqué dans `erreurs[id]`. Les ids inconnus sont
+    laissés dans l'ordre (apply_overlay rendra son 404)."""
+    known = {ov["id"]: ov for ov in list_overlays()}
+    errors: dict[str, str] = {}
+    selected = [i for i in ids if isinstance(i, str)]
+    sel_set = set(selected)
+    for ov_id in selected:
+        ov = known.get(ov_id)
+        if not ov:
+            continue
+        missing = [r for r in ov["requires"] if r not in sel_set]
+        if missing:
+            labels = ", ".join(f"« {known[r]['label']} »" if r in known else f"« {r} »"
+                               for r in missing)
+            errors[ov_id] = (f"requiert {labels} : coche aussi ce module (ou active-le "
+                             "d'abord sur le workspace)")
+    ordered: list[str] = []
+    pending = [i for i in selected if i not in errors]
+    # Tri topologique simple (quelques overlays) : on passe un overlay quand
+    # tous ses prérequis sélectionnés sont déjà passés.
+    while pending:
+        progressed = False
+        for ov_id in list(pending):
+            reqs = known[ov_id]["requires"] if ov_id in known else []
+            if all(r in ordered or r not in sel_set for r in reqs):
+                ordered.append(ov_id)
+                pending.remove(ov_id)
+                progressed = True
+        if not progressed:  # cycle de prérequis : ordre soumis pour le reste
+            ordered.extend(pending)
+            break
+    return ordered, errors
 
 
 def get_overlay(overlay_id: str) -> dict | None:
@@ -132,12 +237,20 @@ def _normalize_options(opts: dict | None) -> dict:
         depth = "minimal" if mode == "solo" else "complete"
     language = (opts.get("language") or "fr").strip() or "fr"
     author = (opts.get("author") or "").strip()
+    # Options des générateurs (claude-team : modèle par rôle, régénération),
+    # validées par api_team (valeurs invalides ignorées).
+    from dashcore.api_team import normalize_team_options
+    team = normalize_team_options(opts)
     return {
         "mode": mode,
         "depth": depth,
         "language": language,
         "author": author,
         "validate_author": mode in AUTHOR_MODES,
+        "models": team["models"],
+        "default_model": team["default_model"],
+        "regenerate": team["regenerate"],
+        "prefix": team["prefix"],
     }
 
 
@@ -158,8 +271,20 @@ def _depth_skip(rel_posix: str, marker: dict, depth: str) -> bool:
     """
     if depth != "minimal":
         return False
-    keep = (marker.get("depth") or {}).get("minimal_keep") or []
+    # Overlay sans profondeur déclarée (une seule profondeur, ex. claude-team) :
+    # rien n'est exclu, sinon un `minimal_keep` vide exclurait tout.
+    if not isinstance(marker.get("depth"), dict):
+        return False
+    keep = marker["depth"].get("minimal_keep") or []
     return rel_posix not in keep
+
+
+def _is_no_copy(rel_posix: str, marker: dict) -> bool:
+    """Vrai si le chemin est declare `no_copy` dans le marker : il documente
+    l'overlay dans le catalogue `templates/` (README du module...) mais n'est
+    jamais copie dans un workspace ni compte dans `file_count`. Absence de
+    la cle = aucun filtre (cf. pitfall « valeur par defaut vide »)."""
+    return rel_posix in {p for p in (marker.get("no_copy") or []) if isinstance(p, str)}
 
 
 def _is_seed_path(rel_posix: str, marker: dict) -> bool:
@@ -311,6 +436,131 @@ def _prefill_overview(ws_dir: Path, options: dict, prefilled: list) -> None:
         prefilled.append(".claude/memory/overview.md")
 
 
+def _merge_hook_lists(existing: list, patch: list) -> bool:
+    """Fusionne une liste d'entrées de hooks (`[{matcher, hooks:[{command}]}]`)
+    par `matcher`, sans doublon de `command`. Retourne True si modifiée.
+
+    Un groupe SANS `matcher` (événements qui n'en ont pas : UserPromptSubmit,
+    Stop, SessionStart...) est fusionné sous la clé vide : `matcher` absent,
+    `null` ou `""` désignent le même groupe, sinon chaque ré-application
+    ajouterait un doublon."""
+    changed = False
+
+    def key(e: dict) -> str:
+        return str(e.get("matcher") or "")
+
+    for entry in patch:
+        if not isinstance(entry, dict):
+            continue
+        matcher = key(entry)
+        target = next((e for e in existing if isinstance(e, dict) and key(e) == matcher), None)
+        if target is None:
+            existing.append(json.loads(json.dumps(entry)))
+            changed = True
+            continue
+        hooks = target.setdefault("hooks", [])
+        if not isinstance(hooks, list):
+            hooks = target["hooks"] = []
+        known = {h.get("command") for h in hooks if isinstance(h, dict)}
+        for h in entry.get("hooks") or []:
+            if isinstance(h, dict) and h.get("command") not in known:
+                hooks.append(dict(h))
+                known.add(h.get("command"))
+                changed = True
+    return changed
+
+
+def _deep_merge(dst: dict, patch: dict, path: str = "") -> bool:
+    """Fusion récursive de `patch` dans `dst` (en place). Dicts fusionnés clé
+    par clé ; sous `hooks`, les listes d'événements sont fusionnées par
+    matcher (cf. _merge_hook_lists) ; les autres listes reçoivent les
+    éléments absents (égalité stricte) ; un scalaire absent est posé, un
+    scalaire présent n'est jamais écrasé (valeur utilisateur). Idempotent.
+    Retourne True si `dst` a changé."""
+    changed = False
+    for key, val in patch.items():
+        if key.startswith("_comment"):
+            continue
+        cur = dst.get(key)
+        if isinstance(val, dict):
+            if not isinstance(cur, dict):
+                if cur is not None:
+                    continue  # type incompatible : on ne touche pas
+                cur = dst[key] = {}
+                changed = True
+            if _deep_merge(cur, val, f"{path}.{key}" if path else key):
+                changed = True
+        elif isinstance(val, list):
+            if not isinstance(cur, list):
+                if cur is not None:
+                    continue
+                cur = dst[key] = []
+                changed = True
+            if path == "hooks":
+                if _merge_hook_lists(cur, val):
+                    changed = True
+            else:
+                for item in val:
+                    if item not in cur:
+                        cur.append(item)
+                        changed = True
+        elif key not in dst:
+            dst[key] = val
+            changed = True
+    return changed
+
+
+def _merge_settings_patch(ws_dir: Path, marker: dict, patched: list) -> None:
+    """Fusionne `settings_patch` du marker dans `.claude/settings.json` du
+    workspace (créé avec le patch seul s'il est absent). Lecture stricte :
+    un settings.json corrompu lève CorruptJsonError (409 côté route),
+    jamais écrasé. Idempotent : rien n'est écrit si rien ne change."""
+    patch = marker.get("settings_patch")
+    if not isinstance(patch, dict):
+        return
+    path = ws_dir / ".claude" / "settings.json"
+    data = read_json_strict(path, {})
+    if not isinstance(data, dict):
+        raise CorruptJsonError(path, "objet JSON attendu")
+    if _deep_merge(data, patch):
+        write_json(path, data)
+        patched.append(".claude/settings.json")
+
+
+def _run_generators(ws_dir: Path, marker: dict, vars: dict, opts: dict,
+                    generated: list, skipped: list) -> dict:
+    """Exécute les générateurs déclarés par le marker après la copie.
+    Retourne les informations à exposer dans la réponse (ex. `prefix`
+    effectif des agents générés)."""
+    extra: dict = {}
+    for gen in marker.get("generators") or []:
+        if gen == "team_agents":
+            from dashcore.api_team import generate_agents
+            r = generate_agents(ws_dir, vars, {"models": opts.get("models"),
+                                               "default_model": opts.get("default_model"),
+                                               "regenerate": opts.get("regenerate"),
+                                               "prefix": opts.get("prefix")})
+            generated.extend(r["generated"])
+            skipped.extend(r["skipped"])
+            extra["prefix"] = r.get("prefix")
+        else:
+            log.warning("overlay : générateur inconnu ignoré : %s", gen)
+            skipped.append({"path": f"generator:{gen}", "reason": "générateur inconnu"})
+    return extra
+
+
+def _missing_requires(ws_dir: Path, marker: dict) -> list[dict]:
+    """Prérequis (`requires`) de l'overlay non actifs sur le workspace."""
+    missing = []
+    for req in marker.get("requires") or []:
+        if not isinstance(req, str) or not safe_id(req):
+            continue
+        ov = get_overlay(req)
+        if ov is None or not overlay_is_active(ws_dir, ov):
+            missing.append({"id": req, "label": ov["label"] if ov else req})
+    return missing
+
+
 # Capture les chemins de hooks references par settings.json, du type
 # `python "${CLAUDE_PROJECT_DIR}/.claude/hooks/foo.py"`. Le [\\/]+ apres la
 # variable consomme le(s) separateur(s) pour que le groupe capture soit
@@ -394,6 +644,19 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
     marker = read_json(src_dir / OVERLAY_MARKER, {}) or {}
     cfg = _claude_md_config(marker)
 
+    # 0. Prérequis (`requires`) : refus AVANT toute écriture si un overlay
+    #    requis n'est pas actif sur le workspace (409, message clair).
+    missing_req = _missing_requires(ws_dir, marker)
+    if missing_req:
+        labels = ", ".join(f"« {m['label']} »" for m in missing_req)
+        return 409, {
+            "ok": False,
+            "overlay_id": overlay_id,
+            "error": (f"Le module « {marker.get('label') or overlay_id} » requiert "
+                      f"{labels} : active d'abord ce module sur le workspace."),
+            "missing_requires": missing_req,
+        }
+
     # Enrichir les vars de substitution avec les options de bootstrap.
     vars = dict(vars or {})
     vars.setdefault("author", opts["author"] or vars.get("name") or "nebula")
@@ -403,6 +666,8 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
     appended: list[str] = []
     seeded: list[str] = []
     skipped: list[dict] = []
+    generated: list[str] = []
+    patched: list[str] = []
 
     # 1. CLAUDE.md : traitement special (fragment / complet / skip).
     _handle_claude_md(src_dir, ws_dir, marker, vars, copied, skipped, appended)
@@ -421,6 +686,9 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
             continue
         # Les seeds ne sont jamais copies comme fichiers autonomes.
         if _is_seed_path(rel_posix, marker):
+            continue
+        # Doc de l'overlay (catalogue), jamais livree dans le workspace.
+        if _is_no_copy(rel_posix, marker):
             continue
         # Mode-gating declaratif.
         if _mode_gated_skip(rel_posix, marker, opts["mode"]):
@@ -452,14 +720,33 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
     # 3. Seeds (profondeur complete uniquement, idempotent).
     _apply_seeds(src_dir, ws_dir, marker, opts["depth"], opts["mode"], vars, seeded)
 
-    # 4. settings.local.json (validate_author selon le mode).
-    written: list[str] = []
-    _write_settings_local(ws_dir, opts, written)
-    copied.extend(w for w in written if w not in copied)
-
-    # 5. Pre-remplissage du mode + langue dans overview.md.
+    # 4. settings.local.json (validate_author selon le mode) et
+    # 5. pre-remplissage du mode + langue dans overview.md : seulement pour
+    #    un overlay qui exploite les options de bootstrap. Un overlay sans
+    #    mode-gating (claude-team) ne doit pas réécrire le choix de mode posé
+    #    par le prérequis.
     prefilled: list[str] = []
-    _prefill_overview(ws_dir, opts, prefilled)
+    if _uses_bootstrap_options(marker):
+        written: list[str] = []
+        _write_settings_local(ws_dir, opts, written)
+        copied.extend(w for w in written if w not in copied)
+        _prefill_overview(ws_dir, opts, prefilled)
+
+    # 5b. settings_patch : fusion déclarative dans .claude/settings.json
+    #     (hooks par matcher sans doublon). Un settings.json corrompu n'est
+    #     jamais écrasé : 409 (les fichiers déjà copiés restent, idempotents).
+    try:
+        _merge_settings_patch(ws_dir, marker, patched)
+    except CorruptJsonError as e:
+        return 409, {
+            "ok": False, "overlay_id": overlay_id, "error": str(e),
+            "copied": copied, "appended": appended, "seeded": seeded,
+            "skipped": skipped, "options": opts,
+        }
+
+    # 5c. Générateurs déclaratifs (ex. team_agents) : après la copie, donc
+    #     les sources (manifeste, corps) sont en place.
+    gen_extra = _run_generators(ws_dir, marker, vars, opts, generated, skipped)
 
     # 6. Garde fail-fast : refuser de livrer un workspace ou settings.json
     #    reference un hook absent (sinon deadlock Claude Code, cf.
@@ -483,14 +770,16 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
             "appended": appended,
             "seeded": seeded,
             "prefilled": prefilled,
+            "generated": generated,
+            "settings_patched": patched,
             "skipped": skipped,
             "options": opts,
         }
 
     log.info("overlay %s applied on %s (mode=%s depth=%s) : "
-             "%d copied, %d appended, %d seeded, %d skipped",
+             "%d copied, %d appended, %d seeded, %d generated, %d skipped",
              overlay_id, ws_id, opts["mode"], opts["depth"],
-             len(copied), len(appended), len(seeded), len(skipped))
+             len(copied), len(appended), len(seeded), len(generated), len(skipped))
     return 200, {
         "ok": True,
         "overlay_id": overlay_id,
@@ -498,6 +787,9 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
         "appended": appended,
         "seeded": seeded,
         "prefilled": prefilled,
+        "generated": generated,
+        "settings_patched": patched,
         "skipped": skipped,
         "options": opts,
+        **gen_extra,
     }

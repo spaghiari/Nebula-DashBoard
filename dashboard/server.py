@@ -59,8 +59,9 @@ from dashcore.api_workspaces import (
     inspect_workspace_path, adopt_workspace,
 )
 from dashcore.api_overlays import (
-    list_overlays, apply_overlay, overlay_is_active,
+    list_overlays, apply_overlay, overlay_is_active, overlays_usage,
 )
+from dashcore.api_team import team_state, improvement_state
 from dashcore.api_files import (
     list_tree as fs_list_tree,
     read_file as fs_read_file,
@@ -317,8 +318,29 @@ def h_del_template_file(q, b, tid):
 # (ex. claude-self-improving). Cf. dashcore/api_overlays.py pour le marker
 # `.nebula-overlay.json` et la logique d'idempotence.
 def h_get_overlays(q, b):
-    """Liste les overlays disponibles."""
-    return 200, {"overlays": list_overlays()}
+    """Liste les overlays disponibles + usage {overlay_id: [ws_id actifs]}
+    (section « Modules » de la page Templates)."""
+    return 200, {"overlays": list_overlays(), "usage": overlays_usage()}
+
+# Module claude-team (cf. dashcore/api_team.py) : manifeste + agents
+# generes, et etat de la boucle d'amelioration (onglet « Amelioration »).
+def h_get_ws_team(q, b, ws):        return team_state(ws)
+def h_get_ws_improvement(q, b, ws): return improvement_state(ws)
+
+def h_post_ws_team_routing(q, b, ws):
+    """Routage always-on du module claude-team : `{"mode": "manuel|assiste|auto",
+    "review_gate": "always|from_3_files|never"}` (chaque cle optionnelle),
+    ecrit dans `.claude/team.json` (section `routing`, posee par defaut si
+    absente). Reponse : `routing` a jour. Aucune regeneration des agents."""
+    if not safe_id(ws):
+        return 400, {"error": "id invalide"}
+    from dashcore.helpers import resolve_ws_dir as _resolve
+    ws_dir = _resolve(ws)
+    if not ws_dir.exists():
+        return 404, {"error": "workspace absent sur disque"}
+    b = b or {}
+    from dashcore.api_team import set_routing
+    return set_routing(ws_dir, mode=b.get("mode"), review_gate=b.get("review_gate"))
 
 def h_get_ws_overlays(q, b, ws):
     """Pour un workspace donne, indique pour chaque overlay s'il est deja
@@ -332,7 +354,17 @@ def h_get_ws_overlays(q, b, ws):
         return 404, {"error": "workspace absent sur disque"}
     out = []
     for ov in list_overlays():
-        out.append({**ov, "active": overlay_is_active(ws_dir, ov)})
+        entry = {**ov, "active": overlay_is_active(ws_dir, ov)}
+        # Module claude-team actif : prefixe des agents generes (team.prefix
+        # persiste, sinon id du workspace) pour pre-remplir la modale.
+        if entry["active"] and "team_agents" in (ov.get("generators") or []):
+            from dashcore.api_team import effective_prefix, load_manifest, routing_state
+            manifest = load_manifest(ws_dir)
+            entry["prefix"] = effective_prefix(manifest, {"name": ws})
+            # Routage always-on : mode / gate affiches et modifiables sur la
+            # ligne du module (onglet Configuration), sans requete en plus.
+            entry["routing"] = routing_state(manifest)
+        out.append(entry)
     return 200, {"overlays": out}
 
 def h_post_apply_overlay(q, b, ws, ov_id):
@@ -369,6 +401,14 @@ def h_post_apply_overlay(q, b, ws, ov_id):
         "depth": b.get("depth"),
         "language": b.get("language"),
         "author": b.get("author"),
+        # Generateur team_agents (claude-team) : modele par role, defaut,
+        # regeneration des agents generes (cf. api_team.normalize_team_options).
+        "models": b.get("models"),
+        "default_model": b.get("default_model"),
+        "regenerate": b.get("regenerate"),
+        # Prefixe des agents generes (safe_id, defaut = id du workspace,
+        # persiste dans .claude/team.json `team.prefix`).
+        "prefix": b.get("prefix"),
     }
     return apply_overlay(ws, ov_id, vars, options)
 
@@ -620,6 +660,9 @@ ROUTES_GET = [
     # dashcore/api_overlays.py)
     (re.compile(r"^/api/overlays$"),                                                       h_get_overlays),
     (re.compile(rf"^/api/workspaces/({_ID})/overlays$"),                                    h_get_ws_overlays),
+    # Module claude-team (dashcore/api_team.py)
+    (re.compile(rf"^/api/workspaces/({_ID})/team$"),                                        h_get_ws_team),
+    (re.compile(rf"^/api/workspaces/({_ID})/improvement$"),                                 h_get_ws_improvement),
     # Skills
     (re.compile(r"^/api/skills$"),                                                         h_get_skills),
     (re.compile(rf"^/api/skills/({_SCOPE})/({_ID})/content$"),                              h_get_skill_content),
@@ -699,6 +742,8 @@ ROUTES_POST = [
     (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_post_template_file),
     # Overlays : application sur un workspace existant (idempotent)
     (re.compile(rf"^/api/workspaces/({_ID})/overlays/({_ID})$"),                            h_post_apply_overlay),
+    # Module claude-team : routage always-on (mode / gate de relecture)
+    (re.compile(rf"^/api/workspaces/({_ID})/team/routing$"),                                h_post_ws_team_routing),
     # Skills
     (re.compile(r"^/api/skills$"),                                                         h_post_create_skill),
     (re.compile(r"^/api/skills/copy$"),                                                    h_post_copy_skill),

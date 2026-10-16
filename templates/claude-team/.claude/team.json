@@ -1,0 +1,212 @@
+{
+  "_comment": "Manifeste d'équipe (converti depuis team.yaml, champ par champ). Format générique, indépendant du runtime : les `capabilities` sont abstraites, Nebula les mappe vers des outils Claude Code concrets (dashcore/config.py CAPABILITY_TOOLS) au moment de générer .claude/agents/<prefix>-<id>.md (prefix = team.prefix). Chemins relatifs à .claude/. Source de vérité du module claude-team dans ce workspace (signature_file de l'overlay).",
+  "team": {
+    "name": "core-team",
+    "version": "1.2.0",
+    "entrypoint": "orchestrator",
+    "language": "fr"
+  },
+  "_comment_team_prefix": "team.prefix : préfixe des agents générés (.claude/agents/<prefix>-<id>.md), choisi à l'activation dans Nebula (défaut : id du workspace) et persisté ici par le générateur ; les régénérations le relisent. Le fil principal joue l'orchestrateur via /team ; /eval et /improve bouclent eux-mêmes sur les cas.",
+  "_comment_models": "Modèles disponibles. Chaque agent en choisit un ; Nebula peut l'overrider par workspace à l'activation (payload `models` / `default_model`). La clé (sonnet, opus) est l'alias Claude Code utilisé dans le frontmatter généré ; `id` documente le modèle visé.",
+  "models": {
+    "sonnet": {
+      "id": "claude-sonnet-5-5",
+      "usage": "rapide, économique : exécution, recherche, mesure"
+    },
+    "opus": {
+      "id": "claude-opus-5-5",
+      "usage": "raisonnement profond : coordination, conception, jugement"
+    },
+    "default": "sonnet"
+  },
+  "capabilities_catalog": {
+    "web_search": "Recherche web + lecture de pages",
+    "filesystem": "Lecture/écriture de fichiers du workspace",
+    "code_exec": "Exécution de code / shell / tests",
+    "repo": "Accès git (diff, branches, PR)",
+    "knowledge": "Docs internes, mémoire, base vectorielle",
+    "eval_runner": "Lance un jeu d'évals et renvoie un score"
+  },
+  "_comment_routing": "Routage always-on (couche 1 : table du fragment CLAUDE.md ; couche 2 : déclencheurs rendus dans la description des agents générés ; couche 3 : hook team-router.py sur UserPromptSubmit). mode : manuel (délégation seulement sur /team ou demande explicite), assiste (le hook injecte une suggestion, le fil principal la suit sauf raison explicite), auto (le fil principal applique la table sans qu'on le lui demande). review_gate : always (tout code livré est relu par le reviewer), from_3_files (dès 3 fichiers touchés), never. budget : sonnet-first (opus réservé au reviewer et à l'architecte). Modifiable depuis Nebula (POST /api/workspaces/<id>/team/routing) ; aucune régénération des agents nécessaire.",
+  "routing": {
+    "mode": "auto",
+    "modes": [
+      "manuel",
+      "assiste",
+      "auto"
+    ],
+    "review_gate": "always",
+    "review_gate_values": [
+      "always",
+      "from_3_files",
+      "never"
+    ],
+    "budget": "sonnet-first"
+  },
+  "_comment_agents": "role et description viennent du frontmatter des fichiers d'agents d'origine (les corps livrés dans team/agents/ n'ont pas de frontmatter). max_turns = budget indicatif ; escalate_to = modèle de relance si bloqué 2 fois sur une étape ; isolation: blind = ne reçoit que objectif + critères + livrable ; temperature: 0 = mesure reproductible (non pilotable dans Claude Code, procédure reproductible exigée) ; scope: improvement_loop_only = invoqué uniquement par /improve. auto = l'agent est mobilisable par le routage automatique (false pour critic et evaluator, réservés à /eval et /improve) ; triggers = formulations courtes rendues dans la description de l'agent généré (« À utiliser automatiquement quand : ... »), c'est ce que Claude Code lit pour déléguer de lui-même.",
+  "agents": [
+    {
+      "id": "orchestrator",
+      "file": "team/agents/orchestrator.md",
+      "role": "Chef d'équipe",
+      "description": "Point d'entrée. Découpe une demande, délègue aux bons agents, assemble et livre le résultat final.",
+      "auto": true,
+      "triggers": [
+        "demande ambiguë ou multi-étapes",
+        "orchestre",
+        "coordonne l'équipe",
+        "découpe et délègue",
+        "plusieurs agents"
+      ],
+      "model": "opus",
+      "capabilities": [
+        "filesystem"
+      ],
+      "can_delegate_to": [
+        "researcher",
+        "architect",
+        "executor",
+        "reviewer",
+        "evaluator"
+      ],
+      "max_turns": 40
+    },
+    {
+      "id": "researcher",
+      "file": "team/agents/researcher.md",
+      "role": "Chercheur",
+      "description": "Collecte faits, docs et code existant. Rend des conclusions sourcées, jamais des copies brutes.",
+      "auto": true,
+      "triggers": [
+        "où est implémenté",
+        "pourquoi ce comportement",
+        "liste les routes",
+        "explique",
+        "cite la source",
+        "comment ça marche"
+      ],
+      "model": "sonnet",
+      "capabilities": [
+        "web_search",
+        "knowledge",
+        "filesystem"
+      ],
+      "read_only": true,
+      "max_turns": 25
+    },
+    {
+      "id": "architect",
+      "file": "team/agents/architect.md",
+      "role": "Architecte",
+      "description": "Transforme objectif + recherche en plan d'implémentation concret, avec compromis et fichiers touchés.",
+      "auto": true,
+      "triggers": [
+        "comment on ferait",
+        "propose un plan",
+        "quelle option",
+        "conception",
+        "choix technique",
+        "architecture"
+      ],
+      "model": "opus",
+      "capabilities": [
+        "filesystem",
+        "knowledge",
+        "repo"
+      ],
+      "read_only": true,
+      "max_turns": 20
+    },
+    {
+      "id": "executor",
+      "file": "team/agents/executor.md",
+      "role": "Exécutant",
+      "description": "Implémente le plan de l'architecte, étape par étape, et vérifie chaque étape.",
+      "auto": true,
+      "triggers": [
+        "implémente",
+        "ajoute",
+        "corrige",
+        "écris le fichier",
+        "petite modification",
+        "tâche S (1 à 3 fichiers)"
+      ],
+      "model": "sonnet",
+      "capabilities": [
+        "filesystem",
+        "code_exec",
+        "repo"
+      ],
+      "max_turns": 60,
+      "escalate_to": "opus"
+    },
+    {
+      "id": "reviewer",
+      "file": "team/agents/reviewer.md",
+      "role": "Relecteur",
+      "description": "Relit le livrable à froid contre les critères de réussite. Ne voit jamais le raisonnement de l'exécutant.",
+      "auto": true,
+      "triggers": [
+        "relis",
+        "review",
+        "vérifie ce diff",
+        "avant de livrer du code",
+        "relecture à froid"
+      ],
+      "model": "opus",
+      "capabilities": [
+        "filesystem",
+        "repo"
+      ],
+      "read_only": true,
+      "isolation": "blind",
+      "max_turns": 20
+    },
+    {
+      "id": "evaluator",
+      "file": "team/agents/evaluator.md",
+      "role": "Évaluateur",
+      "description": "Note une sortie contre un attendu et une grille, en aveugle (jamais l'entrée ni le raisonnement de l'agent mesuré). Rend pass / score / reason par cas. Il n'exécute rien : le fil principal boucle sur les cas (/eval).",
+      "auto": false,
+      "triggers": [],
+      "model": "sonnet",
+      "capabilities": [
+        "knowledge"
+      ],
+      "read_only": true,
+      "temperature": 0,
+      "max_turns": 30,
+      "isolation": "blind"
+    },
+    {
+      "id": "critic",
+      "file": "team/agents/critic.md",
+      "role": "Critique",
+      "description": "Analyse les échecs d'évals et propose UNE modification ciblée d'un prompt, skill ou config. Utilisé seulement dans la boucle d'amélioration.",
+      "auto": false,
+      "triggers": [],
+      "model": "opus",
+      "capabilities": [
+        "filesystem"
+      ],
+      "read_only": true,
+      "scope": "improvement_loop_only",
+      "max_turns": 15
+    }
+  ],
+  "_comment_improvement_loop": "holdout_set : jamais vu par la boucle, vérifié à la main de temps en temps. eval_set_locked : la boucle n'a JAMAIS le droit de modifier les évals (hook evals-lock.py ; déverrouillage explicite par `evals_unlocked: true` dans .claude/settings.local.json). runs_per_eval : moyenne sur 3 passes si notation LLM. Cette section n'est jamais modifiée par /improve.",
+  "improvement_loop": {
+    "spec": "memory/conventions/improvement-loop.md",
+    "eval_set": "evals/eval-set.jsonl",
+    "holdout_set": "evals/holdout.jsonl",
+    "eval_set_locked": true,
+    "runs_per_eval": 3,
+    "accept_if": {
+      "min_score_gain": 0.02,
+      "max_regressions": 0
+    },
+    "max_iterations": 10,
+    "stop_after_consecutive_rejects": 3,
+    "journal": "journal/changes.jsonl"
+  }
+}
