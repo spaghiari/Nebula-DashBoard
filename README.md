@@ -106,9 +106,18 @@ Sur l'**Accueil**, trois façons de faire :
 
 - **+ Nouveau** : un projet tout neuf, à partir d'un modèle (Python, Node,
   audit, automatisation, YAML ou vierge) ;
-- **+ Dossier** : tu as déjà un dossier sur le disque, Nebula l'enregistre ;
+- **+ Dossier** : tu as déjà un dossier sur le disque, Nebula l'enregistre.
+  **Parcourir…** ouvre le sélecteur de dossier de ton système. Tous tes
+  projets sont dans un même dossier (ex. `C:\dev`) ? Choisis **Plusieurs
+  projets d'un dossier** : Nebula liste les sous-dossiers qui ressemblent à
+  des projets (`CLAUDE.md`, `.claude`, `.git`, `package.json`,
+  `pyproject.toml`…), tu coches, il les adopte en une fois ;
 - **Importer config** : Nebula récupère tes projets et MCPs existants depuis
-  ta config Claude Code (`~/.claude.json`, `settings.json`).
+  ta config Claude Code (`~/.claude.json`, `settings.json`). Un projet
+  marqué *sessions expirées* est bien importable : Claude Code efface les
+  conversations de plus de 30 jours (`cleanupPeriodDays`), pas le projet.
+  Un projet dont le dossier n'existe plus apparaît grisé (*dossier
+  introuvable*).
 
 ### Lancer un projet
 
@@ -218,8 +227,13 @@ aide Claude à apprendre de ton projet :
 - des **agents, slash commands et hooks pré-commit** en Python portable.
 
 Tu choisis le mode (`solo`, `équipe`, `équipe-hiérarchique`) et la
-profondeur (`minimale` ou `complète`). Réappliquer l'overlay ne touche
-qu'aux fichiers manquants.
+profondeur (`minimale` ou `complète`). **Ré-appliquer** un module déjà
+actif le met à jour : les fichiers manquants sont copiés, ceux que le
+module gère (ses hooks, et pour `claude-team` ses commandes et son bloc
+de règles du `CLAUDE.md`) sont remplacés par la nouvelle version s'ils en
+diffèrent, l'ancienne étant sauvegardée en `.bak`. Tes registres, ta
+mémoire de projet, le bloc « Auto-amélioration » du `CLAUDE.md` que tu as
+complété et le reste du fichier ne sont jamais touchés.
 
 <!-- claude-team -->
 L'overlay **`claude-team`** (qui requiert le précédent) ajoute une **équipe

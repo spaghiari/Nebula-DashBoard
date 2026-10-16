@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 
 from dashcore.config import (
-    USER_HOME, CLAUDE_HOME, CLAUDE_JSON, CLAUDE_SETTINGS, CLAUDE_PROJECTS,
+    ROOT, USER_HOME, CLAUDE_HOME, CLAUDE_JSON, CLAUDE_SETTINGS, CLAUDE_PROJECTS,
     WORKSPACES_JSON, MCP_REGISTRY, _MUTATION_LOCK, log,
     MCP_SYNC_STATE_FILE, MCP_RECIPES_FILE, MCP_RECIPES_LOCAL_FILE,
     ALLOWED_TRANSPORTS, ALLOWED_STATUS,
@@ -1413,6 +1413,37 @@ def migrate_global_mcp_to_registry(mcp_id: str, source: str, workspaces: list | 
     return 200, {"ok": True, "imported": mcp_id, "removed_from": str(src_path.name)}
 
 
+def _claude_json_project_paths() -> dict[str, str]:
+    """Nom encodé (`C--foo-bar`) -> chemin réel, d'après les clés `projects`
+    de ~/.claude.json. Plus fiable que le décodage DFS quand les sessions ont
+    été purgées. Best-effort : {} si le fichier est absent ou illisible."""
+    out: dict[str, str] = {}
+    try:
+        projects = (read_json(CLAUDE_JSON, {}) or {}).get("projects") or {}
+    except Exception:
+        return out
+    if not isinstance(projects, dict):
+        return out
+    for key in projects:
+        if isinstance(key, str) and key.strip():
+            out.setdefault(re.sub(r"[^A-Za-z0-9]", "-", key), str(Path(key)))
+    return out
+
+
+def _is_excluded_scan_path(path: Path) -> bool:
+    """True pour la racine Nebula elle-même et tout chemin sous ~/.claude/ :
+    jamais proposés comme workspaces à importer (adoption refusée de toute
+    façon, cf. `_is_path_root` / `_is_path_under_claude_home`)."""
+    try:
+        rp = path.resolve()
+        if rp == ROOT.resolve():
+            return True
+        rh = CLAUDE_HOME.resolve()
+        return rp == rh or rp.is_relative_to(rh)
+    except (OSError, ValueError):
+        return False
+
+
 def scan_claude_config() -> tuple[int, dict]:
     """Scanne ~/.claude/ pour détecter MCPs et projets existants.
 
@@ -1477,28 +1508,45 @@ def scan_claude_config() -> tuple[int, dict]:
         w.get("path", "").lower()
         for w in read_json(WORKSPACES_JSON, {"workspaces": []}).get("workspaces", [])
     }
+    known_paths = _claude_json_project_paths()
 
     for proj_dir in sorted(CLAUDE_PROJECTS.iterdir()):
         if not proj_dir.is_dir():
             continue
         sessions = list(proj_dir.glob("*.jsonl"))
-        if not sessions:
-            continue
-        # Source de vérité prioritaire : le cwd stocké dans les sessions
-        path = _read_cwd_from_sessions(proj_dir)
+        # Claude Code purge les transcripts après `cleanupPeriodDays` (30 j par
+        # défaut) : le dossier projet reste (souvent avec `memory/`) mais sans
+        # aucun .jsonl. Ce sont de vrais projets : on ne les saute plus, on les
+        # garde s'ils pointent vers un dossier qui existe encore.
+        expired = not sessions
+        path = None if expired else _read_cwd_from_sessions(proj_dir)
         source = "session"
+        if not path and proj_dir.name in known_paths:
+            # Chemin exact déclaré dans ~/.claude.json (clé `projects`).
+            path = known_paths[proj_dir.name]
+            source = "claude_json"
         if not path:
             # Fallback : DFS sur le nom de dossier (ambigu mais souvent correct)
             path, _ = _decode_project_path(proj_dir.name)
             source = "decoded"
         path_exists = bool(path) and Path(path).exists()
-        last_mod = max(s.stat().st_mtime for s in sessions)
+        if expired and not path_exists:
+            # Sans session ni dossier sur disque : rien d'exploitable à proposer.
+            continue
+        if path and _is_excluded_scan_path(Path(path)):
+            continue
+        try:
+            last_mod = (max(s.stat().st_mtime for s in sessions) if sessions
+                        else proj_dir.stat().st_mtime)
+        except OSError:
+            last_mod = 0
         result["projects"].append({
             "encoded": proj_dir.name,
             "path": path or "",
             "path_exists": path_exists,
             "path_source": source,
             "sessions": len(sessions),
+            "sessions_expired": expired,
             "already_registered": (path or "").lower() in existing_paths,
             "last_modified": last_mod,
         })

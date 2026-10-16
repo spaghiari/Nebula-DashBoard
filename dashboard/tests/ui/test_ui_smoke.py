@@ -195,6 +195,43 @@ class UiSmokeTests(unittest.TestCase):
                 new = self._exceptions()[before:]
                 self.assertFalse(new, json.dumps(new)[:600])
 
+    def test_4_adoption_groupee_depuis_un_dossier_parent(self):
+        """Modale Adopter, mode « Plusieurs projets d'un dossier » : liste, déjà
+        adopté grisé, adoption de la sélection, registre mis à jour. Le bouton
+        Parcourir n'est jamais cliqué (il ouvrirait un vrai dialogue)."""
+        parent = self.srv.root / "workspaces"
+        (parent / "nouveau-projet").mkdir(exist_ok=True)
+        (parent / "nouveau-projet" / "package.json").write_text("{}", encoding="utf-8")
+        before = len(self._exceptions())
+        self.nav(self.url + "/#/")
+        self.assertTrue(self.wait('[data-ws-card="ws1"]'))
+        self.c.js("modalRegisterExisting({ mode: 'parent' })")
+        self.assertTrue(self.wait('.adopt-pane-parent [data-inspect-parent]'))
+        self.assertEqual(self.c.js("getComputedStyle(document.querySelector('.adopt-pane-single')).display"), "none")
+        self.c.js(f"document.querySelector('[name=parent_path]').value = {json.dumps(str(parent))};"
+                  "document.querySelector('[data-inspect-parent]').click()")
+        self.assertTrue(self.wait('.adopt-pane-parent .wizard-item'))
+        rows = self.c.js("""[...document.querySelectorAll('.adopt-pane-parent .wizard-item')].map(r => ({
+            name: r.querySelector('.mono').textContent, registered: r.classList.contains('is-registered'),
+            checked: r.querySelector('input[data-cand]').checked,
+            id: r.querySelector('.wizard-id-input').value }))""")
+        by = {r["name"]: r for r in rows}
+        self.assertTrue(by["ws1"]["registered"])
+        self.assertFalse(by["ws1"]["checked"])
+        self.assertTrue(by["nouveau-projet"]["checked"])
+        self.assertEqual(by["nouveau-projet"]["id"], "nouveau-projet")
+        footer = "document.querySelector('.modal-footer .btn-primary')"
+        self.assertIn("(1)", self.c.js(f"{footer}.textContent"))
+        self.c.js(f"{footer}.click()")
+        ok = self.c.js("""(async () => { const t0 = Date.now(); while (Date.now() - t0 < 8000) {
+            if (!document.querySelector('.adopt-pane-parent')) return true;
+            await new Promise(r => setTimeout(r, 50)); } return false; })()""")
+        self.assertTrue(ok, "la modale aurait dû se fermer après l'adoption")
+        reg = json.loads((self.srv.root / "dashboard" / "data" / "workspaces.json").read_text(encoding="utf-8"))
+        self.assertIn("nouveau-projet", [w["id"] for w in reg["workspaces"]])
+        new = self._exceptions()[before:]
+        self.assertFalse(new, json.dumps(new)[:600])
+
     def _exceptions(self):
         return [e for e in self.c.events if e.get("method") == "Runtime.exceptionThrown"]
 

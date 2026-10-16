@@ -61,7 +61,11 @@ Un **overlay** vit aussi dans `templates/<id>/`, mais porte un marker
 workspace : il se pose **par-dessus** un template deja applique, a la
 creation (cases « Modules optionnels ») ou plus tard (onglet Configuration
 du workspace, page Templates § Modules). Idempotent : ne copie que les
-fichiers absents, n'ecrase jamais un fichier existant. Logique dans
+fichiers absents, n'ecrase jamais un fichier existant, sauf en
+**ré-application** (module déjà actif) les fichiers déclarés `managed`
+et, si le module pose `claude_md.refresh_block`, son bloc `BEGIN/END` dans `CLAUDE.md`, mis à jour s'ils
+diffèrent du rendu de la version courante (ancienne version sauvegardée
+en `<nom>.<AAAAMMJJ-HHMMSS>.bak`, jamais écrasée). Logique dans
 `dashboard/dashcore/api_overlays.py`.
 
 ### `.nebula-overlay.json`
@@ -73,7 +77,8 @@ fichiers absents, n'ecrase jamais un fichier existant. Logique dans
 | `requires` | Ids d'overlays qui doivent deja etre actifs. Activation refusee (409) sinon ; a la creation, l'ordre d'application suit les dependances et un overlay dont le prerequis n'est pas coche est refuse avec un message |
 | `features` | Liste `{icon, title, text}` rendue par l'UI (icone = cle de `js/icons.js`, `text` accepte `<code>`) |
 | `after_apply` | Phrase affichee sous les features (« Apres activation : ... ») |
-| `claude_md` | Traitement special de `CLAUDE.md` : fichier complet si absent, sinon fragment appende entre `begin_marker` / `end_marker` (idempotent) |
+| `claude_md` | Traitement special de `CLAUDE.md` : fichier complet si absent, sinon fragment appende entre `begin_marker` / `end_marker` ; si le bloc est déjà là : rien par défaut ; avec `refresh_block: true`, il est remplacé par le fragment rendu quand il en diffère (reste du fichier intact, `CLAUDE.md` sauvegardé en `.bak`). À réserver à un bloc de règles que le projet ne complète pas (claude-team oui, claude-self-improving non). Sans `fragment_file` présent : rien ne change |
+| `managed` | Globs relatifs (`*` et `?` ne traversent pas `/`, `**` couvre plusieurs dossiers) des fichiers **gérés** par le module. À la ré-application (module déjà actif), un fichier géré présent qui diffère du rendu (placeholders substitués, fins de ligne CRLF/LF ignorées) est remplacé après sauvegarde `.bak` ; identique = rien. Mode-gating, profondeur, `no_copy` et seeds restent prioritaires (un fichier exclu n'est jamais imposé) ; un lien qui sort du workspace n'est jamais suivi. Réponse : `updated` (chemins, et `CLAUDE.md (bloc <overlay>)`) et `backups`. Absence de la clé = aucun fichier géré. Ne jamais y mettre un fichier que l'utilisateur ou Claude édite (registres, mémoire de projet, manifeste) |
 | `mode_gated`, `depth`, `seeds` | Options de bootstrap (mode projet, profondeur d'install, exemples). Leur presence fait apparaitre les champs mode / langue / profondeur dans la modale |
 | `settings_patch` | Fragment fusionne dans `.claude/settings.json` du workspace : dicts fusionnes recursivement, listes de hooks fusionnees par `matcher` sans doublon de `command`, scalaires existants jamais ecrases. Cree le fichier s'il est absent. Les hooks references doivent etre livres par l'overlay (garde `_missing_hook_refs`) |
 | `no_copy` | Chemins (relatifs a l'overlay) qui documentent le module dans ce catalogue mais ne sont jamais copies dans un workspace ni comptes dans `file_count` (ex. `README.md` de `claude-team`). Absence de la cle = aucun filtre |

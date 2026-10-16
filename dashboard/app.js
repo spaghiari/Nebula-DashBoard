@@ -824,7 +824,9 @@ async function renderWsOverlays(wsId, host) {
     const actions = row.querySelector('.mod-act');
     const applyBtn = ov.active ? btn('Ré-appliquer', 'btn-sm', I.refresh) : btn('Activer', 'btn-primary', I.plus);
     applyBtn.title = ov.active
-      ? "Ré-applique le module : ne copie que les fichiers absents, n'écrase rien."
+      ? ((ov.managed || []).length
+        ? "Ré-applique le module : copie les fichiers absents et met à jour les fichiers gérés par le module (ancienne version sauvegardée en .bak) ; ton contenu n'est jamais touché."
+        : "Ré-applique le module : ne copie que les fichiers absents, n'écrase rien.")
       : `Copie ${n} fichier(s) dans ce workspace (idempotent, n'écrase rien).`;
     if (!ov.active) applyBtn.setAttribute('aria-label', `Activer ${ov.label || ov.id}`);
     if (missing.length && !ov.active) {
@@ -871,6 +873,7 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
       ${escapeHtml(ov.description || '')}
     </div>
     ${opts.then ? `<div class="callout callout-info" style="margin-bottom:var(--sp-3)"><div>Prérequis de <strong>${escapeHtml(opts.then.label || opts.then.id)}</strong> : après activation, la modale de ce module s'ouvrira.</div></div>` : ''}
+    ${ov.active && (ov.managed || []).length ? `<div class="callout callout-info" style="margin-bottom:var(--sp-3)"><div>Ré-appliquer <strong>met à jour</strong> les fichiers gérés par le module (${(ov.managed || []).map(g => `<code>${escapeHtml(g)}</code>`).join(', ')})${ov.refresh_claude_md ? ' et son bloc du <code>CLAUDE.md</code>' : ''} ; l'ancienne version est sauvegardée en <code>.bak</code>. Tout le reste (registres, mémoire, manifeste${ov.refresh_claude_md ? ', texte hors du bloc' : ', bloc du <code>CLAUDE.md</code> complété pour ton projet'}) n'est jamais touché.</div></div>` : ''}
     ${hasBoot ? `
     <div class="field">
       <label class="field-label">Mode projet</label>
@@ -981,6 +984,8 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
       const ng = (r.generated || []).length;
       const np = (r.settings_patched || []).length;
       const ns = (r.skipped || []).length;
+      const nu = (r.updated || []).length;
+      const nb = (r.backups || []).length;
       const parts = [];
       if (nc) parts.push(`${nc} ajouté(s)`);
       if (na) parts.push(`${na} fragment(s) CLAUDE.md`);
@@ -988,8 +993,13 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
       if (ng) parts.push(`${ng} agent(s) généré(s)${r.prefix ? ` (${r.prefix}-*)` : ''}`);
       if (np) parts.push('settings.json complété');
       if (ns) parts.push(`${ns} ignoré(s)`);
-      if (!nc && !na && !nseed && !ng && !np) {
-        toastOk(`Module déjà complet (${ns} fichier(s) déjà présent(s))`);
+      if (nu) {
+        // Fichiers gérés remplacés : Claude Code ne les recharge qu'au
+        // démarrage d'une session (agents, hooks, CLAUDE.md).
+        const head = `Module mis à jour : ${nu} fichier${nu > 1 ? 's' : ''}${nb ? ` (${nb} sauvegardé${nb > 1 ? 's' : ''} en .bak)` : ''}`;
+        toast(`${head}${parts.length ? ' · ' + parts.join(', ') : ''}. Relance Claude Code pour charger les changements.`, 'success', 8000);
+      } else if (!nc && !na && !nseed && !ng && !np) {
+        toastOk(`Module déjà à jour (${ns} fichier(s) déjà présent(s))`);
       } else {
         toastOk(`Module appliqué · ${parts.join(', ')}`);
       }
@@ -1001,7 +1011,8 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
       // Le module a pu creer / completer CLAUDE.md : l'onglet Memoire est
       // remonte s'il n'est pas en cours d'edition, sinon on previent (un
       // enregistrement ecraserait le fragment ajoute).
-      const touchedMd = [...(r.copied || []), ...(r.appended || [])].some(f => /(^|[\\/])CLAUDE\.md$/i.test(String(f)));
+      // `updated` porte « CLAUDE.md (bloc <module>) » quand le bloc est remplacé.
+      const touchedMd = [...(r.copied || []), ...(r.appended || []), ...(r.updated || [])].some(f => /(^|[\\/])CLAUDE\.md(\s|$)/i.test(String(f)));
       if (touchedMd && WS_PAGE && WS_PAGE.wsId === wsId) {
         const mem = WS_PAGE.panels.memoire;
         if (mem && mem.mounted && mem.isDirty()) toast("CLAUDE.md a été complété par le module : enregistre ou annule tes modifications de l'onglet Mémoire, puis recharge la page pour voir l'ajout.", 'info', 9000);
@@ -2230,6 +2241,20 @@ async function startFirstRunWizard() {
 
     const newMcps = (scanResult.mcps || []).filter(m => !m.already_registered);
     const newProjects = (scanResult.projects || []).filter(p => !p.already_registered && p.path_exists);
+    // Projets dont le dossier n'existe plus : affichés grisés avec leur raison
+    // (comme dans la modale d'import), jamais masqués en silence.
+    const missingProjects = (scanResult.projects || []).filter(p => !p.already_registered && !p.path_exists);
+    const projName = p => (p.path || '').split(/[\\/]/).filter(Boolean).pop() || p.encoded || 'workspace';
+    const missingBlock = missingProjects.length ? `
+      <div class="firstrun-import-block" style="opacity:0.6;margin-top:var(--sp-3)">
+        <h4>${I.box} Introuvables (${missingProjects.length})</h4>
+        <ul>${missingProjects.slice(0, 6).map(p => `<li>
+          <span class="mono">${escapeHtml(projName(p))}</span>
+          <span class="badge badge-err" style="font-size:10.5px">dossier introuvable</span>
+          <div class="dim mono" style="font-size:11px;word-break:break-all">${escapeHtml(p.path || '(chemin inconnu)')}</div>
+        </li>`).join('')}${missingProjects.length > 6 ? `<li class="dim">…et ${missingProjects.length - 6} autre(s)</li>` : ''}</ul>
+        <p class="dim" style="font-size:11.5px;margin:6px 0 0">Ces projets ont un historique Claude Code mais leur dossier n'existe plus à cet emplacement (déplacé, renommé ou supprimé) : ils ne sont pas importés. S'il a été déplacé, adopte-le à son nouvel emplacement (étape suivante).</p>
+      </div>` : '';
 
     if (newMcps.length === 0 && newProjects.length === 0) {
       scanHost.innerHTML = `
@@ -2237,10 +2262,13 @@ async function startFirstRunWizard() {
           <div>
             <strong>Rien à importer.</strong>
             ${scanResult.mcps.length || scanResult.projects.length
-              ? ' Ce qui était dans ta config Claude est déjà connu d\'Nebula.'
+              ? (missingProjects.length
+                ? ' Le reste de ta config Claude est déjà connu de Nebula ou introuvable sur le disque (détail ci-dessous).'
+                : ' Ce qui était dans ta config Claude est déjà connu d\'Nebula.')
               : ' Aucun MCP ni projet trouvé dans <code class="mono">~/.claude/</code> — c\'est un démarrage propre, c\'est parfait.'}
           </div>
         </div>
+        ${missingBlock}
         <p class="muted" style="margin-top:var(--sp-3);font-size:13px">Tu pourras toujours importer plus tard depuis <strong>Outils → Onboarding</strong> ou <strong>MCPs → Importer</strong>.</p>
       `;
       return;
@@ -2254,9 +2282,13 @@ async function startFirstRunWizard() {
         ${newMcps.length ? `<div class="firstrun-import-block"><h4>${I.cpu} MCPs (${newMcps.length})</h4><ul>${newMcps.slice(0, 6).map(m => `<li><span class="mono">${escapeHtml(m.id)}</span> <span class="dim" style="font-size:11px">${escapeHtml(m.transport || 'stdio')}</span></li>`).join('')}${newMcps.length > 6 ? `<li class="dim">…et ${newMcps.length - 6} autre(s)</li>` : ''}</ul></div>` : ''}
         ${newProjects.length ? `<div class="firstrun-import-block"><h4>${I.box} Workspaces (${newProjects.length})</h4><ul>${newProjects.slice(0, 6).map(p => {
           const guessId = (p.path || '').split(/[\\/]/).filter(Boolean).pop() || 'workspace';
-          return `<li><span class="mono">${escapeHtml(guessId)}</span> <span class="dim" style="font-size:11px">${p.sessions} sessions</span></li>`;
+          const sess = p.sessions_expired
+            ? '<span class="badge" style="font-size:10.5px" title="Claude Code a purgé les anciens transcripts (cleanupPeriodDays, 30 jours par défaut) ; le dossier existe toujours.">sessions expirées</span>'
+            : `<span class="dim" style="font-size:11px">${p.sessions} session${p.sessions > 1 ? 's' : ''}</span>`;
+          return `<li><span class="mono">${escapeHtml(guessId)}</span> ${sess}</li>`;
         }).join('')}${newProjects.length > 6 ? `<li class="dim">…et ${newProjects.length - 6} autre(s)</li>` : ''}</ul></div>` : ''}
       </div>
+      ${missingBlock}
       <div class="firstrun-import-actions">
         <button class="btn btn-primary" data-import-all>${I.download}<span>Tout importer (${newMcps.length + newProjects.length})</span></button>
         <button class="btn btn-ghost" data-pick>Choisir manuellement…</button>
@@ -3112,7 +3144,7 @@ async function modalSetupWizard() {
   body.innerHTML = '';
   body.appendChild(el('div', 'wizard-intro', `
     <p style="margin:0 0 var(--sp-2);font-size:13px">Le scan a trouvé <strong>${mcps.length}</strong> MCP(s) et <strong>${projects.length}</strong> projet(s) Claude Code. Coche ceux que tu veux importer dans Nebula.</p>
-    <p class="dim" style="margin:0;font-size:12px">Les éléments déjà enregistrés sont grisés.</p>
+    <p class="dim" style="margin:0;font-size:12px">Les éléments déjà enregistrés ou introuvables sont grisés. « Sessions expirées » : Claude Code a purgé les anciens transcripts, mais le dossier du projet existe toujours.</p>
   `));
 
   // ─── MCPs section ───
@@ -3159,7 +3191,8 @@ async function modalSetupWizard() {
       if (p.already_registered) tags.push('<span class="badge badge-warn">déjà importé</span>');
       else if (!p.path_exists) tags.push('<span class="badge badge-err">dossier introuvable</span>');
       else tags.push('<span class="badge badge-ok">nouveau</span>');
-      tags.push(`<span class="badge">${p.sessions} session${p.sessions > 1 ? 's' : ''}</span>`);
+      if (p.sessions_expired) tags.push('<span class="badge" title="Claude Code a purgé les anciens transcripts (cleanupPeriodDays, 30 jours par défaut) ; le dossier existe toujours.">sessions expirées</span>');
+      else tags.push(`<span class="badge">${p.sessions} session${p.sessions > 1 ? 's' : ''}</span>`);
       tags.push(`<span class="badge">source: ${p.path_source}</span>`);
       item.innerHTML = `
         ${cb}
@@ -3254,16 +3287,35 @@ async function modalSetupWizard() {
 //           (cochee par defaut SSI au moins 1 MCP detecte). Strategie d'import
 //           = merge non destructif (skip si nom deja present dans le registre).
 // ============================================================================
-function modalRegisterExisting() {
+function modalRegisterExisting(opts = {}) {
   const body = el('div');
+
+  // Bascule de mode : un dossier (flux historique) ou plusieurs projets
+  // trouvés dans un dossier parent (adoption groupée).
+  let mode = opts.mode === 'parent' ? 'parent' : 'single';
+  const modeBar = el('div', 'seg-control');
+  modeBar.setAttribute('role', 'group');
+  modeBar.setAttribute('aria-label', 'Mode d\'adoption');
+  modeBar.style.marginBottom = 'var(--sp-3)';
+  modeBar.innerHTML = `
+    <button type="button" data-mode="single">Un dossier</button>
+    <button type="button" data-mode="parent">Plusieurs projets d'un dossier</button>
+  `;
+  body.appendChild(modeBar);
+  const singlePane = el('div', 'adopt-pane adopt-pane-single');
+  const parentPane = el('div', 'adopt-pane adopt-pane-parent');
+  body.append(singlePane, parentPane);
 
   // Etape 1 : champ chemin + bouton Inspecter + zone resultats.
   const step1 = el('div', 'adopt-step adopt-step-1');
   step1.innerHTML = `
     <p class="muted" style="margin-top:0">Adopte un dossier existant comme workspace Nebula. Aucun fichier du dossier n'est créé ni modifié.</p>
     <div class="field">
-      <label class="field-label">Chemin absolu du dossier *</label>
-      <input class="input mono" name="path" placeholder="C:\\dev\\mon-projet" autocomplete="off">
+      <label class="field-label" for="adopt-single-path">Chemin absolu du dossier *</label>
+      <div class="row" style="gap:var(--sp-2);align-items:center">
+        <input class="input mono" id="adopt-single-path" name="path" placeholder="C:\\dev\\mon-projet" autocomplete="off" style="flex:1;min-width:0">
+        <button type="button" class="btn" data-browse style="display:none">${I.folder}<span>Parcourir…</span></button>
+      </div>
     </div>
     <div class="row" style="gap:var(--sp-2);align-items:center">
       <button type="button" class="btn btn-primary" data-inspect>Inspecter</button>
@@ -3271,7 +3323,7 @@ function modalRegisterExisting() {
     </div>
     <div class="adopt-inspect-result" data-inspect-result style="margin-top:var(--sp-3);display:none"></div>
   `;
-  body.appendChild(step1);
+  singlePane.appendChild(step1);
 
   // Etape 2 : champs d'adoption (cachee tant que l'inspection n'a pas reussi).
   const step2 = el('div', 'adopt-step adopt-step-2');
@@ -3297,12 +3349,18 @@ function modalRegisterExisting() {
       Aucun signal Claude détecté dans ce dossier. L'adoption reste possible -- le workspace apparaîtra dans la liste, mais sans skills/MCPs/hooks détectés.
     </div>
   `;
-  body.appendChild(step2);
+  singlePane.appendChild(step2);
 
   const cancel = btn('Annuler', 'btn-ghost');
   const adopt = btn('Adopter', 'btn-primary', I.plus);
   adopt.disabled = true;
-  const { close } = openModal({ title: 'Adopter un workspace existant', body, footer: [cancel, adopt], wide: true });
+  // Adoption groupée partiellement réussie : la liste des workspaces est
+  // rafraîchie à la fermeture (la modale reste ouverte pour lire les échecs).
+  let refreshOnClose = false;
+  const { close } = openModal({
+    title: 'Adopter un workspace existant', body, footer: [cancel, adopt], wide: true,
+    onClose: () => { if (refreshOnClose) { STATE.loading = true; route(); } },
+  });
   cancel.addEventListener('click', close);
 
   // Etat partage entre etape 1 et etape 2.
@@ -3486,8 +3544,232 @@ function modalRegisterExisting() {
     }
   }));
 
-  // Bouton Adopter (etape 2).
+  // ── Mode « Plusieurs projets d'un dossier » ──────────────────────────────
+  // Inspection lecture seule du dossier parent (POST /api/workspaces/inspect-parent)
+  // puis adoption groupée (POST /api/workspaces/adopt-bulk), réponse par item.
+  parentPane.innerHTML = `
+    <p class="muted" style="margin-top:0">Indique le dossier qui contient tes projets (ex. <code class="mono">C:\\dev</code>) : Nebula liste les sous-dossiers qui ressemblent à des projets (CLAUDE.md, .claude, .git, package.json, pyproject.toml…). Aucun fichier n'est créé ni modifié.</p>
+    <div class="field">
+      <label class="field-label" for="adopt-parent-path">Dossier parent *</label>
+      <div class="row" style="gap:var(--sp-2);align-items:center">
+        <input class="input mono" id="adopt-parent-path" name="parent_path" placeholder="C:\\dev" autocomplete="off" style="flex:1;min-width:0">
+        <button type="button" class="btn" data-browse style="display:none">${I.folder}<span>Parcourir…</span></button>
+      </div>
+    </div>
+    <div class="row" style="gap:var(--sp-3);align-items:center;flex-wrap:wrap">
+      <button type="button" class="btn btn-primary" data-inspect-parent>Chercher les projets</button>
+      <label class="row" style="gap:6px;align-items:center;font-size:13px;cursor:pointer">
+        <input type="checkbox" name="depth2"> Descendre d'un niveau de plus
+      </label>
+    </div>
+    <div data-parent-result style="margin-top:var(--sp-3)"></div>
+  `;
+  const parentInput = parentPane.querySelector('[name=parent_path]');
+  const parentResult = parentPane.querySelector('[data-parent-result]');
+  const inspectParentBtn = parentPane.querySelector('[data-inspect-parent]');
+  let parentScan = null;
+
+  const updateAdoptLabel = () => {
+    const span = adopt.querySelector('span');
+    if (mode !== 'parent') {
+      if (span) span.textContent = 'Adopter';
+      adopt.disabled = !(lastInspect && lastInspect.exists && !lastInspect.already_adopted);
+      return;
+    }
+    const n = parentResult.querySelectorAll('input[data-cand]:checked:not(:disabled)').length;
+    if (span) span.textContent = n ? `Adopter la sélection (${n})` : 'Adopter la sélection';
+    adopt.disabled = n === 0;
+  };
+
+  const SIGNAL_LABELS = { '.git': 'git', '.claude': '.claude/', 'CLAUDE.md': 'CLAUDE.md', '.mcp.json': '.mcp.json' };
+  const renderParentResult = (r) => {
+    parentResult.innerHTML = '';
+    const cands = r.candidates || [];
+    if (!cands.length) {
+      const empty = el('div', 'callout callout-info');
+      empty.style.margin = '0';
+      empty.textContent = 'Aucun sous-dossier ne ressemble à un projet ici.'
+        + (r.depth < 2 ? ' Essaie « Descendre d\'un niveau de plus ».' : '');
+      parentResult.appendChild(empty);
+      updateAdoptLabel();
+      return;
+    }
+    const fresh = cands.filter(c => !c.already_adopted).length;
+    const head = el('div', 'row');
+    head.style.cssText = 'gap:var(--sp-2);align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:var(--sp-2)';
+    const summary = el('div', 'muted');
+    summary.style.fontSize = '12.5px';
+    summary.textContent = `${cands.length} projet(s) trouvé(s), dont ${fresh} à adopter.`
+      + (r.truncated ? ` Liste tronquée à ${r.max} : affine le dossier parent.` : '');
+    const tools = el('div', 'row');
+    tools.style.gap = 'var(--sp-1)';
+    const selAll = btn('Tout cocher', 'btn-sm btn-ghost');
+    const selNone = btn('Tout décocher', 'btn-sm btn-ghost');
+    selAll.addEventListener('click', () => { parentResult.querySelectorAll('input[data-cand]:not(:disabled)').forEach(cb => cb.checked = true); updateAdoptLabel(); });
+    selNone.addEventListener('click', () => { parentResult.querySelectorAll('input[data-cand]:not(:disabled)').forEach(cb => cb.checked = false); updateAdoptLabel(); });
+    tools.append(selAll, selNone);
+    head.append(summary, tools);
+    parentResult.appendChild(head);
+    if (r.truncated) {
+      const warn = el('div', 'badge badge-warn');
+      warn.style.cssText = 'font-size:12px;margin-bottom:var(--sp-2)';
+      warn.textContent = `⚠ Plus de ${r.max} projets : seuls les ${r.max} premiers sont listés.`;
+      parentResult.appendChild(warn);
+    }
+
+    const list = el('div', 'wizard-list');
+    for (const c of cands) {
+      const item = el('label', 'wizard-item' + (c.already_adopted ? ' is-registered' : ''));
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset.cand = '1';
+      cb.checked = !c.already_adopted;
+      cb.disabled = !!c.already_adopted;
+      cb.addEventListener('change', updateAdoptLabel);
+      const main = el('div', 'wizard-item-main');
+      const name = el('div', 'wizard-item-name');
+      const nm = el('span', 'mono');
+      nm.textContent = c.relative || c.name;
+      const pth = el('span', 'dim');
+      pth.style.cssText = 'font-size:11px;margin-left:6px';
+      pth.textContent = c.path;
+      name.append(nm, pth);
+      const meta = el('div', 'wizard-item-meta');
+      const tag = (cls, text) => { const s = el('span', 'badge' + (cls ? ' ' + cls : '')); s.textContent = text; meta.appendChild(s); return s; };
+      if (c.already_adopted) tag('badge-warn', `déjà adopté (${c.adopted_id})`);
+      else tag('badge-ok', 'nouveau');
+      if (c.claude) tag('badge-info', 'Claude');
+      for (const s of (c.signals || [])) tag('', SIGNAL_LABELS[s] || s);
+      const status = el('span', 'badge badge-err');
+      status.dataset.status = '1';
+      status.style.display = 'none';
+      meta.appendChild(status);
+      main.append(name, meta);
+      const idInput = document.createElement('input');
+      idInput.type = 'text';
+      idInput.className = 'input mono wizard-id-input';
+      idInput.value = c.suggested_id || '';
+      idInput.disabled = !!c.already_adopted;
+      idInput.style.cssText = 'max-width:160px;font-size:12px';
+      idInput.setAttribute('aria-label', 'ID du workspace pour ' + (c.relative || c.name));
+      item.append(cb, main, idInput);
+      item._cand = c;
+      list.appendChild(item);
+    }
+    parentResult.appendChild(list);
+
+    if (cands.some(c => !c.already_adopted && (c.signals || []).includes('.mcp.json'))) {
+      const row = el('label', 'row');
+      row.style.cssText = 'cursor:pointer;font-size:13px;margin-top:var(--sp-2);gap:var(--sp-2);align-items:center';
+      row.innerHTML = `<input type="checkbox" name="bulk_import_mcps" checked><span>Importer aussi les MCPs des <code class="mono">.mcp.json</code> trouvés (les MCPs déjà présents dans le registre ne sont pas écrasés).</span>`;
+      parentResult.appendChild(row);
+    }
+    updateAdoptLabel();
+  };
+
+  const runParentInspect = () => withBusy(inspectParentBtn, async () => {
+    const path = parentInput.value.trim();
+    if (!path) { toastErr('Dossier parent requis'); return; }
+    const depth = parentPane.querySelector('[name=depth2]').checked ? 2 : 1;
+    try {
+      parentScan = await API.post('/api/workspaces/inspect-parent', { path, depth });
+      renderParentResult(parentScan);
+    } catch (e) {
+      parentScan = null;
+      parentResult.innerHTML = '';
+      const errBox = el('div', 'error-box');
+      errBox.textContent = e.message;
+      parentResult.appendChild(errBox);
+      updateAdoptLabel();
+    }
+  });
+  inspectParentBtn.addEventListener('click', () => runParentInspect().catch(() => {}));
+  parentInput.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); inspectParentBtn.click(); } });
+
+  const adoptBulk = async () => {
+    const items = [];
+    const rows = [];
+    const importMcps = !!parentResult.querySelector('[name=bulk_import_mcps]:checked');
+    for (const item of parentResult.querySelectorAll('.wizard-item')) {
+      const cb = item.querySelector('input[data-cand]');
+      if (!cb || !cb.checked || cb.disabled) continue;
+      const id = (item.querySelector('.wizard-id-input').value || '').trim();
+      if (!id) { toastErr('ID requis pour ' + (item._cand.relative || item._cand.name)); return; }
+      const c = item._cand;
+      items.push({ path: c.path, id, label: id, emoji: '📁', description: '', import_mcps: importMcps && (c.signals || []).includes('.mcp.json') });
+      rows.push(item);
+    }
+    if (!items.length) { toastErr('Aucun projet sélectionné'); return; }
+    let r;
+    try { r = await API.post('/api/workspaces/adopt-bulk', { items }); }
+    catch (e) { toastErr(e.message); return; }
+    const results = r.results || [];
+    results.forEach((res, i) => {
+      const item = rows[i];
+      if (!item) return;
+      const cb = item.querySelector('input[data-cand]');
+      const status = item.querySelector('[data-status]');
+      if (res.ok) {
+        cb.checked = false; cb.disabled = true;
+        item.querySelector('.wizard-id-input').disabled = true;
+        item.classList.add('is-registered');
+        status.className = 'badge badge-ok';
+        status.textContent = 'adopté';
+      } else {
+        status.className = 'badge badge-err';
+        status.textContent = res.error || 'échec';
+      }
+      status.style.display = '';
+    });
+    const failed = r.failed || 0;
+    refreshOnClose = true;
+    if (failed) {
+      // Toast d'erreur (pas de succès) : la modale reste ouverte, chaque
+      // ligne en échec porte sa raison ; rafraîchissement à la fermeture.
+      toastErr(`${r.adopted} projet(s) adopté(s), ${failed} en échec : détail dans la liste`);
+    } else {
+      toastOk(`${r.adopted} projet(s) adopté(s)`);
+      close();
+    }
+  };
+
+  // ── Bouton « Parcourir… » : sélecteur de dossier natif côté serveur ──────
+  // Capacité lue une fois (GET, sans effet de bord) : bouton masqué si le
+  // poste n'a pas de sélecteur (501 côté POST, message clair).
+  const wireBrowse = (pane, input, onPicked) => {
+    const b = pane.querySelector('[data-browse]');
+    folderPickerSupported().then(ok => { if (ok) b.style.display = ''; });
+    b.addEventListener('click', () => withBusy(b, async () => {
+      const r = await API.post('/api/system/pick-folder', { initial: input.value.trim(), title: 'Choisis le dossier à adopter' });
+      return r;
+    }).then(r => {
+      if (r && r.ok && r.path) { input.value = r.path; onPicked(); }
+    }).catch(e => {
+      // 501 (aucun sélecteur sur ce poste) : on retire le bouton, saisie manuelle.
+      if (/indisponible/i.test(e.message)) { _folderPickerSupported = false; b.style.display = 'none'; }
+      toastErr(e.message);
+    }));
+  };
+  wireBrowse(step1, step1.querySelector('[name=path]'), () => inspectBtn.click());
+  wireBrowse(parentPane, parentInput, () => inspectParentBtn.click());
+
+  const setMode = (m) => {
+    mode = m;
+    modeBar.querySelectorAll('button').forEach(b => {
+      const on = b.dataset.mode === m;
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    singlePane.style.display = m === 'single' ? '' : 'none';
+    parentPane.style.display = m === 'parent' ? '' : 'none';
+    updateAdoptLabel();
+  };
+  modeBar.querySelectorAll('button').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
+  setMode(mode);
+
+  // Bouton Adopter (etape 2, ou sélection groupée en mode dossier parent).
   adopt.addEventListener('click', () => withBusy(adopt, async () => {
+    if (mode === 'parent') { await adoptBulk(); return; }
     if (!lastInspect || !lastInspect.exists) {
       toastErr('Inspecter le chemin d\'abord');
       return;
@@ -3526,7 +3808,20 @@ function modalRegisterExisting() {
     } catch (e) {
       toastErr(e.message);
     }
-  }));
+  }).then(() => { if (mode === 'parent') updateAdoptLabel(); }));
+}
+
+// Capacité du sélecteur de dossier natif (bouton « Parcourir… »), lue une
+// fois par session : GET sans effet de bord, false si la route échoue.
+let _folderPickerSupported = null;
+async function folderPickerSupported() {
+  if (_folderPickerSupported === null) {
+    try {
+      const r = await API.get('/api/system/pick-folder');
+      _folderPickerSupported = !!(r && r.supported);
+    } catch { _folderPickerSupported = false; }
+  }
+  return _folderPickerSupported;
 }
 
 function modalImportMCPs() {
@@ -4440,6 +4735,7 @@ function paletteItems() {
     { g: 'Actions', t: 'Nouveau MCP', d: 'Ajouter un serveur au registre', ic: I.plus, run: () => modalNewMCP() },
     { g: 'Actions', t: 'Ouvrir la matrice MCPs', d: 'MCP × workspace', ic: I.grid, run: () => { setMcpViewMode('matrix'); if (location.hash === '#/mcps') route(); else location.hash = '#/mcps'; } },
     { g: 'Actions', t: 'Adopter un workspace existant', d: 'Enregistrer un dossier déjà présent sur le disque', ic: I.folder, hidden: true, run: () => modalRegisterExisting() },
+    { g: 'Actions', t: 'Adopter plusieurs projets d\'un dossier', d: 'Lister les projets d\'un dossier parent et les adopter en une fois', ic: I.folder, hidden: true, run: () => modalRegisterExisting({ mode: 'parent' }) },
     { g: 'Actions', t: 'Importer la config Claude', d: 'MCPs et projets de ~/.claude/', ic: I.download, hidden: true, run: () => modalSetupWizard() },
   );
   for (const n of NAV_ITEMS) {

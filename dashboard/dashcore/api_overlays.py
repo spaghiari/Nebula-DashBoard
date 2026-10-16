@@ -28,9 +28,17 @@ create_workspace ordonne les overlays cochés par dépendances
 doublon de command (idempotent). `generators` : hooks de post-application
 (`team_agents` -> dashcore/api_team.generate_agents).
 
+`managed` (optionnel) : globs relatifs (`*`, `?`, `**`) des fichiers GÉRÉS
+par le module (hooks, commandes livrées...). À la ré-application, un fichier
+géré présent mais différent du rendu de la nouvelle version est remplacé,
+après sauvegarde `.bak` horodatée (cf. _update_managed_file). Le bloc
+`BEGIN/END` du module dans `CLAUDE.md` est lui aussi remplacé par le
+fragment rendu. Tout le reste n'est jamais écrasé.
+
 Contraintes :
   - Idempotent : copie uniquement les fichiers absents (jamais d'ecrasement
-    d'une version utilisateur).
+    d'une version utilisateur), sauf fichiers gérés (`managed`) qui
+    diffèrent du rendu ; une seconde application ne change plus rien.
   - Stdlib only (cohereent reste du projet).
   - Garde-fou CLAUDE.md : on ne le copie JAMAIS depuis un overlay si le
     workspace en a deja un, meme s'il est legitimement different. Trace
@@ -90,6 +98,7 @@ def list_overlays() -> list[dict]:
             if not _is_junk(rel) and not _is_no_copy(rel.as_posix(), meta):
                 files.append(rel.as_posix())
         generators = [g for g in (meta.get("generators") or []) if isinstance(g, str)]
+        managed = _managed_globs(meta)
         out.append({
             "id": meta.get("id") or d.name,
             "dir_id": d.name,
@@ -105,6 +114,10 @@ def list_overlays() -> list[dict]:
             "requires": [r for r in (meta.get("requires") or []) if isinstance(r, str) and safe_id(r)],
             "generators": generators,
             "has_settings_patch": isinstance(meta.get("settings_patch"), dict),
+            # Globs des fichiers que « Ré-appliquer » met à jour (UI : modale).
+            "managed": managed,
+            # Vrai si Ré-appliquer remplace aussi le bloc du module dans CLAUDE.md.
+            "refresh_claude_md": _claude_md_config(meta)["refresh_block"],
             # Vrai si la modale doit proposer mode / langue / profondeur.
             "bootstrap_options": _uses_bootstrap_options(meta),
             "agents": _overlay_agents(d) if "team_agents" in generators else [],
@@ -296,6 +309,127 @@ def _is_seed_path(rel_posix: str, marker: dict) -> bool:
     return rel_posix.startswith(".claude/seeds/")
 
 
+def _managed_globs(marker: dict) -> list[str]:
+    """Globs `managed` valides du marker (relatifs, sans `..`, séparateur `/`).
+    Absence de la clé = aucun fichier géré (comportement historique : copie
+    si absent seulement), cf. pitfall « valeur par défaut vide »."""
+    out: list[str] = []
+    for g in marker.get("managed") or []:
+        if not isinstance(g, str) or not g.strip():
+            continue
+        g = g.strip()
+        if "\\" in g or ":" in g or g.startswith("/") or ".." in g.split("/"):
+            continue
+        out.append(g)
+    return out
+
+
+def _glob_match(parts: list[str], pats: list[str]) -> bool:
+    """Correspondance segment par segment : `*` / `?` / `[...]` ne traversent
+    jamais un `/` ; `**` couvre zéro ou plusieurs segments."""
+    from fnmatch import fnmatchcase
+    if not pats:
+        return not parts
+    if pats[0] == "**":
+        return any(_glob_match(parts[i:], pats[1:]) for i in range(len(parts) + 1))
+    return bool(parts) and fnmatchcase(parts[0], pats[0]) and _glob_match(parts[1:], pats[1:])
+
+
+def _is_managed(rel_posix: str, marker: dict) -> bool:
+    """Vrai si le chemin (relatif à l'overlay) est déclaré géré (`managed`)."""
+    parts = rel_posix.split("/")
+    return any(_glob_match(parts, g.split("/")) for g in _managed_globs(marker))
+
+
+def _norm_eol(text: str) -> str:
+    """Fins de ligne unifiées en LF : CRLF (autocrlf Windows) vs LF n'est pas
+    une modification du contenu."""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _inside_workspace(ws_root: Path, target: Path) -> bool:
+    """Vrai si `target` (lien non suivi) n'est pas un lien symbolique et se
+    résout sous `ws_root` (déjà résolu). Garde de toute RÉÉCRITURE : on ne
+    suit jamais un lien qui sortirait du workspace."""
+    try:
+        if target.is_symlink():
+            return False
+        target.resolve().relative_to(ws_root)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _backup_path(target: Path) -> Path:
+    """`<nom>.<AAAAMMJJ-HHMMSS>.bak` à côté de `target`, suffixé `-2`, `-3`...
+    si ce nom existe déjà : une sauvegarde n'est jamais écrasée."""
+    import datetime as _dt
+    import os
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    n = 1
+    while True:
+        name = f"{target.name}.{stamp}.bak" if n == 1 else f"{target.name}.{stamp}-{n}.bak"
+        cand = target.with_name(name)
+        if not os.path.lexists(cand):
+            return cand
+        n += 1
+
+
+def _write_backup(target: Path, ws_dir: Path, backups: list) -> bool:
+    """Copie `target` en `.bak` (cf. _backup_path). Retourne False si la
+    sauvegarde échoue : l'appelant n'écrit alors rien."""
+    import shutil
+    bak = _backup_path(target)
+    try:
+        shutil.copy2(target, bak)
+    except OSError as e:
+        log.warning("overlay : sauvegarde impossible %s -> %s : %s", target, bak, e)
+        return False
+    backups.append(bak.relative_to(ws_dir).as_posix())
+    return True
+
+
+def _update_managed_file(entry: Path, target: Path, rel_posix: str, ws_dir: Path,
+                         ws_root: Path, vars: dict, updated: list,
+                         backups: list, skipped: list) -> None:
+    """Fichier géré déjà présent : remplacé par le rendu de la nouvelle
+    version s'il en diffère (fins de ligne ignorées), après sauvegarde
+    `.bak`. Identique : rien (ni écriture, ni `.bak`)."""
+    if not _inside_workspace(ws_root, target):
+        skipped.append({"path": rel_posix, "reason": "lien hors du workspace, non mis à jour"})
+        return
+    try:
+        if is_text_file(entry):
+            new_text = render_placeholders(entry.read_text(encoding="utf-8"), vars)
+            try:
+                same = _norm_eol(target.read_bytes().decode("utf-8")) == _norm_eol(new_text)
+            except UnicodeDecodeError:
+                same = False
+            new_bytes = None
+        else:
+            new_text = None
+            new_bytes = entry.read_bytes()
+            same = target.read_bytes() == new_bytes
+    except OSError as e:
+        skipped.append({"path": rel_posix, "reason": f"read error: {e}"})
+        return
+    if same:
+        skipped.append({"path": rel_posix, "reason": "already up to date"})
+        return
+    if not _write_backup(target, ws_dir, backups):
+        skipped.append({"path": rel_posix, "reason": "sauvegarde .bak impossible, non mis à jour"})
+        return
+    try:
+        if new_text is not None:
+            target.write_text(new_text, encoding="utf-8")
+        else:
+            target.write_bytes(new_bytes)
+        updated.append(rel_posix)
+    except OSError as e:
+        log.warning("overlay update failed %s -> %s : %s", entry, target, e)
+        skipped.append({"path": rel_posix, "reason": f"update error: {e}"})
+
+
 def _claude_md_config(marker: dict) -> dict:
     cfg = marker.get("claude_md") or {}
     return {
@@ -303,23 +437,74 @@ def _claude_md_config(marker: dict) -> dict:
         "fragment_file": cfg.get("fragment_file") or "CLAUDE.self-improving.md",
         "begin_marker": cfg.get("begin_marker") or "<!-- BEGIN claude-self-improving -->",
         "end_marker": cfg.get("end_marker") or "<!-- END claude-self-improving -->",
+        # Opt-in : ré-appliquer remplace le bloc seulement si le module le
+        # déclare. Un bloc que l'utilisateur ou le bootstrap complète (pièges
+        # du projet, langue, sommaire mémoire de claude-self-improving) ne doit
+        # pas être réinitialisé à chaque ré-application.
+        "refresh_block": cfg.get("refresh_block") is True,
     }
+
+
+def _replace_claude_md_block(existing: str, frag_src: Path, target: Path, ws_dir: Path,
+                             cfg: dict, overlay_id: str, vars: dict, updated: list,
+                             backups: list, skipped: list) -> None:
+    """Cas (c) : bloc `begin..end` déjà présent -> remplacé par le bloc du
+    fragment rendu de la version courante, le reste du fichier intact.
+    Identique (fins de ligne ignorées) : rien. Sans fragment source (module
+    en CLAUDE.md complet seulement), bloc incomplet ou cible hors workspace :
+    rien n'est touché."""
+    name, begin, end = cfg["full_file"], cfg["begin_marker"], cfg["end_marker"]
+    if not frag_src.exists():
+        skipped.append({"path": name, "reason": "marker already present"})
+        return
+    fragment = _norm_eol(render_placeholders(frag_src.read_text(encoding="utf-8"), vars))
+    fb, fe = fragment.find(begin), fragment.find(end)
+    if fb < 0 or fe < fb:
+        skipped.append({"path": name, "reason": "fragment source sans marqueurs"})
+        return
+    new_block = fragment[fb:fe + len(end)]
+    text = _norm_eol(existing)
+    b = text.find(begin)
+    e = text.find(end, b)
+    if e < 0:
+        skipped.append({"path": name, "reason": "bloc du module incomplet (marqueur de fin absent)"})
+        return
+    if text[b:e + len(end)] == new_block:
+        skipped.append({"path": name, "reason": "marker already present"})
+        return
+    if not _inside_workspace(ws_dir.resolve(), target):
+        skipped.append({"path": name, "reason": "lien hors du workspace, non mis à jour"})
+        return
+    if not _write_backup(target, ws_dir, backups):
+        skipped.append({"path": name, "reason": "sauvegarde .bak impossible, non mis à jour"})
+        return
+    try:
+        target.write_text(text[:b] + new_block + text[e + len(end):], encoding="utf-8")
+    except OSError as err:
+        # Le .bak est déjà posé : rien de perdu, la ré-application continue.
+        skipped.append({"path": name, "reason": f"écriture du bloc impossible : {err}"})
+        return
+    updated.append(f"{name} (bloc {overlay_id})")
 
 
 def _handle_claude_md(src_dir: Path, ws_dir: Path, marker: dict,
                       vars: dict, copied: list, skipped: list,
-                      appended: list) -> None:
+                      appended: list, updated: list | None = None,
+                      backups: list | None = None, overlay_id: str = "") -> None:
     """Traite CLAUDE.md specialement (cf. P1 du brief de refonte) :
 
     (a) pas de CLAUDE.md hote        -> ecrire le complet rendu
     (b) CLAUDE.md hote SANS marqueur -> appender le fragment rendu
-    (c) marqueur deja present        -> skip (idempotent)
+    (c) marqueur deja present        -> bloc remplace par le fragment rendu
+        s'il differe (sauvegarde .bak), sinon rien (idempotent)
     """
     cfg = _claude_md_config(marker)
     full_src = src_dir / cfg["full_file"]
     frag_src = src_dir / cfg["fragment_file"]
     target = ws_dir / cfg["full_file"]
     begin = cfg["begin_marker"]
+    updated = [] if updated is None else updated
+    backups = [] if backups is None else backups
 
     if not target.exists():
         # Cas (a) : pas de CLAUDE.md hote -> ecrire le complet.
@@ -332,10 +517,15 @@ def _handle_claude_md(src_dir: Path, ws_dir: Path, marker: dict,
         return
 
     existing = target.read_text(encoding="utf-8")
+    if begin in existing and not cfg["refresh_block"]:
+        # Cas (c) sans opt-in : bloc laissé tel quel (contenu complété par le projet).
+        skipped.append({"path": cfg["full_file"], "reason": "marker already present"})
+        return
     if begin in existing:
-        # Cas (c) : deja appende -> idempotent, on ne touche pas.
-        skipped.append({"path": cfg["full_file"],
-                        "reason": "marker already present"})
+        # Cas (c) avec `refresh_block` : bloc mis a jour s'il differe.
+        _replace_claude_md_block(existing, frag_src, target, ws_dir, cfg,
+                                 overlay_id or marker.get("id") or "module",
+                                 vars, updated, backups, skipped)
         return
 
     # Cas (b) : CLAUDE.md hote present sans marqueur -> append du fragment.
@@ -637,7 +827,8 @@ def apply_overlay(ws_id: str, overlay_id: str, vars: dict,
     """Applique l'overlay `overlay_id` sur le workspace `ws_id`.
 
     Idempotent : pour chaque fichier de l'overlay, copie uniquement s'il
-    est absent du workspace. CLAUDE.md est traite specialement (fragment
+    est absent du workspace ; un fichier géré (`managed`) présent est mis à
+    jour s'il diffère du rendu (sauvegarde .bak). CLAUDE.md est traite specialement (fragment
     appende via marqueur, cf. _handle_claude_md). Les placeholders connus
     sont substitues comme a la creation normale.
 
@@ -650,7 +841,8 @@ def apply_overlay(ws_id: str, overlay_id: str, vars: dict,
         "ok": bool, "overlay_id": str,
         "copied": [rel, ...], "appended": [rel, ...],
         "seeded": [rel, ...], "skipped": [{"path","reason"}, ...],
-        "options": {...},
+        "updated": [rel | "CLAUDE.md (bloc <overlay>)", ...],
+        "backups": [rel .bak, ...], "options": {...},
     }.
     """
     if not safe_id(ws_id):
@@ -676,11 +868,17 @@ def apply_overlay(ws_id: str, overlay_id: str, vars: dict,
     # leurs écritures. _MUTATION_LOCK est réentrant (write_json le reprend
     # sans deadlock).
     with _MUTATION_LOCK:
-        return _apply_overlay_body(ws_id, overlay_id, ws_dir, src_dir, vars, options)
+        # Mise à jour des fichiers gérés seulement en RÉ-application (module
+        # déjà actif) : à la première activation, un fichier homonyme déjà
+        # présent appartient à l'utilisateur et n'est jamais remplacé.
+        was_active = overlay_is_active(ws_dir, overlay)
+        return _apply_overlay_body(ws_id, overlay_id, ws_dir, src_dir, vars, options,
+                                   was_active)
 
 
 def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
-                        vars: dict, options: dict | None) -> tuple[int, dict]:
+                        vars: dict, options: dict | None,
+                        was_active: bool = False) -> tuple[int, dict]:
     opts = _normalize_options(options)
     marker = read_json(src_dir / OVERLAY_MARKER, {}) or {}
     cfg = _claude_md_config(marker)
@@ -709,9 +907,14 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
     skipped: list[dict] = []
     generated: list[str] = []
     patched: list[str] = []
+    # Ré-application : fichiers gérés remplacés (et bloc CLAUDE.md) + .bak.
+    updated: list[str] = []
+    backups: list[str] = []
+    ws_root = Path(ws_dir).resolve()
 
-    # 1. CLAUDE.md : traitement special (fragment / complet / skip).
-    _handle_claude_md(src_dir, ws_dir, marker, vars, copied, skipped, appended)
+    # 1. CLAUDE.md : traitement special (fragment / complet / mise a jour du bloc).
+    _handle_claude_md(src_dir, ws_dir, marker, vars, copied, skipped, appended,
+                      updated, backups, marker.get("id") or overlay_id)
 
     # 2. Copie standard des autres fichiers (idempotente + gating).
     claude_md_names = {cfg["full_file"], cfg["fragment_file"]}
@@ -743,7 +946,13 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
 
         target = ws_dir / rel
         if target.exists():
-            skipped.append({"path": rel_posix, "reason": "already present"})
+            # Fichier géré par le module : mis à jour s'il diffère du rendu
+            # (sauvegarde .bak). Tout autre fichier présent est à l'utilisateur.
+            if was_active and _is_managed(rel_posix, marker) and target.is_file():
+                _update_managed_file(entry, target, rel_posix, ws_dir, ws_root, vars,
+                                     updated, backups, skipped)
+            else:
+                skipped.append({"path": rel_posix, "reason": "already present"})
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -782,6 +991,7 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
         return 409, {
             "ok": False, "overlay_id": overlay_id, "error": str(e),
             "copied": copied, "appended": appended, "seeded": seeded,
+            "updated": updated, "backups": backups,
             "skipped": skipped, "options": opts,
         }
 
@@ -817,14 +1027,18 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
             "prefilled": prefilled,
             "generated": generated,
             "settings_patched": patched,
+            "updated": updated,
+            "backups": backups,
             "skipped": skipped,
             "options": opts,
         }
 
     log.info("overlay %s applied on %s (mode=%s depth=%s) : "
-             "%d copied, %d appended, %d seeded, %d generated, %d skipped",
+             "%d copied, %d appended, %d seeded, %d generated, %d updated "
+             "(%d backups), %d skipped",
              overlay_id, ws_id, opts["mode"], opts["depth"],
-             len(copied), len(appended), len(seeded), len(generated), len(skipped))
+             len(copied), len(appended), len(seeded), len(generated),
+             len(updated), len(backups), len(skipped))
     return 200, {
         "ok": True,
         "overlay_id": overlay_id,
@@ -834,6 +1048,8 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
         "prefilled": prefilled,
         "generated": generated,
         "settings_patched": patched,
+        "updated": updated,
+        "backups": backups,
         "skipped": skipped,
         "options": opts,
         **gen_extra,

@@ -110,6 +110,31 @@ class ServerSecurityTests(unittest.TestCase):
         self.assertEqual(self.req("GET", "/api/workspaces/absent/team")[0], 404)
         self.assertEqual(self.req("GET", "/api/workspaces/absent/improvement")[0], 404)
 
+    def test_nouvelles_routes_adoption_gardees_csrf(self):
+        """inspect-parent, adopt-bulk, pick-folder : 403 sans X-Nebula-XHR (garde
+        par défaut des POST). Le sélecteur n'est jamais appelé avec le header ici
+        (il ouvrirait un vrai dialogue)."""
+        for path in ("/api/workspaces/inspect-parent", "/api/workspaces/adopt-bulk",
+                     "/api/system/pick-folder"):
+            with self.subTest(path=path):
+                status, _, data = self.req("POST", path, body={"path": str(self.srv.root)})
+                self.assertEqual(status, 403)
+                self.assertIn("X-Nebula-XHR", json.loads(data)["error"])
+
+    def test_routes_adoption_groupee(self):
+        status, _, data = self.req("POST", "/api/workspaces/inspect-parent",
+                                   body={"path": str(self.srv.root / "workspaces")}, headers=XHR)
+        self.assertEqual(status, 200, data)
+        cands = {c["name"]: c for c in json.loads(data)["candidates"]}
+        self.assertTrue(cands["ws1"]["already_adopted"])
+        self.assertEqual(cands["ws1"]["adopted_id"], "ws1")
+        status, _, data = self.req("POST", "/api/workspaces/adopt-bulk", body={"items": []}, headers=XHR)
+        self.assertEqual(status, 400)
+        # Capacité du sélecteur : lecture seule, sans dialogue.
+        status, _, data = self.req("GET", "/api/system/pick-folder")
+        self.assertEqual(status, 200)
+        self.assertIn("supported", json.loads(data))
+
     def test_localhost_accepte(self):
         self.assertEqual(self.req("GET", "/api/overview", host=f"localhost:{self.port}")[0], 200)
 

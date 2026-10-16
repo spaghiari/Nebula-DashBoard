@@ -14,7 +14,7 @@
   ],
   "after_apply": "Après activation : lancer Claude et dire « bootstrap le projet ». N'écrase aucun fichier existant.",
 
-  "_comment_claude_md": "CLAUDE.md est traité spécialement par apply_overlay (cf. dashcore/api_overlays.py) : si l'hôte n'a pas de CLAUDE.md -> écrire le complet rendu ; s'il en a un sans le marqueur -> appender le fragment CLAUDE.self-improving.md (borné par les marqueurs ci-dessous) ; si le marqueur est déjà présent -> skip (idempotent). Le fragment source n'est jamais copié tel quel dans le workspace.",
+  "_comment_claude_md": "CLAUDE.md est traité spécialement par apply_overlay (cf. dashcore/api_overlays.py) : si l'hôte n'a pas de CLAUDE.md -> écrire le complet rendu ; s'il en a un sans le marqueur -> appender le fragment CLAUDE.self-improving.md (borné par les marqueurs ci-dessous) ; si le marqueur est déjà présent -> rien : ce bloc est complété par le projet (pièges, langue, sommaire mémoire nettoyé au bootstrap), il n'est donc jamais réinitialisé (pas de refresh_block). Le fragment source n'est jamais copié tel quel dans le workspace.",
   "claude_md": {
     "full_file": "CLAUDE.md",
     "fragment_file": "CLAUDE.self-improving.md",
@@ -53,6 +53,9 @@
       ".claude/hooks/statusline.py"
     ]
   },
+
+  "_comment_managed": "Fichiers GÉRÉS par le module : « Ré-appliquer » remplace un hook qui diffère du rendu de la version courante, après sauvegarde <nom>.<horodatage>.bak ; le bloc BEGIN/END de CLAUDE.md n'est PAS remplacé (complété par le projet). Les commandes (/check-all...), la mémoire et les registres sont instanciés par projet : jamais écrasés.",
+  "managed": [".claude/hooks/*.py"],
 
   "_comment_seeds": "Exemples travaillés (profondeur complète uniquement). Chaque seed est un fragment markdown appendé à la fin du registre cible APRÈS sa copie (donc seulement au premier apply, idempotent). Le seed n'est jamais copié comme fichier autonome. seed_dir relatif à la racine de l'overlay. mode (optionnel) restreint le seed au mode projet.",
   "seeds": [

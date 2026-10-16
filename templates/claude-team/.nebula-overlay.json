@@ -8,12 +8,13 @@
   "_comment_requires": "Overlays qui doivent déjà être actifs sur le workspace (signature_file présent). apply_overlay refuse (409) sinon ; create_workspace applique les overlays dans l'ordre des dépendances et refuse un overlay dont le prérequis n'est pas coché.",
   "requires": ["claude-self-improving"],
 
-  "_comment_claude_md": "Pas de CLAUDE.md complet : le prérequis claude-self-improving le pose toujours avant. Seul le fragment est appendé (idempotent via les marqueurs).",
+  "_comment_claude_md": "Pas de CLAUDE.md complet : le prérequis claude-self-improving le pose toujours avant. Seul le fragment est appendé ; refresh_block = true : à la ré-application, le bloc entre les marqueurs (règles du module, rien à compléter) est remplacé par le fragment rendu s'il en diffère, après sauvegarde .bak (idempotent).",
   "claude_md": {
     "full_file": "CLAUDE.md",
     "fragment_file": "CLAUDE.claude-team.md",
     "begin_marker": "<!-- BEGIN claude-team -->",
-    "end_marker": "<!-- END claude-team -->"
+    "end_marker": "<!-- END claude-team -->",
+    "refresh_block": true
   },
 
   "_comment_features": "Liste rendue par l'UI (onglet Configuration du workspace, section Modules de la page Templates). icon = clé de js/icons.js (I.<icon>) ; text accepte <code>.",
@@ -67,6 +68,15 @@
 
   "_comment_no_copy": "Fichiers de l'overlay qui documentent le module dans le catalogue templates/ mais ne sont jamais copiés dans un workspace (ni comptés dans file_count).",
   "no_copy": ["README.md"],
+
+  "_comment_managed": "Fichiers GÉRÉS par le module (globs relatifs ; * ne traverse pas /, ** couvre plusieurs dossiers). « Ré-appliquer » remplace un fichier géré qui diffère du rendu de la version courante, après sauvegarde <nom>.<horodatage>.bak ; le bloc BEGIN/END de CLAUDE.md est aussi remplacé. Jamais team.json, team/agents/*.md (édités par /improve), evals/**, journal/** ni .claude/memory/** (enrichie par Claude au fil du projet) : contenu du projet, jamais écrasé.",
+  "managed": [
+    ".claude/hooks/*.py",
+    ".claude/commands/team.md",
+    ".claude/commands/eval.md",
+    ".claude/commands/improve.md",
+    ".claude/commands/eval-add.md"
+  ],
 
   "_comment_generators": "Hooks de post-application déclaratifs, exécutés par apply_overlay après la copie et le settings_patch. team_agents = dashcore/api_team.generate_agents : génère .claude/agents/<prefix>-<id>.md pour chaque agent du manifeste (prefix = payload `prefix`, sinon team.prefix persisté, sinon id du workspace ; idempotent ; `regenerate: true` ne réécrit que les fichiers portant le marqueur généré).",
   "generators": ["team_agents"]

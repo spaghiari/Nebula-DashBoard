@@ -30,7 +30,8 @@ Mémoire projet **always-on** pour `{{label}}`.
 <!--
   Bloc always-on injecté par l'overlay « Auto-amélioration de Claude »
   (Nebula). Ne pas éditer manuellement entre les marqueurs BEGIN/END :
-  le ré-apply de l'overlay détecte ce bloc pour rester idempotent.
+  le ré-apply de l'overlay remplace ce bloc par sa version courante
+  (ancien CLAUDE.md sauvegardé en .bak).
   Pour personnaliser durablement, déplacer le contenu hors des marqueurs
   ou retirer les marqueurs.
 -->

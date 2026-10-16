@@ -61,14 +61,15 @@ function _helpSections() {
         <div class="help-step-num">1</div>
         <div>
           <h4>Wizard "Importer config"</h4>
-          <p>Sur la page <strong>Accueil</strong> ou <strong>Outils → Onboarding</strong>, clique sur <em>Importer ma config Claude</em>. Le scanner lit <code class="mono">~/.claude/settings.json</code> et <code class="mono">~/.claude/projects/</code>, te liste les MCPs et workspaces trouvés, et tu coches ceux que tu veux importer. Les éléments déjà connus sont grisés.</p>
+          <p>Sur la page <strong>Accueil</strong> ou <strong>Outils → Onboarding</strong>, clique sur <em>Importer ma config Claude</em>. Le scanner lit <code class="mono">~/.claude/settings.json</code> et <code class="mono">~/.claude/projects/</code>, te liste les MCPs et workspaces trouvés, et tu coches ceux que tu veux importer. Les éléments déjà connus sont grisés, tout comme les projets dont le dossier n'existe plus (badge <em>dossier introuvable</em>). Un projet marqué <em>sessions expirées</em> est bien là : Claude Code efface les anciennes conversations au bout de 30 jours (réglage <code class="mono">cleanupPeriodDays</code>), mais le dossier existe toujours et s'importe normalement.</p>
         </div>
       </div>
       <div class="help-step">
         <div class="help-step-num">2</div>
         <div>
           <h4>Enregistrer un dossier existant</h4>
-          <p>Pour pointer Nebula vers un projet déjà sur disque (sans le déplacer), utilise <em>Enregistrer un dossier</em>. Tu donnes l'ID, le label et le chemin absolu — aucun fichier n'est touché, juste un enregistrement dans <code class="mono">data/workspaces.json</code>.</p>
+          <p>Pour pointer Nebula vers un projet déjà sur disque (sans le déplacer), utilise <em>Enregistrer un dossier</em>. Tu donnes l'ID, le label et le chemin absolu : aucun fichier n'est touché, juste un enregistrement dans <code class="mono">data/workspaces.json</code>. Le bouton <em>Parcourir…</em> ouvre le sélecteur de dossier de ton système pour éviter de taper le chemin.</p>
+          <p>Tous tes projets sont rangés dans un même dossier (ex. <code class="mono">C:\\dev</code>) ? Bascule sur <em>Plusieurs projets d'un dossier</em> : Nebula liste les sous-dossiers qui ressemblent à des projets (CLAUDE.md, .claude, .git, package.json, pyproject.toml…), tu décoches ceux qui ne t'intéressent pas, tu ajustes les IDs si besoin, puis <em>Adopter la sélection</em>. Les projets déjà adoptés sont grisés ; un échec sur un projet n'empêche pas les autres. Aussi accessible depuis la palette (<kbd>Ctrl</kbd>+<kbd>K</kbd>) : <em>Adopter plusieurs projets d'un dossier</em>.</p>
         </div>
       </div>
       <div class="help-step">
@@ -325,7 +326,7 @@ function _helpSections() {
 `,
 'modules': `
       <h2>${I.zap}<span>Modules (overlays)</span></h2>
-      <p>Un module se pose <strong>par-dessus</strong> un workspace existant, sans jamais écraser un fichier déjà présent (le <code class="mono">CLAUDE.md</code> reçoit juste un bloc délimité). On l'active depuis l'onglet <strong>Configuration</strong> du workspace, ou depuis la section <strong>Modules</strong> de la page Templates (« Activer sur un workspace… »). Ré-activer un module ne complète que les fichiers manquants.</p>
+      <p>Un module se pose <strong>par-dessus</strong> un workspace existant, sans jamais écraser un fichier déjà présent (le <code class="mono">CLAUDE.md</code> reçoit juste un bloc délimité). On l'active depuis l'onglet <strong>Configuration</strong> du workspace, ou depuis la section <strong>Modules</strong> de la page Templates (« Activer sur un workspace… »). Sur un workspace où il est déjà actif, <strong>Ré-appliquer</strong> met le module à jour : les fichiers manquants sont copiés, les fichiers <em>gérés</em> par le module (ses hooks, et pour l'équipe d'agents ses quatre commandes et son bloc de règles du <code class="mono">CLAUDE.md</code>) sont remplacés par la version courante s'ils en diffèrent, l'ancienne version étant sauvegardée en <code class="mono">.bak</code>. Ton contenu (registres, mémoire de projet, manifeste, bloc « Auto-amélioration » du <code class="mono">CLAUDE.md</code> que tu as complété, texte hors des blocs) n'est jamais touché. Relance Claude Code ensuite pour charger les changements.</p>
 
       <div class="help-grid help-grid-3">
         <div class="help-tile">
@@ -544,7 +545,7 @@ function _helpSections() {
 // Ctrl+K : termes que l'utilisateur taperait sans connaître le titre exact du
 // topic (« chiffrement », « sanity », « stash »…). Pas affiché dans l'UI.
 const HELP_TOPICS = [
-  { id: 'premiers-pas',   emoji: '🚀', title: 'Premiers pas',         summary: 'Découvre Nebula et importe ta config Claude existante.',          sections: ['overview', 'onboarding'], keywords: 'démarrer import onboarding première fois config claude scan wizard récupérer' },
+  { id: 'premiers-pas',   emoji: '🚀', title: 'Premiers pas',         summary: 'Découvre Nebula et importe ta config Claude existante.',          sections: ['overview', 'onboarding'], keywords: 'démarrer import onboarding première fois config claude scan wizard récupérer adopter dossier parent plusieurs projets parcourir sessions expirées introuvable' },
   { id: 'workspaces',     emoji: '🗂️', title: 'Workspaces',            summary: 'Créer, importer, lancer et gérer tes projets Claude Code.',       sections: ['workspaces', 'scope'], keywords: 'projet créer importer dossier lancer reprendre supprimer purge scope lier' },
   { id: 'mcps',           emoji: '🔌', title: 'MCPs',                  summary: 'Configurer les serveurs Model Context Protocol et leurs recettes.', sections: ['mcps', 'recipes'], keywords: 'model context protocol serveur transport stdio http sse diagnostiquer recette registry sync statut' },
   { id: 'skills-plugins', emoji: '✨', title: 'Skills & Plugins',      summary: 'Bibliothèque de compétences et extensions Claude Code.',          sections: ['skills', 'plugins'], keywords: 'skill plugin bibliothèque magasin distribuer marketplace installer github désync scope' },

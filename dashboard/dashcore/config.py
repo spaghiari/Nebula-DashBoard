@@ -150,6 +150,30 @@ ORIGIN_URL = "https://git.exemple.lan/administrateur/Claude-Dashboard.git"
 WINDOWS_ONLY_MSG = ("Fonction disponible uniquement sous Windows (ouverture d'une "
                     "console cmd) : lance `claude` depuis un terminal dans le dossier du workspace.")
 
+# --- Adoption groupée (inspection d'un dossier parent) -----------------------
+# Fichiers / dossiers dont la présence fait d'un sous-dossier un projet
+# candidat. Suffixes : fichiers de solution .NET (nom libre).
+PROJECT_SIGNAL_NAMES = (
+    "CLAUDE.md", ".claude", ".mcp.json", ".git", "package.json", "pyproject.toml",
+    "requirements.txt", "setup.py", "Cargo.toml", "go.mod", "pom.xml",
+    "build.gradle", "build.gradle.kts", "composer.json", "Gemfile",
+    "CMakeLists.txt", "Makefile", "deno.json",
+)
+PROJECT_SIGNAL_SUFFIXES = (".sln", ".csproj")
+# Signaux propres à Claude Code (badge dédié dans la liste).
+PROJECT_CLAUDE_SIGNALS = ("CLAUDE.md", ".claude", ".mcp.json")
+# Jamais candidats (en plus des dossiers cachés, préfixe `.`).
+PARENT_SCAN_IGNORED = frozenset({
+    "node_modules", "__pycache__", "venv", "site-packages",
+    "$recycle.bin", "system volume information",
+})
+PARENT_SCAN_MAX_CANDIDATES = 200
+# Garde-fou de coût : nombre maximal de dossiers listés pendant une inspection.
+PARENT_SCAN_MAX_VISITED = 2000
+
+# --- Sélecteur de dossier natif (dashcore/folder_picker.py) ------------------
+FOLDER_PICKER_TIMEOUT = 300  # secondes : au-delà, le dialogue est abandonné
+
 # --- Module claude-team (dashcore/api_team.py) --------------------------------
 # Capacités abstraites du manifeste `.claude/team.json` -> outils Claude Code
 # du frontmatter généré. Ordre stable (celui des capacités de l'agent, puis

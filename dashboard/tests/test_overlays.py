@@ -7,6 +7,7 @@ absent de l'installation).
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import unittest
 from pathlib import Path
@@ -365,6 +366,224 @@ class RequiresAndPatchTests(unittest.TestCase):
         self.assertEqual(ordered, [])
         self.assertIn("Overlay test", errors["ov2"])
         self.assertEqual(ov.order_by_requires(["inconnu", "ov1"]), (["inconnu", "ov1"], {}))
+
+
+class ManagedGlobTests(unittest.TestCase):
+    def test_correspondance(self):
+        m = {"managed": [".claude/hooks/*.py", "docs/**/*.md", "../x", "C:/abs", "/abs", 3, ""]}
+        self.assertEqual(ov._managed_globs(m), [".claude/hooks/*.py", "docs/**/*.md"])
+        self.assertTrue(ov._is_managed(".claude/hooks/a.py", m))
+        self.assertFalse(ov._is_managed(".claude/hooks/sub/a.py", m))  # * ne traverse pas /
+        self.assertFalse(ov._is_managed(".claude/hooks/a.py.bak", m))
+        self.assertFalse(ov._is_managed("x/.claude/hooks/a.py", m))
+        self.assertTrue(ov._is_managed("docs/a.md", m))
+        self.assertTrue(ov._is_managed("docs/x/y/a.md", m))
+        self.assertFalse(ov._is_managed(".claude/hooks/a.py", {}))  # absence = rien de géré
+
+
+class ManagedUpdateTests(unittest.TestCase):
+    """Ré-application : fichiers gérés (`managed`) et bloc CLAUDE.md mis à jour."""
+
+    H_RENDU = "print('Mon WS')\n"
+
+    def setUp(self):
+        reset_sandbox()
+        self.src = _build_overlay({
+            "managed": [".claude/hooks/*.py", ".claude/extra/*.md"],
+            "depth": {"minimal_keep": ["CLAUDE.md", "CLAUDE.self-improving.md",
+                                       ".claude/sig.md", ".claude/hooks/h.py"]},
+        })
+        _write(self.src / ".claude" / "extra" / "x.md", "extra v1\n")
+        self.ws = make_workspace("w1")
+        (self.ws / "CLAUDE.md").write_text("# perso\n", encoding="utf-8")
+        self.hook = self.ws / ".claude" / "hooks" / "h.py"
+
+    def _apply(self, **opts):
+        status, p = ov.apply_overlay("w1", "ov1", {"label": "Mon WS"}, opts or {"depth": "complete"})
+        self.assertEqual(status, 200, p.get("error"))
+        return p
+
+    def _baks(self) -> list[Path]:
+        return sorted(self.ws.rglob("*.bak"))
+
+    def test_gere_modifie_remplace_avec_bak(self):
+        self._apply()
+        self.hook.write_text("ancienne version\n", encoding="utf-8")
+        p = self._apply()
+        self.assertEqual(p["updated"], [".claude/hooks/h.py"])
+        self.assertEqual(len(p["backups"]), 1)
+        bak = self.ws / p["backups"][0]
+        self.assertTrue(bak.name.startswith("h.py.") and bak.name.endswith(".bak"), bak.name)
+        self.assertEqual(bak.read_text(encoding="utf-8"), "ancienne version\n")
+        self.assertEqual(self.hook.read_text(encoding="utf-8"), self.H_RENDU)
+        self.assertEqual(p["copied"], [])
+
+    def test_identique_y_compris_crlf_rien(self):
+        self._apply()
+        self.hook.write_bytes(self.H_RENDU.replace("\n", "\r\n").encode("utf-8"))
+        before = self.hook.read_bytes()
+        p = self._apply()
+        self.assertEqual(p["updated"], [])
+        self.assertEqual(p["backups"], [])
+        self.assertEqual(self.hook.read_bytes(), before)
+        self.assertEqual(self._baks(), [])
+        reasons = {s["path"]: s["reason"] for s in p["skipped"]}
+        self.assertEqual(reasons[".claude/hooks/h.py"], "already up to date")
+
+    def test_non_gere_modifie_intact(self):
+        self._apply()
+        sig = self.ws / ".claude" / "sig.md"
+        sig.write_text("à moi\n", encoding="utf-8")
+        p = self._apply()
+        self.assertEqual(sig.read_text(encoding="utf-8"), "à moi\n")
+        self.assertNotIn(".claude/sig.md", p["updated"])
+        self.assertEqual(self._baks(), [])
+
+    def test_premiere_activation_ne_remplace_pas(self):
+        """Module inactif : un fichier homonyme déjà présent est à l'utilisateur."""
+        self.hook.parent.mkdir(parents=True)
+        self.hook.write_text("mon hook\n", encoding="utf-8")
+        p = self._apply()
+        self.assertEqual(self.hook.read_text(encoding="utf-8"), "mon hook\n")
+        self.assertEqual(p["updated"], [])
+        self.assertEqual(self._baks(), [])
+
+    def test_seconde_reapplication_rien(self):
+        self._apply()
+        self.hook.write_text("ancienne version\n", encoding="utf-8")
+        self._apply()
+        n = len(self._baks())
+        p = self._apply()
+        self.assertEqual((p["updated"], p["backups"]), ([], []))
+        self.assertEqual(len(self._baks()), n)
+
+    def test_deux_bak_successifs_distincts(self):
+        self._apply()
+        self.hook.write_text("v1 locale\n", encoding="utf-8")
+        p1 = self._apply()
+        self.hook.write_text("v2 locale\n", encoding="utf-8")
+        p2 = self._apply()
+        self.assertNotEqual(p1["backups"], p2["backups"])
+        self.assertEqual((self.ws / p1["backups"][0]).read_text(encoding="utf-8"), "v1 locale\n")
+        self.assertEqual((self.ws / p2["backups"][0]).read_text(encoding="utf-8"), "v2 locale\n")
+        self.assertEqual(len(self._baks()), 2)
+
+    def test_profondeur_minimale_respectee(self):
+        self._apply()  # complète : extra/x.md copié
+        extra = self.ws / ".claude" / "extra" / "x.md"
+        extra.write_text("modifié\n", encoding="utf-8")
+        p = self._apply(mode="solo")  # minimale : x.md hors profondeur
+        self.assertEqual(extra.read_text(encoding="utf-8"), "modifié\n")
+        self.assertIn({"path": ".claude/extra/x.md", "reason": "profondeur minimale"}, p["skipped"])
+        p = self._apply()
+        self.assertEqual(p["updated"], [".claude/extra/x.md"])
+
+    def _opt_in_refresh_block(self):
+        marker = self.src / ".nebula-overlay.json"
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        data["claude_md"] = {"refresh_block": True}
+        marker.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_bloc_claude_md_sans_opt_in_jamais_remplace(self):
+        """Bloc complété par le projet (pièges, langue, sommaire nettoyé au
+        bootstrap de claude-self-improving) : sans `refresh_block`, intact."""
+        self._apply()
+        md = self.ws / "CLAUDE.md"
+        edited = md.read_text(encoding="utf-8").replace("fragment Mon WS", "complété par le projet")
+        md.write_text(edited, encoding="utf-8")
+        p = self._apply()
+        self.assertEqual(md.read_text(encoding="utf-8"), edited)
+        self.assertEqual((p["updated"], p["backups"]), ([], []))
+        self.assertIn({"path": "CLAUDE.md", "reason": "marker already present"}, p["skipped"])
+
+    def test_bloc_claude_md_remplace_reste_intact(self):
+        self._opt_in_refresh_block()
+        self._apply()
+        md = self.ws / "CLAUDE.md"
+        text = md.read_text(encoding="utf-8")
+        md.write_text(text.replace("fragment Mon WS", "ancien fragment") + "après le bloc\n",
+                      encoding="utf-8")
+        p = self._apply()
+        self.assertEqual(p["updated"], ["CLAUDE.md (bloc ov1)"])
+        self.assertEqual(len(p["backups"]), 1)
+        self.assertIn("ancien fragment", (self.ws / p["backups"][0]).read_text(encoding="utf-8"))
+        new = md.read_text(encoding="utf-8")
+        self.assertTrue(new.startswith("# perso\n"))
+        self.assertTrue(new.endswith("après le bloc\n"))
+        self.assertIn("fragment Mon WS", new)
+        self.assertNotIn("ancien fragment", new)
+        self.assertEqual(new.count("<!-- BEGIN claude-self-improving -->"), 1)
+        # Idempotent, y compris fichier réécrit en CRLF.
+        md.write_bytes(new.replace("\n", "\r\n").encode("utf-8"))
+        p = self._apply()
+        self.assertEqual((p["updated"], p["backups"]), ([], []))
+        self.assertIn({"path": "CLAUDE.md", "reason": "marker already present"}, p["skipped"])
+
+    def test_bloc_sans_fragment_source_rien(self):
+        """Module en CLAUDE.md complet seulement (pas de fragment) : rien ne change."""
+        self._apply()
+        md = self.ws / "CLAUDE.md"
+        edited = md.read_text(encoding="utf-8").replace("fragment Mon WS", "édité")
+        md.write_text(edited, encoding="utf-8")
+        (self.src / "CLAUDE.self-improving.md").unlink()
+        p = self._apply()
+        self.assertEqual(md.read_text(encoding="utf-8"), edited)
+        self.assertEqual(p["updated"], [])
+
+    def test_bloc_sans_marqueur_de_fin_intact(self):
+        self._apply()
+        md = self.ws / "CLAUDE.md"
+        broken = md.read_text(encoding="utf-8").replace("<!-- END claude-self-improving -->", "")
+        md.write_text(broken, encoding="utf-8")
+        p = self._apply()
+        self.assertEqual(md.read_text(encoding="utf-8"), broken)
+        self.assertEqual(p["updated"], [])
+
+    def test_lien_hors_workspace_jamais_suivi(self):
+        self._apply()
+        outside = self.ws.parent / "hors-ws.py"
+        outside.write_text("externe\n", encoding="utf-8")
+        self.hook.unlink()
+        try:
+            self.hook.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            self.skipTest("création de lien symbolique non autorisée sur ce poste")
+        p = self._apply()
+        self.assertEqual(outside.read_text(encoding="utf-8"), "externe\n")
+        self.assertNotIn(".claude/hooks/h.py", p["updated"])
+        self.assertEqual(self._baks(), [])
+
+    def test_garde_inside_workspace(self):
+        root = self.ws.resolve()
+        self.assertTrue(ov._inside_workspace(root, self.ws / "a" / "b.py"))
+        self.assertFalse(ov._inside_workspace(root, self.ws / ".." / "x.py"))
+        from unittest import mock
+        with mock.patch.object(Path, "is_symlink", return_value=True):
+            self.assertFalse(ov._inside_workspace(root, self.ws / "a.py"))
+
+    @unittest.skipUnless(os.name == "nt", "jonction NTFS (Windows)")
+    def test_jonction_hors_workspace_jamais_suivie(self):
+        """Dossier `.claude/hooks` remplacé par une jonction vers l'extérieur
+        (création sans droit admin) : le fichier géré n'est pas réécrit."""
+        import subprocess
+        self._apply()
+        outside = self.ws.parent / "hooks-externes"
+        outside.mkdir()
+        (outside / "h.py").write_text("externe\n", encoding="utf-8")
+        shutil.rmtree(self.hook.parent)
+        r = subprocess.run(["cmd", "/c", "mklink", "/J", str(self.hook.parent), str(outside)],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            self.skipTest(f"mklink /J indisponible : {r.stdout} {r.stderr}")
+        try:
+            p = self._apply()
+            self.assertEqual((outside / "h.py").read_text(encoding="utf-8"), "externe\n")
+            self.assertNotIn(".claude/hooks/h.py", p["updated"])
+            self.assertIn({"path": ".claude/hooks/h.py",
+                           "reason": "lien hors du workspace, non mis à jour"}, p["skipped"])
+            self.assertEqual(list(outside.glob("*.bak")), [])
+        finally:
+            os.rmdir(self.hook.parent)  # retire la jonction, pas sa cible
 
 
 @unittest.skipUnless((REAL_OVERLAY / ov.OVERLAY_MARKER).is_file(), "overlay réel absent")

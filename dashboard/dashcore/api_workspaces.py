@@ -5,6 +5,7 @@ import contextlib
 import datetime as dt
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -16,11 +17,13 @@ from dashcore.config import (
     ROOT, USER_HOME, CLAUDE_HOME, CLAUDE_SETTINGS, BACKUPS_DIR, TEMPLATES_DIR, DASHBOARD_DIR, WORKSPACES_DIR,
     SCRIPTS_DIR, WORKSPACES_JSON, MCP_REGISTRY, ALLOWED_TRANSPORTS, _MUTATION_LOCK, log,
     HOOK_ERRORS_LOG, IS_WINDOWS, WINDOWS_ONLY_MSG,
+    PROJECT_SIGNAL_NAMES, PROJECT_SIGNAL_SUFFIXES, PROJECT_CLAUDE_SIGNALS,
+    PARENT_SCAN_IGNORED, PARENT_SCAN_MAX_CANDIDATES, PARENT_SCAN_MAX_VISITED,
 )
 
 
 from dashcore.helpers import (
-    _remove_dir_or_link, apply_template, list_workspaces,
+    CorruptJsonError, _remove_dir_or_link, apply_template, list_workspaces,
     project_dir_for_path, read_json, read_json_strict, resolve_ws_dir, safe_id, safe_path,
     sanitize_bat, validate_ws_path, write_json, write_launch_bat,
 )
@@ -2021,6 +2024,210 @@ def adopt_workspace(payload: dict) -> tuple[int, dict]:
         },
         "warnings": warnings,
     }
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Adoption groupée : inspection d'un dossier parent (lecture seule) puis
+# adoption de plusieurs sous-dossiers en un appel. Chaque adoption passe par
+# `adopt_workspace` (mêmes garde-fous, verrou, registre lu en strict).
+# ────────────────────────────────────────────────────────────────────────────
+
+
+def _slug_ws_id(name: str) -> str:
+    """Id suggéré depuis un nom de dossier (même règle que le front)."""
+    slug = re.sub(r"[^a-z0-9_-]+", "-", (name or "").lower()).strip("-")[:40].strip("-")
+    return slug or "workspace"
+
+
+def _unique_ws_id(base: str, taken: set[str]) -> str:
+    """`base`, sinon `base-2`, `base-3`... absent de `taken` (insensible à la casse)."""
+    if base.lower() not in taken:
+        return base
+    n = 2
+    while True:
+        suffix = f"-{n}"
+        cand = base[:40 - len(suffix)].rstrip("-") + suffix
+        if cand.lower() not in taken:
+            return cand
+        n += 1
+
+
+def _project_signals(entries: list[os.DirEntry]) -> list[str]:
+    """Signaux de projet présents parmi les entrées d'un dossier."""
+    names = {e.name for e in entries}
+    found = [s for s in PROJECT_SIGNAL_NAMES if s in names]
+    for suffix in PROJECT_SIGNAL_SUFFIXES:
+        hit = next((e.name for e in entries if e.name.lower().endswith(suffix)), None)
+        if hit:
+            found.append(hit)
+    return found
+
+
+def _is_scan_ignored(name: str) -> bool:
+    return name.startswith(".") or name.lower() in PARENT_SCAN_IGNORED
+
+
+def inspect_parent_folder(payload: dict) -> tuple[int, dict]:
+    """Liste les sous-dossiers d'un dossier parent qui ressemblent à des projets.
+
+    Lecture seule. Profondeur 1 par défaut ; `depth: 2` descend aussi dans les
+    sous-dossiers qui ne sont pas eux-mêmes des projets (ex. `dev/clients/x`).
+    Pour chaque candidat : chemin, signaux, `already_adopted` (+ id existant),
+    id suggéré dédoublonné contre le registre ET entre candidats. Dossiers
+    cachés, `node_modules`, `__pycache__`... jamais candidats. Plafonné à
+    PARENT_SCAN_MAX_CANDIDATES (`truncated: true` au-delà).
+    """
+    raw_path = (payload.get("path") or "").strip()
+    ok, err = validate_ws_path(raw_path)
+    if not ok:
+        return 400, {"error": err}
+    try:
+        depth = int(payload.get("depth") or 1)
+    except (TypeError, ValueError):
+        depth = 1
+    depth = 2 if depth >= 2 else 1
+
+    parent = Path(raw_path)
+    if _is_path_under_claude_home(parent):
+        return 403, {"error": "Chemin interdit : sous ~/.claude/ (config Claude Code)"}
+    if not parent.exists():
+        return 404, {"error": f"Dossier introuvable : {raw_path}"}
+    if not parent.is_dir():
+        return 400, {"error": "Le chemin existe mais n'est pas un dossier"}
+
+    data = read_json(WORKSPACES_JSON, {"version": "1.0", "workspaces": []}) or {}
+    by_path: dict[str, str] = {}
+    taken: set[str] = set()
+    for w in data.get("workspaces", []) if isinstance(data, dict) else []:
+        if not isinstance(w, dict):
+            continue
+        if w.get("id"):
+            taken.add(str(w["id"]).lower())
+        wp = (w.get("path") or "").rstrip("\\/").lower()
+        if wp:
+            by_path[wp] = str(w.get("id") or "")
+
+    candidates: list[dict] = []
+    truncated = False
+    visited = 0
+
+    def _list(d: Path) -> list[os.DirEntry] | None:
+        nonlocal visited
+        visited += 1
+        try:
+            with os.scandir(d) as it:
+                return list(it)
+        except OSError:
+            return None
+
+    def _subdirs(entries: list[os.DirEntry]) -> list[os.DirEntry]:
+        out = []
+        for e in entries:
+            try:
+                if e.is_dir() and not _is_scan_ignored(e.name):
+                    out.append(e)
+            except OSError:
+                continue
+        return sorted(out, key=lambda e: e.name.lower())
+
+    def _visit(d: Path, level: int) -> None:
+        nonlocal truncated
+        top = _list(d)
+        if top is None:
+            return
+        for sub in _subdirs(top):
+            if truncated:
+                return
+            if visited >= PARENT_SCAN_MAX_VISITED:
+                truncated = True
+                return
+            sp = Path(sub.path)
+            if _is_path_root(sp) or _is_path_under_claude_home(sp):
+                continue
+            entries = _list(sp)
+            if entries is None:
+                continue
+            signals = _project_signals(entries)
+            if not signals:
+                if level < depth:
+                    _visit(sp, level + 1)
+                continue
+            if len(candidates) >= PARENT_SCAN_MAX_CANDIDATES:
+                truncated = True
+                return
+            norm = str(sp).rstrip("\\/")
+            adopted_id = by_path.get(norm.lower())
+            if adopted_id is not None:
+                suggested = adopted_id
+            else:
+                suggested = _unique_ws_id(_slug_ws_id(sub.name), taken)
+                taken.add(suggested.lower())
+            candidates.append({
+                "path": norm,
+                "name": sub.name,
+                "relative": str(sp.relative_to(parent)),
+                "signals": signals,
+                "claude": any(s in PROJECT_CLAUDE_SIGNALS for s in signals),
+                "already_adopted": adopted_id is not None,
+                "adopted_id": adopted_id,
+                "suggested_id": suggested,
+            })
+
+    _visit(parent, 1)
+    return 200, {
+        "path": str(parent),
+        "depth": depth,
+        "candidates": candidates,
+        "truncated": truncated,
+        "max": PARENT_SCAN_MAX_CANDIDATES,
+    }
+
+
+def adopt_workspaces_bulk(payload: dict) -> tuple[int, dict]:
+    """Adopte plusieurs dossiers en un appel (réponse par item).
+
+    Chaque item passe par `adopt_workspace` : garde-fous, `_MUTATION_LOCK`,
+    registre lu en strict, 409 si id ou chemin déjà pris. Un échec n'annule
+    pas les autres. 200 si au moins une adoption a réussi, 400 sinon (avec le
+    détail par item), pour qu'un toast de succès ne mente jamais.
+    """
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return 400, {"error": "liste `items` requise (non vide)"}
+    if len(items) > PARENT_SCAN_MAX_CANDIDATES:
+        return 400, {"error": f"au plus {PARENT_SCAN_MAX_CANDIDATES} projets par adoption groupée"}
+
+    results: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            results.append({"ok": False, "status": 400, "path": "", "id": "",
+                            "error": "entrée invalide (objet attendu)"})
+            continue
+        base = {"path": str(item.get("path") or ""), "id": str(item.get("id") or "")}
+        try:
+            status, res = adopt_workspace(item)
+        except CorruptJsonError as e:
+            status, res = 409, {"error": str(e)}
+        except Exception as e:  # un item cassé ne doit pas bloquer les suivants
+            log.exception("adoption groupée : échec sur %s", base["path"])
+            status, res = 500, {"error": f"erreur interne : {e}"}
+        if status < 400:
+            results.append({**base, "ok": True, "status": status, "id": res.get("id", base["id"]),
+                            "path": res.get("path", base["path"]),
+                            "warnings": res.get("warnings", []),
+                            "imported": res.get("imported", {})})
+        else:
+            results.append({**base, "ok": False, "status": status,
+                            "error": res.get("error", "échec")})
+
+    adopted = sum(1 for r in results if r["ok"])
+    failed = len(results) - adopted
+    body = {"ok": adopted > 0, "adopted": adopted, "failed": failed, "results": results}
+    if adopted == 0:
+        first = next((r.get("error") for r in results if r.get("error")), "échec")
+        body["error"] = f"Aucun projet adopté : {first}"
+        return 400, body
+    return 200, body
 
 
 def register_existing_workspace(payload: dict) -> tuple[int, dict]:

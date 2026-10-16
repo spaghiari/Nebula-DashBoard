@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook : routage déterministe vers l'équipe claude-team.
 
-Classe le prompt de l'utilisateur (question / conception / implementation /
+Classe le prompt de l'utilisateur (question / conception / chantier / implementation /
 relecture / inconnu) par expressions régulières (français d'abord, quelques
 formes anglaises) et injecte UNE ligne de contexte qui rappelle au fil
 principal vers quel agent router et la gate de relecture, selon
@@ -58,6 +58,15 @@ GATE_LABELS = {
 # passent » ou « je valide, go » ne sont pas des relectures.
 _W = r"(?<![\w'])"  # début de mot (l'apostrophe compte comme séparateur)
 _OBJ = r"\s+(ce|cet|cette|le|la|les|l'|mon|ma|mes|ton|ta|tes|un|une|diff|code|fichier|the|this|my|a)\b"
+# Verbes de remaniement : implémentation, et chantier s'ils portent sur le
+# projet entier (cf. _CHANTIER_RE). Formes impératives et infinitives
+# (« retravaille », « peux-tu retravailler »).
+_BROAD_VERBS = (
+    r"retravaill(e|er|ez)|am[ée]lior(e|er|ez)|optimis(e|er|ez)|nettoi(e|ez)|nettoy(er|ez)"
+    r"|r[ée]organis(e|er|ez)|refai(s|re|tes)|repren(ds|dre|ez)|simplifi(e|er|ez)|migr(e|er|ez)"
+    r"|restructur(e|er|ez)|harmonis(e|er|ez)|refond(s|re|ez)|modernis(e|er|ez)"
+    r"|rework|improve|optimi[sz]e|clean\s+up|migrate|overhaul|refactor\w*"
+)
 CLASSES = (
     ("relecture", re.compile(
         _W + r"(relis|relecture|review|revois|check|(v[ée]rifie|valide|validate|verify)" + _OBJ + r")\b",
@@ -67,10 +76,35 @@ CLASSES = (
         r"|" + _W + r"(plan|con[çc]ois|conception|architecture|option|options|propose|design|strat[ée]gie)\b",
         re.IGNORECASE)),
     ("implementation", re.compile(
-        _W + r"(impl[ée]mente|ajoute|corrige|cr[ée]e|modifie|[ée]cris|refactor\w*|supprime|retire"
-        r"|implement|add|create|write|fix|remove|rename|renomme|mets?\s+[àa]\s+jour|update)\b",
+        _W + r"(impl[ée]ment(e|er|ez)|ajout(e|er|ez)|corrig(e|er|ez)|cr[ée](e|er|ez)|modifi(e|er|ez)"
+        r"|[ée]cri(s|re|vez)|refactor\w*|supprim(e|er|ez)|retir(e|er|ez)|renomm(e|er|ez)"
+        r"|mets?\s+[àa]\s+jour|mettre\s+[àa]\s+jour|" + _BROAD_VERBS + r"|adapt(e|er|ez)"
+        r"|transform(e|er|ez)|convert(is|ir|issez)|finalis(e|er|ez)|termin(e|er|ez)"
+        r"|compl[èe]t(e|er|ez)|d[ée]velopp(e|er|ez)|int[èée]gr(e|er|ez)|remplac(e|er|ez)"
+        r"|implement|add|create|write|fix|remove|rename|update|redo|rewrite)\b",
         re.IGNORECASE)),
 )
+# Chantier : demande large qui vise le projet entier (« retravaille ce
+# projet », « nettoie et réorganise le dépôt ») ou qui invoque l'équipe
+# elle-même. Elle relève de l'orchestration (/team) et non d'un exécutant
+# seul : sans cette classe, ces verbes tombaient en « inconnu » et le fil
+# principal répondait seul.
+# Le projet doit être le COMPLÉMENT du verbe de remaniement (au plus trois
+# mots entre les deux : « retravaille ce projet », « refondre toute
+# l'application », « rework the whole codebase ») : un mot de portée ailleurs
+# dans la phrase ne suffit pas (« optimise la requête SQL de l'app » reste une
+# implémentation). Les quantificateurs vagues (« tous les ») ne comptent pas.
+_CHANTIER_RE = re.compile(
+    _W + r"(" + _BROAD_VERBS + r")\b(?:\s+\S+){0,3}?\s+(?:l'|d')?"
+    r"(projet|project|application|appli|app|codebase|code\s*base|base\s+de\s+code"
+    r"|d[ée]p[ôo]t|repo|repository)\b",
+    re.IGNORECASE)
+# Équipe INVOQUÉE (« avec les agents », « utilise l'équipe ») : pas l'équipe
+# objet de la tâche (« corrige le hook claude-team », « la page de l'équipe »).
+_TEAM_RE = re.compile(
+    _W + r"(avec|via|utilise|utiliser|mobilise|mobiliser|with|using|use)\s+"
+    r"(les\s+|tes\s+|l'|ton\s+|ta\s+|the\s+|your\s+)?(agents|[ée]quipe|team)\b",
+    re.IGNORECASE)
 _QUESTION_RE = re.compile(
     _W + r"(o[ùu] est|o[ùu] sont|o[ùu]|pourquoi|comment [çc]a|comment\b|quels?|quelles?|liste|explique"
     r"|c'est quoi|qu'est-ce|est-ce que|what|where|why|how does|how do|which|list|explain)\b",
@@ -105,7 +139,7 @@ def _project_root() -> str:
 
 
 def classify(prompt: str) -> str:
-    """Type de demande : relecture / conception / implementation / question / inconnu."""
+    """Type de demande : relecture / conception / chantier / implementation / question / inconnu."""
     text = " ".join(_SLASH_TOKEN_RE.sub(" ", prompt).split())
     if not text:
         return "inconnu"
@@ -119,7 +153,11 @@ def classify(prompt: str) -> str:
         if m and (first is None or m.start() < first[0]):
             first = (m.start(), name)
     if first is not None:
-        return first[1]
+        kind = first[1]
+        if kind in ("implementation", "conception") and (
+                _CHANTIER_RE.search(text) or _TEAM_RE.search(text)):
+            return "chantier"
+        return kind
     if _QUESTION_RE.search(text) or _FINAL_QUESTION_RE.search(text):
         return "question"
     return "inconnu"
@@ -152,11 +190,25 @@ def routing_line(team: dict, kind: str, prefix: str) -> str | None:
         head = f"question -> {prefix}-researcher en silence (réponse avec sources fichier:ligne)"
     elif kind == "conception" and _agent_enabled(team, "architect"):
         head = f"conception -> {prefix}-architect (plan en étapes vérifiables, compromis)"
+    elif kind == "chantier":
+        exe = f"{prefix}-executor" if _agent_enabled(team, "executor") else "*-expert"
+        plan = (f"{prefix}-architect pour le plan" if _agent_enabled(team, "architect")
+                else "plan en étapes vérifiables")
+        head = (f"chantier -> procéder comme /team : jouer l'orchestrateur, {plan}, "
+                f"puis exécution étape par étape ({exe} ou *-expert)")
     elif kind == "implementation":
         exe = f"{prefix}-executor" if _agent_enabled(team, "executor") else "*-expert"
         head = f"implémentation -> {exe} (tâche S) ou *-expert (feature M+)"
     elif kind == "relecture" and reviewer:
         head = f"relecture -> {prefix}-reviewer (objectif + critères + diff, jamais le raisonnement)"
+    elif mode == "auto":
+        # En auto, déléguer est le défaut : une demande non reconnue n'est pas
+        # une raison de travailler seul (retour terrain : le fil principal
+        # codait lui-même faute de classe reconnue).
+        exe = f"{prefix}-executor" if _agent_enabled(team, "executor") else "*-expert"
+        head = (f"demande non classée -> déléguer par défaut dès qu'il y a du travail "
+                f"(code à produire ou modifier : /team ou {exe} ; recherche : {prefix}-researcher) ; "
+                f"répondre seul seulement sans travail (salutation, validation, suivi)")
     else:
         head = "demande non classée : répondre seul si une lecture suffit, /team si multi-étapes"
     parts = [head]

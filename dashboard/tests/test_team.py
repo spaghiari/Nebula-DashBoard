@@ -621,6 +621,61 @@ class RealTeamOverlayTests(unittest.TestCase):
         self.assertEqual(len(si["features"]), 4)
         self.assertEqual(si["agents"], [])
 
+    def test_reappliquer_met_a_jour_les_fichiers_geres(self):
+        """Ancien team-router.py installé, puis template mis à jour : la
+        ré-application livre la nouvelle version (ancienne en .bak) ; le
+        contenu du projet (manifeste, corps d'agents, mémoire, registres,
+        évals) reste intact ; une seconde ré-application ne change rien."""
+        ws = make_workspace("w1")
+        vars = {"name": "w1", "label": "W"}
+        self.assertEqual(ov.apply_overlay("w1", "claude-self-improving", vars)[0], 200)
+        self.assertEqual(ov.apply_overlay("w1", "claude-team", vars)[0], 200)
+        router = ws / ".claude" / "hooks" / "team-router.py"
+        router.write_text("# ancienne version du routeur\n", encoding="utf-8")
+        tpl_router = TEMPLATES_DIR / "claude-team" / ".claude" / "hooks" / "team-router.py"
+        tpl_router.write_text(tpl_router.read_text(encoding="utf-8") + "# correctif v2\n",
+                              encoding="utf-8")
+        frag = TEMPLATES_DIR / "claude-team" / "CLAUDE.claude-team.md"
+        frag.write_text(frag.read_text(encoding="utf-8").replace(
+            "## Équipe d'agents et amélioration mesurée (always-on)",
+            "## Équipe d'agents et amélioration mesurée (always-on)\n\nRègle v2."), encoding="utf-8")
+        user_files = {
+            ws / ".claude" / "team.json": None,
+            ws / ".claude" / "team" / "agents" / "executor.md": "corps édité par /improve\n",
+            ws / ".claude" / "memory" / "pitfalls.md": "mes pièges\n",
+            ws / ".claude" / "improvements.md": "mes items\n",
+            ws / ".claude" / "evals" / "eval-set.jsonl": None,
+            ws / ".claude" / "commands" / "check-all.md": "check-all du projet\n",
+        }
+        for path, content in user_files.items():
+            if content is not None:
+                path.write_text(content, encoding="utf-8")
+        snapshot = {p: p.read_bytes() for p in user_files}
+        md = ws / "CLAUDE.md"
+        md.write_text(md.read_text(encoding="utf-8") + "\nNote perso hors bloc.\n", encoding="utf-8")
+        status, p = ov.apply_overlay("w1", "claude-team", vars)
+        self.assertEqual(status, 200, p.get("error"))
+        self.assertEqual(sorted(p["updated"]),
+                         sorted([".claude/hooks/team-router.py", "CLAUDE.md (bloc claude-team)"]))
+        self.assertEqual(len(p["backups"]), 2)
+        self.assertEqual(router.read_text(encoding="utf-8"),
+                         tpl_router.read_text(encoding="utf-8"))
+        bak = next(ws / b for b in p["backups"] if "team-router" in b)
+        self.assertEqual(bak.read_text(encoding="utf-8"), "# ancienne version du routeur\n")
+        text = md.read_text(encoding="utf-8")
+        self.assertIn("Règle v2.", text)
+        self.assertIn("Note perso hors bloc.", text)
+        self.assertEqual(text.count("<!-- BEGIN claude-team -->"), 1)
+        self.assertEqual(text.count("<!-- BEGIN claude-self-improving -->"), 1)
+        for path, before in snapshot.items():
+            self.assertEqual(path.read_bytes(), before, path)
+        self.assertEqual(ov._missing_hook_refs(ws), [])
+        # Seconde ré-application (les deux modules) : rien ne change.
+        for ov_id in ("claude-team", "claude-self-improving"):
+            status, p = ov.apply_overlay("w1", ov_id, vars)
+            self.assertEqual(status, 200, p.get("error"))
+            self.assertEqual((p["updated"], p["backups"]), ([], []), ov_id)
+
     def test_team_seul_refuse_409(self):
         make_workspace("w1")
         status, p = ov.apply_overlay("w1", "claude-team", {"name": "w1", "label": "W"})
@@ -1060,9 +1115,51 @@ class TeamRouterHookTests(unittest.TestCase):
             self.assertIn("demande non classée", self._ctx(p), p)
         ctx = self._ctx("bonjour")
         self.assertIn("relecture dash-reviewer obligatoire", ctx)
-        self.assertNotIn("dash-researcher", ctx)
+        # En auto, déléguer est le défaut : une demande non classée n'autorise
+        # le travail en solo que sans travail (salutation, validation).
+        self.assertIn("déléguer par défaut", ctx)
+        self.assertIn("/team ou dash-executor", ctx)
+        self.assertNotIn("répondre seul si une lecture suffit", ctx)
+        self.manifest["routing"]["mode"] = "assiste"
+        write_json_file(self.ws / ".claude" / "team.json", self.manifest)
+        self.assertIn("répondre seul si une lecture suffit", self._ctx("bonjour"))
+        self.manifest["routing"]["mode"] = "auto"
+        write_json_file(self.ws / ".claude" / "team.json", self.manifest)
         # Relecture : pas de rappel de gate (c'est déjà le reviewer).
         self.assertNotIn("obligatoire", self._ctx("relis ce diff"))
+
+    def test_chantier_et_verbes_de_remaniement(self):
+        # Retour terrain : « retravaille ce projet » tombait en « inconnu » (aucune
+        # délégation) et « peux-tu ... l'améliorer ? » partait au researcher.
+        chantier = ["Retravaille ce projet avec l'auto-amélioration et les agents",
+                    "retravaille le projet", "Nettoie et réorganise le projet",
+                    "Peux-tu reprendre ce projet et l'améliorer ?", "modernise l'application",
+                    "Utilise les agents pour ajouter l'export CSV",
+                    "propose un plan pour refondre toute l'application", "rework the whole codebase"]
+        for p in chantier:
+            ctx = self._ctx(p)
+            self.assertTrue(ctx.startswith("[équipe claude-team] routage auto : chantier"), (p, ctx))
+            self.assertIn("/team", ctx, p)
+            self.assertIn("dash-architect", ctx, p)
+            self.assertIn("relecture dash-reviewer obligatoire", ctx, p)
+        # Remaniement ciblé (pas le projet entier) ou infinitif : implémentation.
+        for p in ("Améliore le code du module de paiement", "Optimise les performances",
+                  "Refais l'interface", "Peux-tu corriger le bug ?", "simplifie cette fonction",
+                  "ajoute un test au projet",
+                  # Faux chantiers relevés en revue : portée hors du complément du
+                  # verbe, quantificateur vague, équipe objet de la tâche.
+                  "nettoie tous les imports inutiles de foo.py", "optimise la requête SQL de l'app",
+                  "simplifie la fonction parse du projet", "corrige le hook claude-team",
+                  "ajoute un bouton sur la page de l'équipe"):
+            ctx = self._ctx(p)
+            self.assertTrue(ctx.startswith("[équipe claude-team] routage auto : implémentation"), (p, ctx))
+            self.assertIn("dash-executor", ctx, p)
+        # Sans architecte dans le manifeste : le plan reste demandé, sans agent fantôme.
+        self.manifest["agents"] = [a for a in self.manifest["agents"] if a["id"] != "architect"]
+        write_json_file(self.ws / ".claude" / "team.json", self.manifest)
+        ctx = self._ctx("retravaille le projet")
+        self.assertIn("plan en étapes vérifiables", ctx)
+        self.assertNotIn("dash-architect", ctx)
 
     def test_modes_et_silences(self):
         self.assertTrue(self._ctx("où est X ?").startswith("[équipe claude-team] routage auto"))

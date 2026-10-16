@@ -42,10 +42,12 @@ Durée : quelques secondes (serveurs HTTP et dépôts git temporaires inclus).
 | `test_data_migration.py` | Migration vers `NEBULA_DATA_DIR` : copie sans écrasement, source intacte, marqueur, `--migrate-data` ; démarrage serveur réel |
 | `test_active_sessions.py` | Purge des PID morts / recyclés, états `running` / `idle` |
 | `test_system_update.py` | Stash nommé et vérifié, jamais de pop du stash utilisateur ; bascule auto de `origin` GitLab -> Forgejo (variantes d'URL, fork intouché, idempotence) (dépôts git temporaires ; ignoré sans git) |
-| `test_server_http.py` | Serveur réel : Host étranger 403, Origin étrangère 403, corps non-objet 400, liste blanche statique, export refusé en GET, hôte configuré, `/api/overlays` avec `usage`, routes `team` / `improvement`, `POST .../team/routing` (XHR requis, 404 sans manifeste, section par défaut puis mode, 400 invalide), `team_routing` de `/api/overview` |
+| `test_server_http.py` | Serveur réel : Host étranger 403, Origin étrangère 403, corps non-objet 400, liste blanche statique, export refusé en GET, hôte configuré, `/api/overlays` avec `usage`, routes `team` / `improvement`, `POST .../team/routing` (XHR requis, 404 sans manifeste, section par défaut puis mode, 400 invalide), `team_routing` de `/api/overview`, routes d'adoption groupée et `pick-folder` (403 sans X-Nebula-XHR, `inspect-parent` / `adopt-bulk` / capacité du sélecteur) |
+| `test_adopt_bulk.py` | Retrouver ses projets : scan des projets aux transcripts purgés (gardé si le dossier existe, chemin via `~/.claude.json` ou décodage, exclu sinon, racine Nebula et `~/.claude/` exclues) ; `inspect_parent_folder` (signaux, ids dédoublonnés registre + candidats, déjà adoptés, profondeur 2, dossiers ignorés, plafond `truncated`, lecture seule) ; `adopt_workspaces_bulk` (succès partiel, statut par item, tout en échec -> 400, registre corrompu jamais écrit) |
+| `test_folder_picker.py` | Sélecteur de dossier natif, subprocess mocké : commande PowerShell `-STA` sans shell (dossier de départ par l'env, chemin en base64 UTF-8), annulation, délai -> 504, échec -> 500, un seul dialogue (409), zenity / osascript, 501 sans sélecteur ou sans session graphique |
 | `test_config.py` | Variables `NEBULA_*`, hôtes autorisés, garde-fous des fonctions Windows-only |
 | `ui/cdp.py` | Client CDP minimal (WebSocket stdlib) |
-| `ui/test_ui_smoke.py` | Front headless (facultatif : `NEBULA_UI_TESTS=1` + navigateur trouvé, sinon ignoré) : accueil + requête agrégée, erreur réseau, rendu de chaque route sans erreur ni 5xx, aucune exception JS |
+| `ui/test_ui_smoke.py` | Front headless (facultatif : `NEBULA_UI_TESTS=1` + navigateur trouvé, sinon ignoré) : accueil + requête agrégée, erreur réseau, rendu de chaque route sans erreur ni 5xx, modale Adopter en mode dossier parent (liste, déjà adopté grisé, adoption de la sélection, registre mis à jour), aucune exception JS |
 
 ## Règle
 

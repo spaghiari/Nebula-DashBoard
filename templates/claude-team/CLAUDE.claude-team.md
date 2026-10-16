@@ -2,7 +2,8 @@
 <!--
   Bloc always-on injecté par le module « Équipe d'agents et amélioration
   mesurée » (Nebula). Ne pas éditer manuellement entre les marqueurs
-  BEGIN/END : le ré-apply du module détecte ce bloc pour rester idempotent.
+  BEGIN/END : le ré-apply du module remplace ce bloc par sa version
+  courante (ancien CLAUDE.md sauvegardé en .bak).
 -->
 
 ## Équipe d'agents et amélioration mesurée (always-on)
@@ -47,6 +48,16 @@ Nebula (onglet Configuration, ligne du module) ; aucune régénération.
 | Demande ambiguë ou multi-étapes | `/team` (orchestration par le fil principal) | selon le plan | selon le plan |
 | Jamais en routage automatique | réservés à `/eval` et `/improve` | `<p>-critic`, `<p>-evaluator` | - |
 
+- **Délégation par défaut (`auto`)** : dès qu'une demande produit ou
+  modifie du code, Claude principal ne l'écrit **pas** lui-même : il
+  délègue (`<p>-executor`, `*-expert` ou `/team` selon la taille), puis
+  applique la gate reviewer. Une demande large sur le projet entier
+  (« retravaille », « améliore », « réorganise le projet ») se traite
+  comme `/team` : plan par `<p>-architect`, exécution étape par étape,
+  relecture. Seules exceptions : un échange sans travail (salutation,
+  validation, question de suivi sur ce qui vient d'être livré). Dans le
+  doute, déléguer. Le hook `team-router.py` le rappelle à chaque
+  demande ; son absence de classe n'est jamais une raison de coder seul.
 - **Gate reviewer** (`routing.review_gate`, `always` par défaut) : tout
   fichier de code créé ou modifié passe par `<p>-reviewer` (objectif +
   critères + diff, jamais le raisonnement) avant d'être présenté.
@@ -60,9 +71,10 @@ Nebula (onglet Configuration, ligne du module) ; aucune régénération.
   narration « je délègue à... » en cours de route au-delà d'une phrase.
 - **Budget** (`routing.budget` = `sonnet-first`) : en `auto`, un
   sous-agent sonnet au plus par question simple ; opus seulement pour
-  reviewer et architect ; si la demande tient en une lecture d'un seul
-  fichier connu, Claude principal répond seul et le dit
-  (`équipe : aucun`).
+  reviewer et architect ; une **question** qui tient en une lecture d'un
+  seul fichier connu peut recevoir une réponse directe, signalée
+  (`équipe : aucun`). Le budget ne dispense jamais de la délégation ni
+  de la relecture pour du code livré.
 
 ### Commandes
 

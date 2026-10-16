@@ -57,7 +57,9 @@ from dashcore.api_workspaces import (
     get_global_hooks, set_global_hooks, register_existing_workspace,
     get_hooks_errors, get_hooks_backup, restore_hooks_backup,
     inspect_workspace_path, adopt_workspace,
+    inspect_parent_folder, adopt_workspaces_bulk,
 )
+from dashcore.folder_picker import picker_capability, pick_folder
 from dashcore.api_overlays import (
     list_overlays, apply_overlay, overlay_is_active, overlays_usage,
 )
@@ -153,6 +155,10 @@ def h_post_update_ws(q, b, ws):          return update_workspace(ws, b)
 def h_post_duplicate_ws(q, b):           return duplicate_workspace(b)
 def h_post_inspect_path(q, b):           return inspect_workspace_path(b or {})
 def h_post_adopt_ws(q, b):               return adopt_workspace(b or {})
+def h_post_inspect_parent(q, b):         return inspect_parent_folder(b or {})
+def h_post_adopt_bulk(q, b):             return adopt_workspaces_bulk(b or {})
+def h_get_pick_folder(q, b):             return picker_capability()
+def h_post_pick_folder(q, b):            return pick_folder(b or {})
 def h_post_sync_mcps(q, b, ws):          return sync_workspace_mcps(ws)
 def h_post_save_settings(q, b, ws):      return save_workspace_settings(ws, b.get("content", "{}"))
 def h_post_patch_settings(q, b, ws, sec): return patch_workspace_settings(ws, sec, b.get("value"))
@@ -704,6 +710,7 @@ ROUTES_GET = [
     (re.compile(r"^/api/setup/scan$"),                                                     h_get_setup_scan),
     (re.compile(r"^/api/ui-state$"),                                                       h_get_ui_state),
     (re.compile(r"^/api/system/version$"),                                                 h_get_system_version),
+    (re.compile(r"^/api/system/pick-folder$"),                                             h_get_pick_folder),
     (re.compile(r"^/api/system/stashes$"),                                                 h_get_system_stashes),
 ]
 
@@ -712,6 +719,10 @@ ROUTES_POST = [
     (re.compile(r"^/api/workspaces$"),                                                     h_post_create_ws),
     (re.compile(r"^/api/workspaces/inspect-path$"),                                        h_post_inspect_path),
     (re.compile(r"^/api/workspaces/adopt$"),                                               h_post_adopt_ws),
+    (re.compile(r"^/api/workspaces/inspect-parent$"),                                      h_post_inspect_parent),
+    (re.compile(r"^/api/workspaces/adopt-bulk$"),                                          h_post_adopt_bulk),
+    # Sélecteur de dossier natif (ouvre une fenêtre sur le poste du serveur)
+    (re.compile(r"^/api/system/pick-folder$"),                                             h_post_pick_folder),
     (re.compile(r"^/api/workspaces/duplicate$"),                                           h_post_duplicate_ws),
     (re.compile(rf"^/api/workspaces/({_ID})/update$"),                                      h_post_update_ws),
     (re.compile(rf"^/api/workspaces/({_ID})/sync-mcps$"),                                   h_post_sync_mcps),
