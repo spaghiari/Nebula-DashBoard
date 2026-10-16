@@ -323,6 +323,40 @@ function _helpSections() {
       </div>
 
 `,
+'modules': `
+      <h2>${I.zap}<span>Modules (overlays)</span></h2>
+      <p>Un module se pose <strong>par-dessus</strong> un workspace existant, sans jamais écraser un fichier déjà présent (le <code class="mono">CLAUDE.md</code> reçoit juste un bloc délimité). On l'active depuis l'onglet <strong>Configuration</strong> du workspace, ou depuis la section <strong>Modules</strong> de la page Templates (« Activer sur un workspace… »). Ré-activer un module ne complète que les fichiers manquants.</p>
+
+      <div class="help-grid help-grid-3">
+        <div class="help-tile">
+          <div class="help-tile-icon">${I.sparkle}</div>
+          <h4>Auto-amélioration de Claude</h4>
+          <p>Mémoire structurée dans <code class="mono">.claude/memory/</code>, registres d'idées et d'améliorations, agents, slash commands et hooks pré-commit. Tu choisis le mode (solo, équipe…) et la profondeur (minimale ou complète).</p>
+        </div>
+        <div class="help-tile">
+          <div class="help-tile-icon">${I.activity}</div>
+          <h4>Équipe d'agents et amélioration mesurée</h4>
+          <p>Requiert le module précédent. Génère 7 agents (orchestrateur, chercheur, architecte, exécutant, relecteur, évaluateur, critique) avec un modèle par rôle, et une boucle qui ne garde un changement que s'il améliore le score des évals sans régression.</p>
+        </div>
+      </div>
+
+      <h3>L'équipe au quotidien</h3>
+      <ul class="help-list">
+        <li><code class="mono">/team &lt;objectif&gt;</code> : Claude joue l'orchestrateur, découpe le travail et le délègue aux agents.</li>
+        <li><code class="mono">/eval</code> : mesure l'équipe contre le jeu d'évals figé de <code class="mono">.claude/evals/</code>.</li>
+        <li><code class="mono">/improve</code> : une itération d'amélioration en deux phases ; la seconde se lance dans une <strong>nouvelle session</strong> Claude Code.</li>
+        <li><code class="mono">/eval-add</code> : transforme un échec observé en nouveau cas d'éval.</li>
+        <li>L'onglet <strong>Amélioration</strong> du workspace affiche scores, journal et registres.</li>
+      </ul>
+
+      <h3>Routage et coût</h3>
+      <p>Le routage est livré en mode <strong>auto</strong> : chaque demande est orientée vers le bon agent, et tout code livré est relu par le relecteur (modèle opus). C'est le plus complet, mais aussi le plus gourmand en tokens. Sur la ligne du module (onglet Configuration), passe le routage en <strong>assisté</strong> ou <strong>manuel</strong>, et la relecture en <strong>dès 3 fichiers</strong> ou <strong>jamais</strong>.</p>
+
+      <div class="callout callout-warn">
+        <strong>Évals verrouillées :</strong> un hook refuse toute écriture sous <code class="mono">.claude/evals/</code>, pour que la boucle ne puisse pas tricher sur sa propre mesure. Pour les modifier toi-même, pose <code class="mono">"evals_unlocked": true</code> dans <code class="mono">.claude/settings.local.json</code>. Les corps des agents s'éditent dans <code class="mono">.claude/team/agents/</code>, jamais dans les agents générés.
+      </div>
+
+`,
 'env': `
       <h2>${I.key}<span>Variables d'environnement (.env.local)</span></h2>
       <p>Tes tokens, clés d'API et mots de passe ne doivent jamais se retrouver écrits en dur dans tes fichiers de config. Nebula te propose un emplacement unique pour les stocker : le fichier <code class="mono">.env.local</code>, qui reste local à ta machine et n'est jamais partagé.</p>
@@ -515,6 +549,7 @@ const HELP_TOPICS = [
   { id: 'mcps',           emoji: '🔌', title: 'MCPs',                  summary: 'Configurer les serveurs Model Context Protocol et leurs recettes.', sections: ['mcps', 'recipes'], keywords: 'model context protocol serveur transport stdio http sse diagnostiquer recette registry sync statut' },
   { id: 'skills-plugins', emoji: '✨', title: 'Skills & Plugins',      summary: 'Bibliothèque de compétences et extensions Claude Code.',          sections: ['skills', 'plugins'], keywords: 'skill plugin bibliothèque magasin distribuer marketplace installer github désync scope' },
   { id: 'templates',      emoji: '📋', title: 'Templates',             summary: 'Modèles réutilisables pour démarrer un workspace rapidement.',    sections: ['templates'], keywords: 'modèle starter placeholder qualité aperçu standard python node docker' },
+  { id: 'modules',        emoji: '🧠', title: 'Modules',               summary: 'Auto-amélioration de Claude et équipe de 7 agents.',             sections: ['modules'], keywords: 'module overlay équipe agents team eval improve amélioration mémoire routage orchestrateur reviewer self-improving' },
   { id: 'secrets',        emoji: '🔐', title: 'Secrets & sécurité',    summary: 'Stockage centralisé de tes tokens et clés d\'API, chiffrement.',  sections: ['env'], keywords: 'secret token clé api mot de passe env.local chiffrement chiffrer variable environnement dpapi' },
   { id: 'outils',         emoji: '🛠️', title: 'Outils & maintenance',  summary: 'Hooks, sauvegardes, mises à jour automatiques.',                  sections: ['tools', 'update'], keywords: 'hook sauvegarde backup mise à jour update git pull stash restore apparence thème conflits orphelins' },
   { id: 'reference',      emoji: '⌨️', title: 'Référence & dépannage', summary: 'Raccourcis clavier et solutions aux problèmes courants.',         sections: ['shortcuts', 'troubleshoot'], keywords: 'raccourci clavier shortcut dépannage troubleshoot sanity check serveur hors ligne erreur problème' },
@@ -550,6 +585,7 @@ const HELP_TOPIC_CTAS = {
   'mcps':           [{ label: 'Ouvrir les MCPs', route: '#/mcps' }],
   'skills-plugins': [{ label: 'Ouvrir les Skills', route: '#/skills' }, { label: 'Ouvrir les Plugins', route: '#/plugins' }],
   'templates':      [{ label: 'Ouvrir les Templates', route: '#/templates' }],
+  'modules':        [{ label: 'Ouvrir les Modules (Templates)', route: '#/templates' }],
   'secrets':        [{ label: 'Ouvrir les Outils', route: '#/tools' }],
   'outils':         [{ label: 'Ouvrir les Outils', route: '#/tools' }],
 };

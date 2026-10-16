@@ -629,6 +629,36 @@ class RealTeamOverlayTests(unittest.TestCase):
         self.assertEqual(p["missing_requires"][0]["id"], "claude-self-improving")
         self.assertFalse((TEMPLATES_DIR.parent / "workspaces" / "w1" / ".claude" / "team.json").exists())
 
+    def test_hooks_en_python3_si_python_absent(self):
+        # macOS / Linux sans alias `python` : tous les hooks des deux modules
+        # passent en python3, et une ré-application ne les double pas.
+        from unittest import mock
+        ws = make_workspace("w1")
+        vars = {"name": "w1", "label": "W"}
+        with mock.patch.object(ov, "_hook_interpreter", return_value="python3"):
+            self.assertEqual(ov.apply_overlay("w1", "claude-self-improving", vars)[0], 200)
+            self.assertEqual(ov.apply_overlay("w1", "claude-team", vars)[0], 200)
+            path = ws / ".claude" / "settings.json"
+            first = path.read_text(encoding="utf-8")
+            self.assertEqual(ov.apply_overlay("w1", "claude-team", vars, {"regenerate": True})[0], 200)
+            again = path.read_text(encoding="utf-8")
+        self.assertNotIn('"python \\"', first)
+        for hook in ("evals-lock.py", "team-router.py", "protect-local-files.py"):
+            self.assertIn(f'python3 \\"${{CLAUDE_PROJECT_DIR}}/.claude/hooks/{hook}', first)
+        self.assertEqual(json.loads(again), json.loads(first))
+
+    def test_interpreteur_des_hooks(self):
+        from unittest import mock
+        found = {"python": None, "python3": "/usr/bin/python3"}
+        with mock.patch("os.name", "posix"), \
+                mock.patch("shutil.which", side_effect=found.get):
+            self.assertEqual(ov._hook_interpreter(), "python3")
+        with mock.patch("os.name", "posix"), \
+                mock.patch("shutil.which", side_effect={"python": "/usr/bin/python"}.get):
+            self.assertEqual(ov._hook_interpreter(), "python")
+        with mock.patch("os.name", "nt"), mock.patch("shutil.which", return_value=None):
+            self.assertEqual(ov._hook_interpreter(), "python")
+
     def test_scenario_complet(self):
         ws = make_workspace("w1")
         (ws / "CLAUDE.md").unlink()

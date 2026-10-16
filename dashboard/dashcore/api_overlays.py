@@ -510,6 +510,44 @@ def _deep_merge(dst: dict, patch: dict, path: str = "") -> bool:
     return changed
 
 
+# Les templates lancent leurs hooks par le littéral `python`. Sous macOS /
+# Linux ce nom manque souvent (seul `python3` existe) : le hook sort en 127,
+# donc inerte en silence (verrou des évals non appliqué, statusline vide).
+# L'interpréteur est adapté dans le settings.json du WORKSPACE, jamais dans
+# les templates ; Windows et les postes où `python` existe sont inchangés.
+# Motif appliqué au texte JSON (guillemets échappés `\"`).
+_PY_HOOK_RE = re.compile(r'(?<![\w./\\-])python(?= \\"\$\{CLAUDE_PROJECT_DIR\})')
+
+
+def _hook_interpreter() -> str:
+    """`python`, ou `python3` si seul celui-ci est dans le PATH (hors Windows)."""
+    import os
+    import shutil
+    if os.name == "nt" or shutil.which("python") or not shutil.which("python3"):
+        return "python"
+    return "python3"
+
+
+def _adapt_hook_text(text: str) -> str:
+    interp = _hook_interpreter()
+    return text if interp == "python" else _PY_HOOK_RE.sub(interp, text)
+
+
+def _adapt_settings_interpreter(ws_dir: Path, patched: list) -> None:
+    """Réécrit l'interpréteur des hooks de `.claude/settings.json` (cf.
+    _PY_HOOK_RE). Texte brut : la mise en forme du fichier est conservée."""
+    path = ws_dir / ".claude" / "settings.json"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return
+    new = _adapt_hook_text(text)
+    if new != text:
+        path.write_text(new, encoding="utf-8")
+        if ".claude/settings.json" not in patched:
+            patched.append(".claude/settings.json")
+
+
 def _merge_settings_patch(ws_dir: Path, marker: dict, patched: list) -> None:
     """Fusionne `settings_patch` du marker dans `.claude/settings.json` du
     workspace (créé avec le patch seul s'il est absent). Lecture stricte :
@@ -518,6 +556,9 @@ def _merge_settings_patch(ws_dir: Path, marker: dict, patched: list) -> None:
     patch = marker.get("settings_patch")
     if not isinstance(patch, dict):
         return
+    # Interpréteur adapté AVANT la fusion : la dédup des hooks compare les
+    # commandes à l'identique, une ré-application ne doit pas les doubler.
+    patch = json.loads(_adapt_hook_text(json.dumps(patch, ensure_ascii=False)))
     path = ws_dir / ".claude" / "settings.json"
     data = read_json_strict(path, {})
     if not isinstance(data, dict):
@@ -743,6 +784,10 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
             "copied": copied, "appended": appended, "seeded": seeded,
             "skipped": skipped, "options": opts,
         }
+
+    # 5b-bis. Hooks copiés depuis le template (settings.json complet) :
+    #     même adaptation de l'interpréteur que pour le patch.
+    _adapt_settings_interpreter(ws_dir, patched)
 
     # 5c. Générateurs déclaratifs (ex. team_agents) : après la copie, donc
     #     les sources (manifeste, corps) sont en place.

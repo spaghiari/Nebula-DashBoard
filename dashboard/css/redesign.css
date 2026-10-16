@@ -878,6 +878,8 @@ a.hc-row:hover { background: var(--hover); }
 .xdesc { margin: 0; font-size: 13px; color: var(--text-muted); min-height: 2.9em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .xdesc.none { color: var(--text-dim); }
 .xmeta { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text-dim); }
+/* Icônes inline (SVG sans dimensions propres, ex. « Requiert » d'un module). */
+.xmeta svg { display: inline-block; width: 13px; height: 13px; flex: none; vertical-align: -2px; margin-right: 2px; }
 .xcard .used { min-width: 0; flex-wrap: nowrap; }
 .used-names { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msub .chip-origin { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

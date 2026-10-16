@@ -37,9 +37,8 @@ serveur Python sur `127.0.0.1`, sans aucune dépendance à installer.
 Il te faut :
 
 - **Windows 10/11** (Linux et macOS marchent aussi, cf. plus bas) ;
-- **Python 3.10+**, rien d'autre côté Python. Il doit répondre au nom
-  `python` : les hooks des modules l'appellent ainsi (sous macOS/Linux, si
-  seul `python3` existe, installe `python-is-python3` ou crée un alias) ;
+- **Python 3.10+**, rien d'autre côté Python (sous macOS/Linux, si seul
+  `python3` existe, Nebula configure les hooks des modules avec lui) ;
 - **Node.js** avec `npx`, pour les MCPs qui s'installent via `npx -y …` ;
 - **git**, pour les mises à jour ;
 - **Claude Code** : `npm install -g @anthropic-ai/claude-code`.
@@ -267,7 +266,7 @@ tu peux passer le routage en « assisté » (suggestions seulement) ou
 | `Ctrl+S` | Sauvegarder (éditeurs) |
 | `Esc` | Fermer une fenêtre ou la recherche |
 
-**Pour t'aider** : une page Aide en 8 thèmes, la visite guidée, et une
+**Pour t'aider** : une page Aide en 9 thèmes, la visite guidée, et une
 checklist de mise en route (Outils → Démarrage) affichée sur l'Accueil tant
 qu'elle n'est pas terminée.
 
