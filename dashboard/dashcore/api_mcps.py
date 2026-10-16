@@ -365,10 +365,20 @@ def _probe_http(url: str, headers: dict) -> dict:
     des headers (qui contiennent les secrets résolus). Timeout court (5s).
     HEAD d'abord (moins coûteux), fallback GET si la méthode est refusée (405).
     """
+    import ssl
     import urllib.error
     import urllib.request
 
     label = "Sonde HTTP"
+
+    # Contexte TLS aligné sur le client réel (Node / Claude Code) : magasin
+    # Windows chargé, certificat et nom d'hôte vérifiés, mais SANS le mode
+    # VERIFY_X509_STRICT activé par défaut depuis Python 3.13. Ce mode rejette
+    # des certificats de PKI interne que Node accepte (ex. keyUsage
+    # keyCertSign sur un certificat feuille) : la sonde concluait à tort à
+    # un certificat invalide alors que le MCP fonctionne.
+    tls_ctx = ssl.create_default_context()
+    tls_ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
 
     def _request(method: str):
         req = urllib.request.Request(url, method=method)
@@ -376,7 +386,7 @@ def _probe_http(url: str, headers: dict) -> dict:
             # On envoie les headers résolus (auth comprise) mais on ne les
             # renvoie jamais dans la réponse : pas de fuite de secret.
             req.add_header(k, v)
-        return urllib.request.urlopen(req, timeout=5)
+        return urllib.request.urlopen(req, timeout=5, context=tls_ctx)
 
     try:
         try:
@@ -437,6 +447,15 @@ def _probe_http(url: str, headers: dict) -> dict:
         # socket.timeout ou une OSError. L'URL n'est pas un secret ; on ne
         # logue/renvoie jamais les headers.
         reason = getattr(e, "reason", e)
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            return {
+                "label": label,
+                "status": "err",
+                "detail": f"Certificat TLS refusé pour {url} ({reason.verify_message}).",
+                "fix": "Vérifie que la CA qui a émis le certificat est dans le magasin "
+                       "Windows (Racines de confiance) et que nginx sert la chaîne "
+                       "complète (intermédiaires compris).",
+            }
         return {
             "label": label,
             "status": "err",

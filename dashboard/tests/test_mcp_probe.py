@@ -140,5 +140,37 @@ class ApiIntegrationTests(unittest.TestCase):
         self.assertNotIn("last_probe", clean)
 
 
+class ProbeHttpTlsTests(unittest.TestCase):
+    """Sonde HTTP : contexte TLS sans VERIFY_X509_STRICT (Python >= 3.13 rejette
+    des certificats de PKI interne que Node accepte) et message dédié aux
+    erreurs de certificat. urlopen est simulé : aucun réseau (proxy système)."""
+
+    def test_contexte_sans_mode_strict_mais_verifie(self):
+        import ssl
+        from unittest import mock
+
+        with mock.patch("urllib.request.urlopen") as urlopen:
+            urlopen.return_value.status = 200
+            res = api_mcps._probe_http("https://mcp.example.lan/mcp", {})
+        self.assertEqual(res["status"], "ok")
+        ctx = urlopen.call_args.kwargs["context"]
+        self.assertFalse(ctx.verify_flags & ssl.VERIFY_X509_STRICT)
+        self.assertTrue(ctx.check_hostname)
+        self.assertEqual(ctx.verify_mode, ssl.CERT_REQUIRED)
+
+    def test_erreur_de_certificat_message_dedie(self):
+        import ssl
+        import urllib.error
+        from unittest import mock
+
+        err = ssl.SSLCertVerificationError(1, "certificate verify failed")
+        err.verify_message = "certificate has expired"
+        with mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError(err)):
+            res = api_mcps._probe_http("https://mcp.example.lan/mcp", {})
+        self.assertEqual(res["status"], "err")
+        self.assertIn("Certificat TLS refusé", res["detail"])
+        self.assertIn("certificate has expired", res["detail"])
+
+
 if __name__ == "__main__":
     unittest.main()
