@@ -191,11 +191,6 @@ class ConsumptionWarningsTests(unittest.TestCase):
             self.assertEqual([x["code"] for x in w], ["pro_effort"])
             self.assertEqual(w[0]["level"], "alert")
 
-    def test_pro_auto(self):
-        w = ca.consumption_warnings("pro", [], auto=True)
-        self.assertEqual([x["code"] for x in w], ["pro_auto"])
-        self.assertEqual(w[0]["level"], "alert")
-
     def test_pro_sonnet_medium_rien(self):
         self.assertEqual(self._codes("pro", [{"id": "a", "model": "sonnet", "effort": None}]), [])
         self.assertEqual(self._codes("pro", [{"id": "a", "model": "sonnet", "effort": "medium"}]), [])
@@ -208,11 +203,6 @@ class ConsumptionWarningsTests(unittest.TestCase):
 
     def test_max_opus_medium_rien(self):
         self.assertEqual(self._codes("max", [{"id": "a", "model": "opus", "effort": None}]), [])
-
-    def test_max_auto_info(self):
-        w = ca.consumption_warnings("max", [], auto=True)
-        self.assertEqual([x["code"] for x in w], ["max_auto"])
-        self.assertEqual(w[0]["level"], "info")
 
     def test_api_unknown_conflict(self):
         self.assertEqual(self._codes("api"), ["api"])

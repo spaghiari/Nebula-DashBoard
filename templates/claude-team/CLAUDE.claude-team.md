@@ -1,12 +1,11 @@
 <!-- BEGIN claude-team -->
 <!--
-  Bloc always-on injecté par le module « Équipe d'agents et amélioration
-  mesurée » (Nebula). Ne pas éditer manuellement entre les marqueurs
+  Bloc always-on injecté par le module « Équipe d'agents » (Nebula). Ne pas éditer manuellement entre les marqueurs
   BEGIN/END : le ré-apply du module remplace ce bloc par sa version
   courante (ancien CLAUDE.md sauvegardé en .bak).
 -->
 
-## Équipe d'agents et amélioration mesurée (always-on)
+## Équipe d'agents (always-on)
 
 `claude-self-improving` retient et trie (mémoire, registres,
 conventions) ; `claude-team` ajoute une **équipe d'agents** avec routage
@@ -131,6 +130,16 @@ Nebula (onglet Configuration, ligne du module) ; aucune régénération.
   bord) : il porte la mémoire projet ; `<préfixe>-executor` exécute les
   tâches S et les étapes atomiques d'un plan ; `*-impl-validator`
   complète `<préfixe>-reviewer` (après lui, jamais à sa place).
+- **Amélioration au fil des conversations** : quand un agent de l'équipe
+  bute (sortie hors format, relance nécessaire, mauvais routage, consigne
+  ignorée), le noter dans `.claude/improvements.md` (format existant du
+  registre, agent visé, symptôme) et proposer sur place le correctif
+  ciblé du corps `.claude/team/agents/<id>.md` (jamais de l'agent
+  généré). Après validation de l'utilisateur, appliquer le correctif puis
+  lui dire de cliquer « Régénérer » sur la ligne du module dans Nebula et
+  de relancer la session (un agent régénéré n'est relu qu'au démarrage
+  d'une session). Pas de boucle ni d'évals obligatoires ; `/eval` reste
+  possible pour vérifier.
 - **Commits de la boucle** : lancer `/improve` vaut demande explicite de
   commit pour ses itérations acceptées, sur la branche courante, au
   format `update(<préfixe>): improve/<n> - <hypothèse>` ; aucun autre

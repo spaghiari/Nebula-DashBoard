@@ -52,9 +52,6 @@ _gitcfg.write_text("[user]\n\tname = nebula-tests\n\temail = tests@nebula.invali
                    encoding="utf-8")
 os.environ["GIT_CONFIG_GLOBAL"] = str(_gitcfg)
 os.environ["GIT_CONFIG_NOSYSTEM"] = "1"
-# Aucun serveur de test ne démarre le planificateur de la boucle
-# d'amélioration (il pourrait lancer de vrais jobs en arrière-plan).
-os.environ["NEBULA_DISABLE_SCHEDULER"] = "1"
 os.environ.pop("GIT_DIR", None)
 os.environ.pop("GIT_WORK_TREE", None)
 

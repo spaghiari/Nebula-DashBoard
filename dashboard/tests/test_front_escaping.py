@@ -1,10 +1,9 @@
 """Échappement HTML de l'interface (analyse statique, sans navigateur).
 
-Pour les fonctions sensibles de `app.js` et `js/pages/improvement.js`
+Pour les fonctions sensibles de `app.js` et `js/pages/team-config.js`
 (modale de retrait d'un module et ses écrans, mise à jour après retrait,
-modale d'activation, carte « Équipe : modèle et effort », rendus de
-l'onglet Amélioration : bandeau, job, métriques, frise, mode auto, pistes,
-évals, avertissements), chaque
+modale d'activation, ligne « Modèle et effort » du module claude-team et
+sa table, avertissements), chaque
 interpolation `${...}` d'un template littéral injecté en HTML doit passer
 par `escapeHtml(...)` ou être une valeur sûre explicitement listée (icône
 `I.xxx`, nombre calculé, fragment HTML déjà construit dans la fonction,
@@ -19,7 +18,7 @@ import unittest
 from _support import DASHBOARD_DIR
 
 APP_JS = DASHBOARD_DIR / "app.js"
-IMPR_JS = DASHBOARD_DIR / "js" / "pages" / "improvement.js"
+IMPR_JS = DASHBOARD_DIR / "js" / "pages" / "team-config.js"
 TOOLS_JS = DASHBOARD_DIR / "js" / "pages" / "tools.js"
 
 # Fonctions contrôlées -> valeurs sûres propres à chacune : identifiants
@@ -47,30 +46,10 @@ FUNCTIONS = {
         "renderClaudePlanCard": {"vars": set(), "helpers": set()},
     },
     IMPR_JS: {
-        "teamConfigCard": {"vars": {"basisPill", "noteHtml", "rows", "prop", "warnHtml", "pendHtml",
-                                    "runHtml"},
-                           "helpers": {"opt", "imprBtnHtml"}},
-        "renderWsImprovement": {"vars": set(), "helpers": set()},
-        # `hcAttrs` échappe le JSON des groupes, le hovercard échappe chaque
-        # ligne : ses arguments sont du texte (text_calls).
-        "imprPaint": {"vars": set(), "helpers": set()},
-        "imprBtnHtml": {"vars": {"ic"}, "helpers": set()},
-        "imprNextStepHtml": {"vars": {"icon"}, "helpers": {"imprBtnHtml"}},
-        "imprJobPanelHtml": {"vars": set(), "helpers": {"imprBtnHtml"}},
-        # `kpi(icon, valeur, ...)` échappe tout sauf l'icône `I.xxx`.
-        "imprMetricsHtml": {"vars": {"icon"}, "helpers": {"kpi", "imprFmtUsd"}, "text_calls": {"kpi"}},
-        "imprTimelineHtml": {"vars": {"hc", "dots"}, "helpers": {"hcAttrs", "scoreCurveSvg"},
-                             "text_calls": {"hcAttrs"}},
-        # `row(libellé, html)` : la valeur est un fragment construit ici.
-        "imprIterDetailHtml": {"vars": {"v"}, "helpers": {"row"}},
-        "imprAutoHtml": {"vars": {"state", "opts"}, "helpers": set()},
-        "imprTodoHtml": {"vars": {"list"}, "helpers": set()},
-        "imprCasesHtml": {"vars": {"rows", "lock"}, "helpers": set()},
+        "teamConfigCard": {"vars": {"basisPill", "rows", "prop", "warnHtml", "pendHtml"},
+                           "helpers": {"opt"}},
+        "mountTeamConfigRow": {"vars": set(), "helpers": set()},
         "imprWarningsHtml": {"vars": set(), "helpers": set()},
-        # `what` / `avg` : texte échappé à l'injection ; compteurs numériques.
-        "imprCostNoteHtml": {"vars": {"n", "runs"}, "helpers": {"imprFmtTok", "imprFmtUsd"}},
-        "imprLaunch": {"vars": set(), "helpers": set()},
-        "imprToggleAuto": {"vars": set(), "helpers": {"imprWarningsHtml"}},
     },
 }
 

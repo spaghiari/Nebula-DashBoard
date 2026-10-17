@@ -1095,11 +1095,11 @@ a.hc-row:hover { background: var(--hover); }
   .page-header > .page-actions { margin-left: 0; }
 }
 
-/* === 11b. MODULES (overlays declaratifs) + ONGLET AMELIORATION ========
+/* === 11b. MODULES (overlays declaratifs) + MODELE ET EFFORT ========
    Modules : prerequis (`requires`), lien « activer d'abord », modeles par
    role (modale), section Modules de la page Templates, indicateur equipe.
-   Onglet Amelioration (claude-team, js/pages/improvement.js) : KPI, courbe
-   SVG, journal, evals, registres. Couleurs = tokens uniquement. */
+   Ligne « Modele et effort » (claude-team, js/pages/team-config.js).
+   Couleurs = tokens uniquement. */
 .mod-req { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; font-size: 12.5px; color: var(--text-muted); }
 .mod-req svg { width: 14px; height: 14px; flex: none; margin-top: 2px; color: var(--warn); }
 .mod-req b { color: var(--text); font-weight: 600; }
@@ -1136,128 +1136,14 @@ a.hc-row:hover { background: var(--hover); }
 .si.team { background: var(--info-soft); color: var(--info); }
 .si.team svg { width: 11px; height: 11px; }
 
-/* Onglet Amelioration (js/pages/improvement.js) : bandeau « Prochaine
-   etape », job en cours, metriques, frise, mode automatique, pistes, evals,
-   carte Equipe. Uniquement des tokens du design system. */
-.impr { display: flex; flex-direction: column; gap: var(--gap); min-width: 0; }
-.impr-head { display: flex; align-items: flex-start; gap: 12px; }
-.impr-head > div { flex: 1; min-width: 0; }
-.impr-head h2 { margin: 0; font-size: var(--fs-h2); font-weight: 650; letter-spacing: -0.01em; }
-.impr-head p { margin: 4px 0 0; font-size: 13px; max-width: 82ch; line-height: 1.5; }
-.impr-head .pill { vertical-align: 1px; }
-.impr .card-h h3 { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.impr .card-h h3 svg { width: 16px; height: 16px; flex: none; color: var(--text-dim); }
-.impr .card-h .r { flex-wrap: wrap; justify-content: flex-end; }
+/* Ligne « Modele et effort » du module claude-team (js/pages/team-config.js). */
 .impr-note { margin: 10px var(--card-pad) 0; font-size: 12px; line-height: 1.5; }
-.impr-note code, .impr-confirm code { overflow-wrap: anywhere; }
-
-/* Bandeau « Prochaine etape » */
-.impr-next {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center;
-  padding: var(--card-pad); border-left: 3px solid var(--accent);
-}
-.impr-next-ic { width: 40px; height: 40px; border-radius: var(--r-md); display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
-.impr-next-ic svg { width: 20px; height: 20px; }
-.impr-next.tone-info { border-left-color: var(--info); }
-.impr-next.tone-info .impr-next-ic { background: var(--info-soft); color: var(--info); }
-.impr-next.tone-warn { border-left-color: var(--warn); }
-.impr-next.tone-warn .impr-next-ic { background: var(--warn-soft); color: var(--warn); }
-.impr-next.tone-err { border-left-color: var(--err); }
-.impr-next.tone-err .impr-next-ic { background: var(--err-soft); color: var(--err); }
-.impr-next.tone-mute { border-left-color: var(--border-strong); }
-.impr-next.tone-mute .impr-next-ic { background: var(--chip-bg); color: var(--text-muted); }
-.impr-next-main { min-width: 0; }
-.impr-next-k { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
-.impr-next-t { margin-top: 2px; font-size: var(--fs-h3); font-weight: 650; color: var(--text); line-height: 1.3; }
-.impr-next-d { margin: 4px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text-muted); max-width: 90ch; }
-.impr-next-hyp { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--text); overflow-wrap: anywhere; }
-.impr-next-hyp b { font-weight: 600; }
-.impr-next-acts { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-
-/* Job en cours */
-.impr-job { padding-bottom: var(--card-pad); }
-.impr-job-since { font-size: 12px; }
-.impr-job-body { display: flex; flex-direction: column; gap: 10px; padding: 12px var(--card-pad) 0; }
-.impr-job-step { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--text); }
-.impr-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--info); flex: none; animation: impr-pulse 1.4s ease-in-out infinite; }
-@keyframes impr-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-.impr-job-bar { position: relative; height: 8px; border-radius: 99px; background: var(--chip-bg); overflow: hidden; }
-.impr-job-bar > i { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--accent-strong); transition: width var(--d-slow) var(--ease-out); }
-.impr-job-bar.indet > i { width: 30% !important; animation: impr-indet 1.6s ease-in-out infinite; }
-@keyframes impr-indet { 0% { left: -30%; } 100% { left: 100%; } }
-.impr-job-facts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12.5px; color: var(--text-muted); }
-.impr-job-facts b { color: var(--text); font-weight: 650; }
-.impr-job-acts { display: flex; justify-content: flex-end; }
-
-/* Metriques */
-.impr-kpis { grid-template-columns: repeat(5, minmax(0, 1fr)); }
-.impr-kpis .kpi { min-height: 84px; padding: 14px; gap: 12px; }
-.impr-kpis .kpi b { font-size: calc(var(--fs-kpi) * 0.85); }
-.impr-kpis .kpi .k-t { font-weight: 500; line-height: 1.35; }
-
-/* Frise des iterations */
-.impr-timeline { padding-bottom: var(--card-pad); }
-.impr-legend { font-size: 11.5px; color: var(--text-muted); gap: 4px 6px; }
-.impr-legend .impr-dot { margin-left: 6px; }
-.impr-dots { display: flex; flex-wrap: wrap; gap: 6px; padding: 14px var(--card-pad) 0; }
-.impr-dot {
-  min-width: 30px; height: 30px; padding: 0 6px; border-radius: 99px; border: 1px solid transparent;
-  font: 600 12px var(--font-mono); font-variant-numeric: tabular-nums; cursor: pointer;
-  background: var(--chip-bg); color: var(--text-muted); display: inline-grid; place-items: center;
-}
-.impr-dot.ok { background: var(--ok-soft); color: var(--ok); }
-.impr-dot.err { background: var(--err-soft); color: var(--err); }
-.impr-dot.accent { background: var(--accent-soft); color: var(--accent); border-style: dashed; border-color: var(--accent); }
-.impr-dot:hover, .impr-dot[aria-expanded="true"] { border-color: currentColor; }
-.impr-dot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.impr-dot.sm { min-width: 10px; width: 10px; height: 10px; padding: 0; cursor: default; display: inline-block; }
-.impr-iter-detail { margin: 12px var(--card-pad) 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
-.impr-iter-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; }
-.impr-iter-hyp { margin: 8px 0 0; font-size: 12.5px; line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
-.impr-iter-dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px 16px; margin: 10px 0 0; }
-.impr-iter-dl dt { font-size: 11px; color: var(--text-muted); }
-.impr-iter-dl dd { margin: 2px 0 0; font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; }
-.impr-curve-body { padding: 14px var(--card-pad) 0; }
-.impr-curve-k { font-size: 11.5px; color: var(--text-muted); margin-bottom: 4px; }
-.impr-svg { display: block; width: 100%; height: auto; max-height: 190px; }
-.impr-svg .g { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 3 4; }
-.impr-svg .t { fill: var(--text-dim); font: 500 11px var(--font-mono); }
-.impr-svg .a { fill: var(--accent); opacity: 0.12; }
-.impr-svg .l { fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
-.impr-svg .d { fill: var(--surface-1); stroke: var(--accent); stroke-width: 2.2; }
-.impr-svg .d:hover { fill: var(--accent); }
-
-/* Mode automatique + pistes (2 colonnes) */
-.impr-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); align-items: start; }
-.impr-cols > .card { padding-bottom: var(--card-pad); min-width: 0; }
-.impr-auto-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 20px; padding: 14px var(--card-pad) 0; }
-.impr-auto-sw { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 600; color: var(--text); cursor: pointer; }
-.impr-auto-budget { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text-muted); }
-.impr-auto-budget .select { height: 30px; font-size: 12.5px; width: 72px; }
-.impr-todo { list-style: none; margin: 10px 0 0; padding: 0; max-height: 260px; overflow-y: auto; }
-.impr-todo li { display: flex; align-items: baseline; gap: 10px; padding: 8px var(--card-pad); border-top: 1px solid var(--border); font-size: 12.5px; }
-.impr-todo .pill { flex: none; }
-.impr-todo-t { flex: 1; min-width: 0; color: var(--text); overflow-wrap: anywhere; line-height: 1.4; }
-.impr-todo small { flex: none; font-size: 11px; }
-
-/* Jeu d'evals */
-.impr-cases { padding-bottom: var(--card-pad); }
-.impr-case-rows { display: flex; flex-direction: column; margin-top: 10px; }
-.impr-case { display: grid; grid-template-columns: minmax(120px, 1.4fr) minmax(90px, 1fr) minmax(110px, 1fr) 150px; gap: 10px; align-items: center; min-height: 36px; padding: 4px var(--card-pad); border-top: 1px solid var(--border); font-size: 12.5px; }
-.impr-case > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.impr-case > code { color: var(--text); font-size: 12px; }
-.impr-case.h { min-height: 30px; font-size: 11.5px; color: var(--text-dim); font-weight: 600; }
-.impr-tech { margin: 12px var(--card-pad) 0; border: 1px solid var(--border); border-radius: var(--r-md); padding: 0 0 12px; }
-.impr-tech > summary { cursor: pointer; padding: 10px 12px 0; font-size: 12.5px; font-weight: 600; color: var(--text-muted); }
-.impr-tech[open] > summary { color: var(--text); }
-.impr-tech:not([open]) { padding-bottom: 10px; }
-.impr-tech > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-.impr-tech .impr-note { margin-left: 12px; margin-right: 12px; }
-.impr-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding: 12px 12px 0; }
-.impr-facts > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.impr-facts b { font-size: 21px; font-weight: 650; letter-spacing: -0.02em; line-height: 1; }
-.impr-facts b.impr-hash { font-size: 13px; overflow-wrap: anywhere; }
-.impr-facts span { font-size: 11.5px; color: var(--text-dim); }
+.impr-note code { overflow-wrap: anywhere; }
+.mod-teamcfg .mono { font-size: 12.5px; }
+.mod-teamcfg-acts { display: inline-flex; gap: 6px; margin-left: auto; }
+.mod-teamcfg-body { margin-top: 4px; }
+.mod-teamcfg-body[hidden] { display: none; }
+.impr-team-top { display: flex; justify-content: flex-end; padding: 0 var(--card-pad); }
 
 /* Avertissements d'abonnement (carte Equipe + confirmations) */
 .impr-warns { list-style: none; margin: 10px var(--card-pad) 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -1271,7 +1157,7 @@ a.hc-row:hover { background: var(--hover); }
 .impr-confirm p { margin: 0; }
 .impr-confirm b { color: var(--text); }
 
-/* Carte « Equipe : modele et effort » (une ligne par agent). */
+/* Table « modele et effort » (une ligne par agent). */
 .impr-team { padding-bottom: var(--card-pad); }
 .impr-team-rows { display: flex; flex-direction: column; margin-top: 12px; }
 .impr-team-row {
@@ -1297,36 +1183,12 @@ a.hc-row:hover { background: var(--hover); }
 .impr-team-msg-acts { display: flex; flex-wrap: wrap; gap: 6px; }
 .impr-team-msg-acts .btn svg { margin-top: 0; }
 
-@media (max-width: 1200px) {
-  .impr-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
 @media (max-width: 900px) {
   .team-models { grid-template-columns: 1fr; }
-  .impr-next { grid-template-columns: auto minmax(0, 1fr); }
-  .impr-next-acts { grid-column: 1 / -1; justify-content: flex-start; }
-  .impr-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .impr-cols { grid-template-columns: 1fr; }
-  .impr-case { grid-template-columns: minmax(0, 1fr) auto; }
-  .impr-case.h { display: none; }
-  .impr-case > :nth-child(2), .impr-case > :nth-child(3) { display: none; }
-  .impr-facts { grid-template-columns: 1fr; }
   .impr-team-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .impr-team-row.h { display: none; }
   .impr-team-name, .impr-team-prop, .impr-team-act { grid-column: 1 / -1; }
   .impr-team-act { justify-content: flex-start; }
-}
-@media (max-width: 520px) {
-  .impr-head { flex-wrap: wrap; }
-  .impr-next { padding: 14px; gap: 12px; }
-  .impr-next-ic { width: 32px; height: 32px; }
-  .impr-next-acts .btn { flex: 1 1 auto; }
-  .impr-kpis .kpi { padding: 12px; gap: 10px; }
-  .impr-kpis .kpi .ic { display: none; }
-  .impr-auto-row { flex-direction: column; align-items: flex-start; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .impr-pulse, .impr-job-bar.indet > i { animation: none; }
-  .impr-job-bar > i { transition: none; }
 }
 
 /* === 11c. MISES A JOUR (section Outils + modale) =====================

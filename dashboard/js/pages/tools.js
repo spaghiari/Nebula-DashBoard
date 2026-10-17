@@ -55,7 +55,7 @@ async function renderClaudePlanCard(host) {
       <span class="pill">${escapeHtml(claudePlanLabel(sub))}</span>
       <span class="dim" style="font-size:11.5px">${escapeHtml(srcText)}</span>
     </div>
-    <p class="muted" style="margin:var(--sp-2) 0;font-size:12.5px">Nebula s'en sert seulement pour t'avertir quand un réglage (opus, effort élevé, mode automatique) consomme vite ton quota.</p>
+    <p class="muted" style="margin:var(--sp-2) 0;font-size:12.5px">Nebula s'en sert seulement pour t'avertir quand un réglage (opus, effort élevé) consomme vite ton quota.</p>
     ${sub.conflict ? `<div class="callout"><p style="margin:0;font-size:12.5px">Détection incertaine : tes fichiers Claude Code se contredisent (ex. Pro d'un côté, Max de l'autre). Choisis ton abonnement ici pour des conseils justes.</p></div>` : ''}
   `;
   const row = el('div');

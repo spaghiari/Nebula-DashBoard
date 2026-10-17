@@ -79,3 +79,8 @@ Thumbs.db
 
 # Configuration IDE de Claude Code (par projet)
 .claude/settings.local.json
+
+# Restes de la boucle pilotée par Nebula (2.6), données locales
+/dashboard/data/improve-jobs/
+/dashboard/data/improve_auto.json
+/logs/improve/

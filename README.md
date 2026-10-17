@@ -254,11 +254,10 @@ Code après le retrait.
 L'overlay **`claude-team`** (qui requiert le précédent) ajoute une **équipe
 de 7 agents** générés depuis `.claude/team.json` : orchestrateur,
 chercheur, architecte, exécutant, relecteur, évaluateur et critique, avec un
-modèle choisi par rôle. Il apporte aussi une **boucle d'amélioration
-mesurée** : un jeu d'évals verrouillé, `/eval`, `/improve` (un seul
-changement par itération, gardé seulement s'il gagne au moins 0,02 sans
-régression) et `/eval-add`. Scores et journal sont visibles dans l'onglet
-« Amélioration » du workspace.
+modèle choisi par rôle. Il apporte aussi, pour qui veut mesurer à la
+main, un jeu d'évals verrouillé, `/eval`, `/improve` (un seul changement
+par itération, gardé seulement s'il gagne au moins 0,02 sans régression)
+et `/eval-add`.
 
 Un **routage always-on** oriente chaque demande vers le bon agent. Il est
 livré en mode `auto`, avec une relecture systématique par le relecteur
@@ -267,30 +266,19 @@ tokens. Sur la ligne du module, dans l'onglet Configuration du workspace,
 tu peux passer le routage en « assisté » (suggestions seulement) ou
 « manuel », et la relecture du code en « dès 3 fichiers » ou « jamais ».
 
-La carte **« Équipe : modèle et effort »** de l'onglet Amélioration règle,
-agent par agent, le modèle (`sonnet`, `opus`, `haiku`, `fable`, ou
-`inherit` pour reprendre celui de la session) et l'effort de raisonnement
-(de « faible » à « max », vide = réglage par défaut). Ses propositions ne
-font que compléter, chacune expliquée : le modèle du rôle seulement pour
-un agent qui n'en déclare pas, un effort du rôle seulement s'il est
-au-dessus de l'actuel (un agent sans effort compte comme « moyen », le défaut de Claude Code sur les modèles 5.5), et un
-cran d'effort en plus pour un agent qui échoue à la dernière mesure.
-Jamais de baisse d'effort ni de changement d'un modèle déclaré, et rien
-n'est appliqué sans clic. Changer la configuration rend la mesure de
-référence périmée : relance `/eval` dans une nouvelle session de Claude
-Code. Tant qu'une itération `/improve` attend son verdict, aucun modèle ni
-effort ne peut changer (ni ici, ni par « Ré-appliquer »).
+Sur la même ligne du module, le dépliable **« Régler »** règle, agent par
+agent, le modèle (`sonnet`, `opus`, `haiku`, `fable`, ou `inherit` pour
+reprendre celui de la session) et l'effort de raisonnement (de « faible »
+à « max », vide = réglage par défaut). Les propositions sont expliquées et
+ne s'appliquent qu'au clic. Quand un corps d'agent a changé, un badge
+« N agent(s) à régénérer » et un bouton **« Régénérer »** apparaissent ;
+relance ensuite Claude Code.
 
-**Nebula peut aussi faire tourner la boucle pour toi** : bouton « Lancer
-une itération » de l'onglet Amélioration. Claude Code tourne en
-arrière-plan avec des permissions restreintes (jamais de contournement des
-permissions), un changement n'est gardé et commité sur ta branche courante
-que s'il gagne sans régression, sinon tout revient à l'identique et le diff
-écarté est archivé. Plafonds : 4 $ estimés par itération, 12 $ par jour.
-Le **mode automatique**, désactivé par défaut, enchaîne quelques
-itérations par jour, attend qu'aucune session ne soit ouverte sur le projet
-et se met en pause si ton quota est atteint ou après plusieurs rejets
-d'affilée.
+**Amélioration au fil des conversations** : quand un agent bute, Claude le
+note dans `.claude/improvements.md` et propose le correctif du corps de
+l'agent (`.claude/team/agents/<id>.md`). Une fois validé, clique sur
+« Régénérer » puis relance la session. Pas de boucle automatique (jugée
+trop coûteuse) ; `/eval` et `/improve` restent disponibles à la main.
 
 Nebula détecte ton **abonnement Claude** (Pro, Max, API) sans lire tes
 jetons, corrigeable dans Outils, et signale les réglages gourmands pour ton
@@ -451,13 +439,8 @@ claude-workspace/
 │   │   ├── active_sessions.py   # Sessions Claude Code actives
 │   │   ├── api_workspaces.py    # Workspaces, templates, settings
 │   │   ├── api_overlays.py      # Overlays
-│   │   ├── api_team.py          # Module claude-team : agents, boucle d'amélioration
-│   │   ├── claude_runner.py     # Claude Code headless (permissions restreintes)
+│   │   ├── api_team.py          # Module claude-team : agents générés
 │   │   ├── claude_account.py    # Abonnement Claude détecté, avertissements
-│   │   ├── improve_engine.py    # Itération d'amélioration : mesure, candidat, verdict
-│   │   ├── improve_jobs.py      # Job en arrière-plan, annulation, reprise
-│   │   ├── improve_scheduler.py # Mode automatique (budget, pauses)
-│   │   ├── unidiff.py           # Application stricte d'un diff
 │   │   ├── api_files.py         # Explorateur de fichiers
 │   │   ├── api_mcps.py          # MCPs, conflits, scan, sync, recettes
 │   │   ├── api_plugins.py       # Plugins, skills, agents, commandes

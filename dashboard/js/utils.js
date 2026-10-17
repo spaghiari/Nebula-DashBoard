@@ -349,7 +349,7 @@ function selfImprovingMark(wsId) {
     // Mode de routage (GET /api/overview team_routing, aucune requete en
     // plus) : hovercard themable plutot qu'un title natif.
     const mode = teamRoutingLabel(wsId);
-    const items = ["Équipe d'agents et amélioration mesurée active", mode ? `Routage : ${mode}` : 'Routage : non déclaré (ré-appliquer ou activer dans Configuration)'];
+    const items = ["Équipe d'agents active", mode ? `Routage : ${mode}` : 'Routage : non déclaré (ré-appliquer ou activer dans Configuration)'];
     out += '<span class="si team" role="img" aria-label="Équipe d\'agents active' + (mode ? ', routage ' + escapeHtml(mode) : '') + '"' + hcAttrs([{ title: "Équipe d'agents", items, text: true }]) + '>' + (typeof I !== 'undefined' && I.cpu ? I.cpu : '') + '</span>';
   }
   return out;

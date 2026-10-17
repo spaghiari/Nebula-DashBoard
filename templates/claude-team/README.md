@@ -1,4 +1,4 @@
-# Module Nebula `claude-team` - équipe d'agents et amélioration mesurée
+# Module Nebula `claude-team` - équipe d'agents
 
 Overlay (module) Nebula qui se pose par-dessus un workspace déjà équipé de
 `claude-self-improving`. Il ajoute :

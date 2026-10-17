@@ -121,10 +121,11 @@ section par défaut.
 
 ## Vue Nebula
 
-Onglet « Amélioration » du workspace : score courant, itérations,
-acceptées / rejetées, courbe des scores, journal, verrou des évals,
-**empreinte de configuration et état de la baseline** (« à jour » /
-« périmée » / « aucune »), compteurs des registres. Données :
-`GET /api/workspaces/<id>/team` (`prefix`, `config_hash`) et
-`GET /api/workspaces/<id>/improvement` (`config_hash`,
-`baseline_current`, `baseline_version`).
+Ligne du module « Équipe d'agents » (onglet Configuration du workspace) :
+routage, relecture, modèle et effort par agent (dépliable « Régler »),
+badge « N agent(s) à régénérer » et bouton « Régénérer » quand un corps
+d'agent a changé. Nebula ne lance aucune itération d'amélioration.
+L'équipe s'améliore au fil des conversations (règle « Amélioration au fil
+des conversations » du `CLAUDE.md`) ; `/eval` et `/improve` restent
+manuels. Données : `GET /api/workspaces/<id>/team` (`prefix`,
+`config_hash`).

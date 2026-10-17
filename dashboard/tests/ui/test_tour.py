@@ -2,7 +2,7 @@
 
 Deux niveaux :
 - test statique (toujours exécuté, sans navigateur) : la visite couvre les
-  modules, l'équipe d'agents, l'onglet Amélioration et les mises à jour, et
+  modules, l'équipe d'agents, la ligne du module claude-team et les mises à jour, et
   son nombre d'étapes est cohérent avec help.js et le README ;
 - test navigateur (facultatif, `NEBULA_UI_TESTS=1`, Edge/Chrome headless via
   CDP) : sur une installation vierge (aucun workspace), chaque étape atteint
@@ -55,7 +55,7 @@ class TourStaticTests(unittest.TestCase):
         for label, words in {
             "modules": ("section <strong>modules</strong>", "ré-appliquer", "retirer"),
             "équipe": ("7 agents", "/team", "opus"),
-            "amélioration": ("amélioration", "mesurée", "régression"),
+            "réglage de l'équipe": ("modèle et effort", "routage", "improvements.md"),
             "mises à jour": ("mises à jour", "maj", "notes de version"),
         }.items():
             with self.subTest(etape=label):

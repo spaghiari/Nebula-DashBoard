@@ -20,13 +20,12 @@ Ce module :
     (manifeste + corps + agents générés). Le même calcul est fait par le
     one-liner de `.claude/commands/eval.md` (CONFIG_HASH_ONELINER).
   - `team_state` / `improvement_state` : données des routes
-    GET /api/workspaces/<id>/team et /improvement (onglet « Amélioration »).
+    GET /api/workspaces/<id>/team et /improvement.
 
 Stdlib only ; toute écriture sous _MUTATION_LOCK (réentrant).
 """
 from __future__ import annotations
 
-import datetime as _dt
 import hashlib
 import json
 import re
@@ -761,8 +760,35 @@ def _count_jsonl(path: Path) -> int:
         return 0
 
 
-def team_state(ws_id: str) -> tuple[int, dict]:
-    """Manifeste + agents (générés ou non, modèle effectif, outils) + verrou."""
+def stale_agent_ids(ws_dir: Path, manifest: dict, vars: dict, prefix: str) -> list[str]:
+    """Ids des agents générés par Nebula (marqueur présent) dont le fichier
+    diffère du rendu actuel (corps source ou manifeste modifié depuis la
+    dernière génération). Même rendu que `generate_agents(regenerate)`,
+    fins de ligne ignorées ; pas de comparaison de dates. Lecture seule."""
+    vars = {**vars, "name": prefix}
+    opts = normalize_team_options({"regenerate": True})
+    by_rel = {}
+    for agent in manifest_agents(manifest):
+        by_rel[(AGENTS_DIR_REL / f"{_agent_name(agent, vars)}.md").as_posix()] = agent["id"]
+    out = []
+    for rel, target, content, _reason in _agent_jobs(ws_dir, manifest, vars, opts):
+        if content is None:
+            continue
+        try:
+            existing = target.read_text(encoding="utf-8")
+        except OSError:
+            # Fichier généré disparu : une régénération le recréerait.
+            out.append(by_rel.get(rel) or rel)
+            continue
+        if existing.replace("\r\n", "\n") != content.replace("\r\n", "\n"):
+            out.append(by_rel.get(rel) or rel)
+    return out
+
+
+def team_state(ws_id: str, vars: dict | None = None) -> tuple[int, dict]:
+    """Manifeste + agents (générés ou non, modèle effectif, outils) + verrou.
+    `vars` : variables de rendu du workspace (cf. overlay_vars), pour
+    `stale_agents` ; défaut : id du workspace seul."""
     if not safe_id(ws_id):
         return 400, {"error": "id invalide"}
     ws_dir = resolve_ws_dir(ws_id)
@@ -813,6 +839,9 @@ def team_state(ws_id: str) -> tuple[int, dict]:
     signals = measure_signals(ws_dir, manifest)
     return 200, {
         "active": True,
+        # Agents générés dont le fichier diffère du rendu actuel (corps ou
+        # manifeste modifié depuis la dernière génération) : à régénérer.
+        "stale_agents": stale_agent_ids(ws_dir, manifest, {"label": ws_id, **(vars or {})}, prefix),
         "manifest": {"team": manifest.get("team") or {}, "models": manifest.get("models") or {},
                      "improvement_loop": loop},
         "agents": agents,
@@ -851,28 +880,6 @@ def _claude_path(ws_dir: Path, rel: str) -> Path | None:
     except (OSError, ValueError):
         return None
     return p if p.is_relative_to(base) else None
-
-
-BASELINE_FILE = "journal/baseline.json"
-
-
-def read_baseline_file(ws_dir: Path) -> dict | None:
-    """Mesure de référence durable posée par le job `measure` de Nebula
-    (`.claude/journal/baseline.json`). None si absente ou illisible."""
-    p = _claude_path(ws_dir, BASELINE_FILE)
-    if p is None or not p.is_file():
-        return None
-    try:
-        d = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    if not isinstance(d, dict) or not isinstance(d.get("config_version"), str):
-        return None
-    if isinstance(d.get("score"), bool) or not isinstance(d.get("score"), (int, float)):
-        return None
-    if not isinstance(d.get("failures"), list):
-        return None
-    return d
 
 
 def _parse_journal(path: Path) -> tuple[list[dict], int]:
@@ -1012,23 +1019,7 @@ def improvement_state(ws_id: str) -> tuple[int, dict]:
         last_entry and config_hash and last_entry["config_version"] == config_hash
         and not last_entry["unrunnable"]
     )
-    # Mesure autonome (job `measure`) : baseline.json, sans ligne de journal.
-    bfile = read_baseline_file(ws_dir) if manifest is not None else None
-    last_measure = None
-    if bfile:
-        unr = bfile.get("unrunnable") if isinstance(bfile.get("unrunnable"), int) else 0
-        cur = bool(config_hash and bfile["config_version"] == config_hash)
-        last_measure = {"score": float(bfile["score"]),
-                        "measured_at": str(bfile.get("measured_at") or ""),
-                        "unrunnable": unr, "config_version": bfile["config_version"],
-                        "current": cur}
-        if cur and not unr:
-            baseline_current = True
     baseline_version = last_entry["config_version"] if last_entry else None
-    if baseline_version is None and last_measure:
-        baseline_version = last_measure["config_version"]
-    if last_score is None and last_measure:
-        last_score = last_measure["score"]
     # Candidat en attente de verdict : toujours en place si son empreinte
     # est l'empreinte courante (sinon il a été altéré entre les sessions).
     pending_info = None
@@ -1050,7 +1041,6 @@ def improvement_state(ws_id: str) -> tuple[int, dict]:
         "config_hash": config_hash,
         "baseline_current": baseline_current,
         "baseline_version": baseline_version,
-        "last_measure": last_measure,
         "pending": pending_info,
         "stats": {"iterations": len(by_iter), "accepted": accepted, "rejected": rejected,
                   "pending": len(pending_entries),
@@ -1068,11 +1058,10 @@ def improvement_state(ws_id: str) -> tuple[int, dict]:
         "todo_items": _todo_items(ws_dir / ".claude" / "improvements.md"),
         "cases": _cases_summary(eval_p, entries),
     }
-    result["next_step"] = next_step(result)
     return 200, result
 
 
-# --- Métriques de l'onglet Amélioration ----------------------------------------
+# --- Métriques de la boucle d'amélioration ----------------------------------------
 
 _TOKEN_KEYS = ("input", "output", "cache_read", "cache_creation")
 
@@ -1102,7 +1091,6 @@ def _enrich_journal(journal: list[dict]) -> None:
         tokens = None
         if tok_lines:
             tokens = {k: sum(_num(t.get(k)) or 0 for t in tok_lines) for k in _TOKEN_KEYS}
-        nebula = any(r.get("runner") == "nebula" for r in raws)
 
         def last(key, raws=raws):
             for r in reversed(raws):
@@ -1121,7 +1109,6 @@ def _enrich_journal(journal: list[dict]) -> None:
             "tokens": tokens,
             "duration_ms": sum(durs) if durs else None,
             "calls": sum(calls) if calls else None,
-            "runner": "nebula" if nebula else "manual",
             "reason": str(reason) if reason is not None else None,
             "diff_archive": str(archive) if archive is not None else None,
             "failures_after": fa,
@@ -1133,45 +1120,39 @@ def _enrich_journal(journal: list[dict]) -> None:
 
 
 def _extra_stats(journal: list[dict], by_iter: dict, resolved: list[dict]) -> dict:
-    """Statistiques ajoutées : taux d'acceptation, gain cumulé, coûts moyens,
-    itérations Nebula du jour (date locale)."""
+    """Statistiques ajoutées : taux d'acceptation, gain cumulé, coûts moyens."""
     acc = [j for j in resolved if j["status"] == "accepted"]
     gains = [j["score_after"] - j["score_before"] for j in acc
              if j["score_after"] is not None and j["score_before"] is not None]
     costs = [j["cost_usd"] for j in by_iter.values() if j["cost_usd"] is not None]
     toks = [j["tokens"] for j in by_iter.values() if j["tokens"] is not None]
-    today = _dt.date.today().isoformat()
-    first_date: dict = {}
-    for j in journal:  # date de DÉMARRAGE = 1re ligne de l'itération
-        first_date.setdefault(j["iteration"], j["date"])
-    today_n = sum(1 for it, j in by_iter.items()
-                  if j["runner"] == "nebula" and first_date.get(it, "")[:10] == today)
     return {
         "acceptance_rate": round(len(acc) / len(resolved), 4) if resolved else None,
         "cumulative_gain": round(sum(gains), 4),
         "avg_cost_usd": round(sum(costs) / len(costs), 6) if costs else None,
         "avg_tokens": ({k: round(sum(t[k] for t in toks) / len(toks), 1) for k in _TOKEN_KEYS}
                        if toks else None),
-        "today_iterations": today_n,
     }
 
 
+_ITEM_RE = re.compile(r"^- \*\*\[(?P<status>[^\]]+)\]\s*(?P<title>.+?)\*\*")
 _PRIO_RE = re.compile(r"\(\s*(P\d)\b")
 _DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 
 
 def _todo_items(path: Path) -> list[dict]:
     """Items `[TODO]` d'improvements.md : `{title, priority, date}` (lecture seule)."""
-    from dashcore.improve_engine import extract_todo_items  # import tardif : cycle
     try:
         text = path.read_text(encoding="utf-8-sig")
     except (OSError, ValueError):
         return []
     out = []
-    for it in extract_todo_items(text):
-        head = it["block"].splitlines()[0] if it["block"] else ""
+    for head in text.splitlines():
+        m = _ITEM_RE.match(head)
+        if not m or m.group("status").strip() != "TODO":
+            continue
         pm, dm = _PRIO_RE.search(head), _DATE_RE.search(head)
-        out.append({"title": it["title"], "priority": pm.group(1) if pm else None,
+        out.append({"title": m.group("title").strip(), "priority": pm.group(1) if pm else None,
                     "date": dm.group(1) if dm else None})
     return out
 
@@ -1209,99 +1190,6 @@ def _cases_summary(eval_p: Path | None, entries: list[dict]) -> list[dict]:
                     "grader": c.get("grader") if isinstance(c.get("grader"), str) else None,
                     "last_result": res})
     return out
-
-
-def next_step(state: dict, job: dict | None = None, auto: dict | None = None) -> dict:
-    """Prochaine étape de la boucle d'amélioration (fonction PURE).
-
-    `state` : résultat d'`improvement_state`. `job` : job en cours
-    (`step`, `progress`). `auto` : `enabled`, `paused_until` (ISO),
-    `campaign_start_iteration`, `daily_limit` ou `budget_reached`.
-    Retourne `{state, title, detail, actions}` ; ordre de priorité :
-    inactive, no_cases, job_running, quota_paused, undecidable, pending, rejects_stop,
-    campaign_cap, auto_waiting, no_baseline, stale_baseline, ready."""
-    auto = auto or {}
-
-    def res(st, title, detail, actions):
-        return {"state": st, "title": title, "detail": detail, "actions": actions}
-
-    if not state.get("active"):
-        return res("inactive", "Module inactif",
-                   "Le module d'équipe n'est pas activé sur ce workspace.", [])
-    if not (state.get("evals") or {}).get("cases"):
-        return res("no_cases", "Aucun cas d'évaluation",
-                   "Ajoutez au moins un cas d'éval avant de lancer la boucle.", [])
-    if job:
-        step = job.get("step") or "en cours"
-        prog = job.get("progress")
-        detail = f"Étape : {step}." + (f" Progression : {prog}." if prog not in (None, "") else "")
-        return res("job_running", "Itération en cours", detail, ["cancel"])
-    if auto.get("paused_until"):
-        try:
-            until = _dt.datetime.fromisoformat(str(auto["paused_until"]))
-            now = _dt.datetime.now(until.tzinfo)
-            paused = until > now
-        except ValueError:
-            paused = True
-        reason = auto.get("pause_reason")
-        if paused and reason == "undecidable" and auto.get("enabled", True):
-            it = (state.get("pending") or {}).get("iteration")
-            return res("undecidable", "Verdict impossible à trancher",
-                       f"L'itération {it} n'a pas pu être tranchée : trop de cas d'évals "
-                       "n'ont pas pu s'exécuter. Le mode automatique est en pause.",
-                       ["resolve", "abandon", "resume"])
-        if paused and reason == "dirty_config" and auto.get("enabled", True):
-            return res("dirty_config", "Configuration de l'équipe non commitée",
-                       "Des fichiers de l'équipe (team.json, corps ou agents générés) ont des "
-                       "modifications non commitées : commite-les ou annule-les, puis reprends.",
-                       ["resume"])
-        if paused and reason == "budget" and auto.get("enabled", True):
-            return res("auto_waiting", "Budget du jour atteint",
-                       "Le mode automatique reprendra demain.", [])
-        if paused and reason in (None, "quota"):
-            return res("quota_paused", "Automatique en pause",
-                       f"Quota atteint : reprise prévue à {auto['paused_until']}.", [])
-    pending = state.get("pending")
-    if pending:
-        if pending.get("in_place"):
-            return res("pending", "Modification à l'essai en attente de verdict",
-                       f"L'itération {pending.get('iteration')} attend d'être mesurée.",
-                       ["resolve", "abandon"])
-        return res("pending", "Modification altérée",
-                   f"Le fichier à l'essai de l'itération {pending.get('iteration')} a changé "
-                   "depuis la session précédente : le verdict n'est plus fiable.", ["abandon"])
-    loop = state.get("loop") or {}
-    stats = state.get("stats") or {}
-    stop = loop.get("stop_after_consecutive_rejects")
-    streak = stats.get("consecutive_rejects", 0) or 0
-    ack = auto.get("ack_rejects_at") or 0
-    if not isinstance(ack, int) or ack > streak:
-        ack = 0
-    if isinstance(stop, int) and stop > 0 and streak - ack >= stop:
-        return res("rejects_stop", "Boucle arrêtée après des rejets successifs",
-                   f"{stats.get('consecutive_rejects')} modifications rejetées de suite.", ["resume"])
-    cap = loop.get("max_iterations")
-    start = auto.get("campaign_start_iteration")
-    if isinstance(cap, int) and cap > 0 and isinstance(start, int):
-        done = len({j["iteration"] for j in state.get("journal") or []
-                    if isinstance(j.get("iteration"), int) and j["iteration"] >= start})
-        if done >= cap:
-            return res("campaign_cap", "Plafond de la campagne atteint",
-                       f"{done} itérations sur {cap} autorisées.", [])
-    if auto.get("enabled"):
-        limit = auto.get("daily_limit")
-        reached = bool(auto.get("budget_reached")) or (
-            isinstance(limit, int) and stats.get("today_iterations", 0) >= limit)
-        if reached:
-            return res("auto_waiting", "Automatique en attente",
-                       "Budget du jour atteint : prochaine itération demain.", [])
-    if not state.get("baseline_version"):
-        return res("no_baseline", "Pas de mesure de référence",
-                   "Mesurez d'abord la configuration actuelle.", ["measure"])
-    if not state.get("baseline_current"):
-        return res("stale_baseline", "Mesure de référence périmée",
-                   "La configuration a changé depuis la dernière mesure.", ["measure", "run"])
-    return res("ready", "Prête", "Lancez une nouvelle itération.", ["run"])
 
 
 # --- Modèle et effort par agent : propositions + application ------------------
@@ -1433,7 +1321,8 @@ def set_agents_config(ws_id: str, agents_cfg, vars: dict | None = None) -> tuple
     régénère les agents (seuls ceux qui portent le marqueur généré).
 
     `agents_cfg` = `{"<id>": {"model": "...", "effort": "...|null"}}` (clés
-    optionnelles ; `effort: null` retire l'effort). 400 agent ou valeur hors
+    optionnelles ; `effort: null` retire l'effort ; `{}` = régénération seule
+    des agents marqués, `written: false`). 400 agent ou valeur hors
     liste ; 404 module inactif ; 409 manifeste corrompu ou itération
     `/improve` en attente de verdict (le candidat serait mesuré sur une autre
     configuration). Rien n'est écrit si rien ne change. Jamais la section
@@ -1444,15 +1333,8 @@ def set_agents_config(ws_id: str, agents_cfg, vars: dict | None = None) -> tuple
     ws_dir = resolve_ws_dir(ws_id)
     if not ws_dir.exists():
         return 404, {"error": "workspace absent sur disque"}
-    if not isinstance(agents_cfg, dict) or not agents_cfg:
+    if not isinstance(agents_cfg, dict):
         return 400, {"error": "corps attendu : {\"agents\": {\"<id>\": {\"model\", \"effort\"}}}"}
-    # Job de la boucle en cours : il mesure la configuration actuelle, la
-    # changer en cours de route fausserait la mesure (refus avant écriture).
-    from dashcore import improve_jobs  # import tardif : cycle via improve_engine
-    if improve_jobs.is_running(ws_id):
-        return 409, {"error": "une itération de la boucle d'amélioration est en cours : "
-                              "arrête-la ou attends sa fin avant de changer les modèles ou l'effort",
-                     "reason": "job_running"}
     path = ws_dir / MANIFEST_REL
     with _MUTATION_LOCK:
         try:
@@ -1500,14 +1382,34 @@ def set_agents_config(ws_id: str, agents_cfg, vars: dict | None = None) -> tuple
                     changed = True
         generated: list[str] = []
         skipped: list[dict] = []
-        if changed:
+        # Corps vide (`{}`) : régénération seule des agents marqués.
+        if changed or not agents_cfg:
             # Itération /improve en attente : refus seulement si quelque chose
             # change réellement (la copie modifiée n'est jamais écrite).
             _, impr = improvement_state(ws_id)
-            if impr.get("pending"):
+            if changed and impr.get("pending"):
                 return 409, {"error": pending_message(impr["pending"], "les modèles ou l'effort"),
                              "pending": impr["pending"]}
-            write_json(path, data)
+            regen_vars = {"label": ws_id, **(vars or {}), "name": ws_id}
+            if not changed and impr.get("pending"):
+                # Régénération seule : refus seulement si un agent changerait réellement.
+                pend = agents_rewrite_pending(ws_dir, regen_vars, {"regenerate": True})
+                if pend:
+                    return 409, {"error": pending_message(pend, "les agents générés"),
+                                 "pending": pend}
+                # Rien ne changerait : pas de réécriture (ni team.json ni agents).
+                return 200, {
+                    "ok": True, "written": False, "generated": [], "skipped": [],
+                    "adopted_models": {},
+                    "config_hash_before": hash_before, "config_hash_after": hash_before,
+                    "baseline_stale": bool(impr.get("baseline_version")) and not impr.get("baseline_current"),
+                }
+            if changed:
+                write_json(path, data)
+            try:
+                manifest_before = path.read_bytes()
+            except OSError:
+                manifest_before = None
             prefix = effective_prefix(data, {"name": ws_id})
             targets = [ws_dir / AGENTS_DIR_REL / f"{prefix}-{aid}.md" for aid in by_id]
 
@@ -1517,8 +1419,13 @@ def set_agents_config(ws_id: str, agents_cfg, vars: dict | None = None) -> tuple
                 except OSError:
                     return None
             before = {p.relative_to(ws_dir).as_posix(): _read(p) for p in targets}
-            r = generate_agents(ws_dir, {"label": ws_id, **(vars or {}), "name": ws_id},
-                                {"regenerate": True})
+            r = generate_agents(ws_dir, regen_vars, {"regenerate": True})
+            try:
+                manifest_after = path.read_bytes()
+            except OSError:
+                manifest_after = None
+            if manifest_after != manifest_before:
+                changed = True
             generated = [rel for rel in r["generated"] if before.get(rel) != _read(ws_dir / rel)]
             skipped = r["skipped"]
         hash_after = team_config_hash(ws_dir, ws_id)

@@ -1,7 +1,7 @@
 {
   "id": "claude-team",
-  "label": "Équipe d'agents et amélioration mesurée",
-  "description": "Équipe de 7 agents Claude Code (orchestrateur, chercheur, architecte, exécutant, relecteur, évaluateur, critique) générés depuis un manifeste .claude/team.json avec routage de modèle par rôle, et boucle d'amélioration mesurée : évals verrouillées, un seul changement par itération, acceptation seulement si gain >= 0,02 sans régression, journal JSONL. Complète « Auto-amélioration de Claude » (requis) : le critique lit les items [TODO] de improvements.md comme hypothèses et /improve y écrit le verdict mesuré.",
+  "label": "Équipe d'agents",
+  "description": "Équipe de 7 agents Claude Code (orchestrateur, chercheur, architecte, exécutant, relecteur, évaluateur, critique) générés depuis un manifeste .claude/team.json, avec routage de modèle par rôle et méthode de délégation sobre. L'équipe s'améliore au fil des conversations : Claude note les frictions d'un agent dans improvements.md (module « Auto-amélioration de Claude », requis) et propose le correctif de son corps, que tu valides. /eval et /improve restent disponibles pour mesurer à la main.",
   "emoji": "👥",
   "signature_file": ".claude/team.json",
 
@@ -20,7 +20,7 @@
   "_comment_features": "Liste rendue par l'UI (onglet Configuration du workspace, section Modules de la page Templates). icon = clé de js/icons.js (I.<icon>) ; text accepte <code>.",
   "features": [
     { "icon": "cpu", "title": "7 agents générés", "text": "<code>.claude/agents/<préfixe>-<agent>.md</code> depuis le manifeste (préfixe choisi à l'activation, ex. <code>dash</code>) : modèle, outils et contraintes par rôle ; <code>/team</code> fait jouer l'orchestrateur par le fil principal" },
-    { "icon": "activity", "title": "Boucle d'amélioration mesurée", "text": "<code>/eval</code> score le jeu d'évals (un cas = un agent, un critère observable), <code>/improve</code> propose UN diff, le garde si gain >= 0,02 et zéro régression ; baseline « à jour » ou « périmée » selon l'empreinte de configuration" },
+    { "icon": "activity", "title": "Mesure à la main (optionnel)", "text": "<code>/eval</code> score le jeu d'évals (un cas = un agent, un critère observable), <code>/improve</code> propose UN diff, le garde si gain >= 0,02 et zéro régression ; baseline « à jour » ou « périmée » selon l'empreinte de configuration" },
     { "icon": "shield", "title": "Évals verrouillées", "text": "hook <code>evals-lock.py</code> : aucune écriture sous <code>.claude/evals/</code> sans déverrouillage explicite" },
     { "icon": "book", "title": "Journal et pont avec improvements.md", "text": "<code>.claude/journal/changes.jsonl</code> ; les items [TODO] deviennent des hypothèses, le verdict mesuré est réécrit dans le registre" },
     { "icon": "zap", "title": "Routage automatique", "text": "always-on : l'utilisateur parle normalement, le fil principal route vers l'équipe (question -> researcher, conception -> architect, tâche S -> executor puis reviewer) et rend une réponse unique, sourcée et relue. Modes <code>manuel</code> / <code>assiste</code> / <code>auto</code> (<code>routing.mode</code>), déclencheurs dans la description des agents, hook <code>team-router.py</code> sur chaque prompt" }

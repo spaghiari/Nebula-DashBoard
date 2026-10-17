@@ -331,8 +331,10 @@ def h_get_overlays(q, b):
     return 200, {"overlays": list_overlays(), "usage": overlays_usage()}
 
 # Module claude-team (cf. dashcore/api_team.py) : manifeste + agents
-# generes, et etat de la boucle d'amelioration (onglet « Amelioration »).
-def h_get_ws_team(q, b, ws):        return team_state(ws)
+# generes, et etat de la boucle d'amelioration.
+def h_get_ws_team(q, b, ws):
+    ws_obj = next((x for x in list_workspaces() if x["id"] == ws), None) if safe_id(ws) else None
+    return team_state(ws, overlay_vars(ws_obj) if ws_obj else None)
 
 def h_post_ws_team_routing(q, b, ws):
     """Routage always-on du module claude-team : `{"mode": "manuel|assiste|auto",
@@ -444,175 +446,9 @@ def h_post_ws_team_agents_config(q, b, ws):
     from dashcore.api_team import set_agents_config
     return set_agents_config(ws, (b or {}).get("agents"), overlay_vars(ws_obj))
 
-# ── Boucle d'amélioration automatique (Nebula 2.6.0) ─────────────────────────
-# Jobs de fond (dashcore/improve_jobs.py) et mode automatique
-# (dashcore/improve_scheduler.py). Les POST passent par la garde CSRF
-# globale de `_dispatch` (aucune exemption).
-_IMPROVE_RUN_KINDS = ("iteration", "measure", "resolve")
-_IMPROVE_HISTORY_POLL = 5
-
-
-def _improve_scheduler():
-    """Module du planificateur, ou None s'il est absent ou ne s'importe pas
-    (le reste de la boucle reste utilisable : jobs manuels)."""
-    try:
-        from dashcore import improve_scheduler
-    except Exception as e:  # noqa: BLE001 - planificateur optionnel
-        log.warning("planificateur de la boucle indisponible : %s", e)
-        return None
-    return improve_scheduler
-
-
-def _improve_target(ws):
-    """(ws_dir, None) si le workspace existe et que claude-team y est actif,
-    sinon (None, (status, payload))."""
-    if not safe_id(ws):
-        return None, (400, {"error": "id invalide"})
-    from dashcore.helpers import resolve_ws_dir as _resolve
-    from dashcore.api_team import load_manifest
-    ws_dir = _resolve(ws)
-    if not ws_dir.exists():
-        return None, (404, {"error": "workspace absent sur disque"})
-    if load_manifest(ws_dir) is None:
-        return None, (404, {"error": "module claude-team inactif sur ce workspace"})
-    return ws_dir, None
-
-
-def _improve_live(ws, state=None):
-    """(job, auto, job_en_cours) : dernier job, vue du mode automatique
-    (None si le planificateur est indisponible), job si en cours."""
-    from dashcore import improve_jobs
-    job = improve_jobs.get_job(ws)
-    sched = _improve_scheduler()
-    auto = None
-    if sched is not None:
-        try:
-            auto = sched.auto_view(ws, state)
-        except Exception:  # noqa: BLE001 - vue dégradée plutôt qu'un 500
-            log.exception("auto_view %s", ws)
-    running = job if isinstance(job, dict) and job.get("status") == "running" else None
-    return job, auto, running
-
-
 def h_get_ws_improvement(q, b, ws):
-    """État de la boucle (cf. api_team.improvement_state) enrichi du job
-    (`job`), du mode automatique (`auto`) et de `next_step` recalculé."""
-    status, payload = improvement_state(ws)
-    if status != 200:
-        return status, payload
-    from dashcore.api_team import next_step
-    job, auto, running = _improve_live(ws, payload)
-    payload["job"] = job
-    payload["auto"] = auto
-    payload["next_step"] = next_step(payload, running, auto)
-    return 200, payload
-
-
-def h_get_ws_improvement_job(q, b, ws):
-    """Vue légère pour un polling (3 s) : job, 5 derniers jobs, auto, next_step."""
-    if not safe_id(ws):
-        return 400, {"error": "id invalide"}
-    status, state = improvement_state(ws)
-    if status != 200:
-        return status, state
-    from dashcore import improve_jobs
-    from dashcore.api_team import next_step
-    job, auto, running = _improve_live(ws, state)
-    return 200, {"job": job, "history": improve_jobs.list_history(ws, _IMPROVE_HISTORY_POLL),
-                 "auto": auto, "next_step": next_step(state, running, auto)}
-
-
-def _force_session(b) -> bool:
-    """Passe outre la garde de session : `force_session`, ou `force` (ancien nom)."""
-    b = b or {}
-    return b.get("force_session") is True or b.get("force") is True
-
-
-def h_post_ws_improvement_run(q, b, ws):
-    """`{"kind": "iteration|measure|resolve", "force_session"?: bool}` : lance
-    un job de fond (plafond IMPROVE_MAX_USD_PER_ITERATION borné par le reste du
-    jour, jamais contournable). `force_session` (ou `force`, ancien nom) passe
-    seulement outre la garde de session. Codes de start_job."""
-    ws_dir, err = _improve_target(ws)
-    if err:
-        return err
-    b = b or {}
-    kind = b.get("kind")
-    if kind not in _IMPROVE_RUN_KINDS:
-        return 400, {"ok": False, "reason": "kind",
-                     "error": f"kind invalide (attendu : {', '.join(_IMPROVE_RUN_KINDS)})"}
-    from dashcore import improve_jobs
-    from dashcore.config import IMPROVE_MAX_USD_PER_DAY, IMPROVE_MAX_USD_PER_ITERATION
-    force = _force_session(b)
-    if improve_jobs.spent_today() >= IMPROVE_MAX_USD_PER_DAY:
-        return 409, {"ok": False, "reason": "daily_budget",
-                     "error": (f"plafond de coût du jour atteint ({IMPROVE_MAX_USD_PER_DAY:g} $ estimés) : "
-                               "réessaie demain")}
-    from dashcore import improve_scheduler
-    max_usd = min(IMPROVE_MAX_USD_PER_ITERATION, improve_scheduler.day_capped_max_usd())
-    return improve_jobs.start_job(
-        ws, ws_dir, kind, max_usd=max_usd, force=force,
-        exclude_session_ids=improve_scheduler.recent_job_session_ids(ws))
-
-
-def h_post_ws_improvement_abandon(q, b, ws):
-    """Abandonne l'itération en attente de verdict (job `abandon`)."""
-    ws_dir, err = _improve_target(ws)
-    if err:
-        return err
-    from dashcore import improve_jobs
-    from dashcore.config import IMPROVE_MAX_USD_PER_ITERATION
-    from dashcore import improve_scheduler
-    return improve_jobs.start_job(
-        ws, ws_dir, "abandon", max_usd=IMPROVE_MAX_USD_PER_ITERATION,
-        force=_force_session(b),
-        exclude_session_ids=improve_scheduler.recent_job_session_ids(ws))
-
-
-def h_post_ws_improvement_stop(q, b, ws):
-    """Arrêt : annule le job en cours et désactive le mode automatique.
-    200 même si rien ne tournait (`cancelled: false`)."""
-    _, err = _improve_target(ws)
-    if err:
-        return err
-    from dashcore import improve_jobs
-    status, res = improve_jobs.cancel_job(ws)
-    cancelled = status == 202
-    out = {"ok": True, "cancelled": cancelled, "job": res.get("job") if cancelled else improve_jobs.get_job(ws)}
-    sched = _improve_scheduler()
-    if sched is None:
-        out["auto"] = None
-        out["auto_error"] = "planificateur indisponible"
-        return 200, out
-    a_status, a_res = sched.set_auto(ws, enabled=False)
-    if a_status != 200:
-        out["auto_error"] = str((a_res or {}).get("error") or "désactivation impossible")
-    # Un seul improvement_state : auto_view le relirait sinon.
-    st_status, state = improvement_state(ws)
-    try:
-        out["auto"] = sched.auto_view(ws, state if st_status == 200 else {})
-    except Exception:  # noqa: BLE001
-        log.exception("auto_view %s", ws)
-        out["auto"] = None
-    return 200, out
-
-
-def h_post_ws_improvement_auto(q, b, ws):
-    """`{"enabled"?, "daily_budget"?, "resume"?}` : réglage du mode automatique."""
-    _, err = _improve_target(ws)
-    if err:
-        return err
-    b = b or {}
-    enabled = b.get("enabled")
-    if enabled is not None and not isinstance(enabled, bool):
-        return 400, {"ok": False, "error": "enabled : booléen attendu"}
-    budget = b.get("daily_budget")
-    if budget is not None and (isinstance(budget, bool) or not isinstance(budget, int)):
-        return 400, {"ok": False, "error": "daily_budget : entier attendu (1 à 10)"}
-    sched = _improve_scheduler()
-    if sched is None:
-        return 503, {"ok": False, "error": "planificateur de la boucle indisponible"}
-    return sched.set_auto(ws, enabled=enabled, daily_budget=budget, resume=b.get("resume") is True)
+    """État de la boucle /improve manuelle (cf. api_team.improvement_state)."""
+    return improvement_state(ws)
 
 
 def h_get_claude_subscription(q, b):
@@ -632,15 +468,8 @@ def h_get_claude_subscription(q, b):
             return status, team
         agents = [{"id": a.get("id"), "model": a.get("effective_model") or a.get("model"),
                    "effort": a.get("effective_effort")} for a in team.get("agents") or []]
-        auto_on = False
-        sched = _improve_scheduler()
-        if sched is not None and team.get("active"):
-            try:
-                auto_on = bool((sched.get_auto(ws) or {}).get("enabled"))
-            except Exception:  # noqa: BLE001
-                log.exception("get_auto %s", ws)
         warnings = claude_account.consumption_warnings(
-            info.get("plan") or "unknown", agents, auto=auto_on, conflict=bool(info.get("conflict")))
+            info.get("plan") or "unknown", agents, conflict=bool(info.get("conflict")))
     return 200, {**info, "warnings": warnings, "rules": [dict(r) for r in CONSUMPTION_RULES]}
 
 # ── Skills ──────────────────────────────────────────────────────────────────
@@ -894,7 +723,6 @@ ROUTES_GET = [
     # Module claude-team (dashcore/api_team.py)
     (re.compile(rf"^/api/workspaces/({_ID})/team$"),                                        h_get_ws_team),
     (re.compile(rf"^/api/workspaces/({_ID})/improvement$"),                                 h_get_ws_improvement),
-    (re.compile(rf"^/api/workspaces/({_ID})/improvement/job$"),                             h_get_ws_improvement_job),
     (re.compile(r"^/api/claude/subscription$"),                                            h_get_claude_subscription),
     # Skills
     (re.compile(r"^/api/skills$"),                                                         h_get_skills),
@@ -986,11 +814,7 @@ ROUTES_POST = [
     (re.compile(rf"^/api/workspaces/({_ID})/team/routing$"),                                h_post_ws_team_routing),
     # Module claude-team : modèle et effort par agent (+ régénération)
     (re.compile(rf"^/api/workspaces/({_ID})/team/agents-config$"),                          h_post_ws_team_agents_config),
-    # Boucle d'amélioration automatique : jobs de fond + mode automatique.
-    (re.compile(rf"^/api/workspaces/({_ID})/improvement/run$"),                             h_post_ws_improvement_run),
-    (re.compile(rf"^/api/workspaces/({_ID})/improvement/abandon$"),                         h_post_ws_improvement_abandon),
-    (re.compile(rf"^/api/workspaces/({_ID})/improvement/stop$"),                            h_post_ws_improvement_stop),
-    (re.compile(rf"^/api/workspaces/({_ID})/improvement/auto$"),                            h_post_ws_improvement_auto),
+    # Boucle d'amélioration : module claude-team.
     # Skills
     (re.compile(r"^/api/skills$"),                                                         h_post_create_skill),
     (re.compile(r"^/api/skills/copy$"),                                                    h_post_copy_skill),
@@ -1339,30 +1163,6 @@ class _NebulaHTTPServer(ThreadingHTTPServer):
         self.server_port = port
 
 
-def _start_improve_loop():
-    """Reprise des jobs interrompus puis démarrage du planificateur de la
-    boucle d'amélioration. Jamais bloquant : une erreur est journalisée et le
-    serveur démarre quand même. `NEBULA_DISABLE_SCHEDULER=1` (tests) : pas de
-    planificateur (la reprise des jobs a lieu)."""
-    try:
-        from dashcore import improve_jobs
-        recovered = improve_jobs.recover_jobs()
-        if recovered:
-            log.info("Boucle d'amélioration : %d job(s) interrompu(s) repris en compte", len(recovered))
-    except Exception:  # noqa: BLE001 - ne doit jamais empêcher le démarrage
-        log.exception("Reprise des jobs de la boucle d'amélioration impossible")
-    if (os.environ.get("NEBULA_DISABLE_SCHEDULER") or "").strip() == "1":
-        log.info("Planificateur de la boucle désactivé (NEBULA_DISABLE_SCHEDULER=1)")
-        return
-    sched = _improve_scheduler()
-    if sched is None:
-        return
-    try:
-        sched.start()
-    except Exception:  # noqa: BLE001
-        log.exception("Démarrage du planificateur de la boucle impossible")
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=DEFAULT_PORT,
@@ -1422,7 +1222,6 @@ def main():
     log.info("  données : %s%s", DATA_DIR, " (NEBULA_DATA_DIR)" if DATA_DIR_IS_CUSTOM else "")
     log.info("  .env.local : %s  (%s)", ENV_FILE, "présent" if ENV_FILE.exists() else "absent")
     log.info("  logs : %s", LOGS_DIR / "dashboard.log")
-    _start_improve_loop()
     log.info("Ctrl+C pour arrêter.")
     if not args.no_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
@@ -1430,12 +1229,6 @@ def main():
         server.serve_forever()
     except KeyboardInterrupt:
         log.info("Arrêt demandé (Ctrl+C).")
-        sched = _improve_scheduler()
-        if sched is not None:
-            try:
-                sched.stop()
-            except Exception:  # noqa: BLE001
-                log.exception("Arrêt du planificateur de la boucle")
         server.shutdown()
 
 

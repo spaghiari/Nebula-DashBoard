@@ -211,8 +211,7 @@ def _effort_rank(value) -> int:
     return _EFFORT_ORDER.index(v) if v in _EFFORT_ORDER else _EFFORT_ORDER.index("medium")
 
 
-def consumption_warnings(plan: str, agents: list[dict], auto: bool = False,
-                         conflict: bool = False) -> list[dict]:
+def consumption_warnings(plan: str, agents: list[dict], conflict: bool = False) -> list[dict]:
     """Avertissements de consommation `[{level, code, message, agents}]`.
 
     Fonction pure, pilotée par `config.CONSUMPTION_RULES`. `agents` =
@@ -223,8 +222,6 @@ def consumption_warnings(plan: str, agents: list[dict], auto: bool = False,
     for rule in config.CONSUMPTION_RULES:
         when = rule["when"]
         if "plan" in when and when["plan"] != plan:
-            continue
-        if when.get("auto") and not auto:
             continue
         if when.get("conflict") and not conflict:
             continue

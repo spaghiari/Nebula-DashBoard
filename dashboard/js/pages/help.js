@@ -337,8 +337,8 @@ function _helpSections() {
         </div>
         <div class="help-tile">
           <div class="help-tile-icon">${I.activity}</div>
-          <h4>Équipe d'agents et amélioration mesurée</h4>
-          <p>Requiert le module précédent. Génère 7 agents (orchestrateur, chercheur, architecte, exécutant, relecteur, évaluateur, critique) avec un modèle par rôle, et une boucle qui ne garde un changement que s'il améliore le score des évals sans régression.</p>
+          <h4>Équipe d'agents</h4>
+          <p>Requiert le module précédent. Génère 7 agents (orchestrateur, chercheur, architecte, exécutant, relecteur, évaluateur, critique) avec un modèle et un effort par rôle, et un routage des demandes. L'équipe s'améliore au fil des conversations ; <code class="mono">/eval</code> et <code class="mono">/improve</code> restent là pour mesurer à la main.</p>
         </div>
       </div>
 
@@ -348,14 +348,12 @@ function _helpSections() {
         <li><code class="mono">/eval</code> : mesure l'équipe contre le jeu d'évals figé de <code class="mono">.claude/evals/</code>.</li>
         <li><code class="mono">/improve</code> : une itération d'amélioration en deux phases ; la seconde se lance dans une <strong>nouvelle session</strong> Claude Code.</li>
         <li><code class="mono">/eval-add</code> : transforme un échec observé en nouveau cas d'éval.</li>
-        <li>L'onglet <strong>Amélioration</strong> du workspace affiche la prochaine étape, le score actuel, le taux d'itérations gardées, le coût moyen, le journal et les registres.</li>
-        <li>Le bouton <strong>Lancer une itération</strong> de cet onglet fait tourner la boucle par Nebula, en arrière-plan, sans ouvrir de session : mesure de départ, proposition du critique, mesure du candidat, puis verdict (gardé et commité, ou écarté et archivé). Bouton <strong>Arrêter</strong> à tout moment. Plafonds : 4 $ estimés par itération et 12 $ par jour.</li>
-        <li>Le <strong>mode automatique</strong> (désactivé par défaut) enchaîne jusqu'à N itérations par jour (budget réglable de 1 à 10), attend qu'aucune session Claude Code ne soit ouverte sur le projet (il voit celles lancées par Nebula ou actives récemment), se met en pause si ton quota est atteint (reprise à l'heure de réinitialisation) ou après plusieurs rejets d'affilée (reprise sur ton clic).</li>
-        <li>Sa carte <strong>Équipe : modèle et effort</strong> règle le modèle (<code class="mono">inherit</code> = celui de la session) et l'effort de raisonnement de chaque agent, de « faible » à « max ». Les propositions sont expliquées et ne s'appliquent qu'au clic ; après un changement, relance <code class="mono">/eval</code> dans une nouvelle session pour remesurer.</li>
+        <li>Sur la <strong>ligne du module « Équipe d'agents »</strong> (onglet Configuration) : le <strong>routage</strong>, la <strong>relecture</strong>, puis le dépliable <strong>Régler</strong> pour le <strong>modèle</strong> (<code class="mono">inherit</code> = celui de la session) et l'<strong>effort</strong> de chaque agent. Quand un corps d'agent a changé, un badge « N agent(s) à régénérer » apparaît avec un bouton <strong>Régénérer</strong> ; relance ensuite Claude Code, un agent régénéré n'est relu qu'au démarrage d'une session.</li>
+        <li><strong>Amélioration au fil des conversations</strong> : quand un agent bute, Claude le note dans <code class="mono">.claude/improvements.md</code> et te propose le correctif du corps de l'agent. Une fois validé, clique sur Régénérer puis relance la session. Pas de boucle automatique, donc pas de coût caché ; <code class="mono">/eval</code> reste possible pour vérifier.</li>
       </ul>
 
       <h3>Abonnement et consommation</h3>
-      <p>Nebula détecte ton abonnement Claude (Pro, Max ou API) d'après la configuration locale de Claude Code, sans lire tes jetons. Tu peux le corriger dans <strong>Outils</strong> (carte « Mon abonnement Claude ») si la détection se trompe. À l'activation de l'équipe et dans l'onglet Amélioration, des avertissements signalent les réglages gourmands pour ton abonnement (opus partout, effort élevé, mode automatique sur Pro).</p>
+      <p>Nebula détecte ton abonnement Claude (Pro, Max ou API) d'après la configuration locale de Claude Code, sans lire tes jetons. Tu peux le corriger dans <strong>Outils</strong> (carte « Mon abonnement Claude ») si la détection se trompe. À l'activation de l'équipe et dans la carte modèle et effort, des avertissements signalent les réglages gourmands pour ton abonnement (opus partout, effort élevé).</p>
 
       <h3>Routage et coût</h3>
       <p>Le routage est livré en mode <strong>auto</strong> : chaque demande est orientée vers le bon agent, et tout code livré est relu par le relecteur (modèle opus). C'est le plus complet, mais aussi le plus gourmand en tokens. Sur la ligne du module (onglet Configuration), passe le routage en <strong>assisté</strong> ou <strong>manuel</strong>, et la relecture en <strong>dès 3 fichiers</strong> ou <strong>jamais</strong>.</p>
@@ -561,7 +559,7 @@ const HELP_TOPICS = [
   { id: 'mcps',           emoji: '🔌', title: 'MCPs',                  summary: 'Configurer les serveurs Model Context Protocol et leurs recettes.', sections: ['mcps', 'recipes'], keywords: 'model context protocol serveur transport stdio http sse diagnostiquer recette registry sync statut' },
   { id: 'skills-plugins', emoji: '✨', title: 'Skills & Plugins',      summary: 'Bibliothèque de compétences et extensions Claude Code.',          sections: ['skills', 'plugins'], keywords: 'skill plugin bibliothèque magasin distribuer marketplace installer github désync scope' },
   { id: 'templates',      emoji: '📋', title: 'Templates',             summary: 'Modèles réutilisables pour démarrer un workspace rapidement.',    sections: ['templates'], keywords: 'modèle starter placeholder qualité aperçu standard python node docker' },
-  { id: 'modules',        emoji: '🧠', title: 'Modules',               summary: 'Auto-amélioration de Claude et équipe de 7 agents.',             sections: ['modules'], keywords: 'module overlay équipe agents team eval improve amélioration mémoire routage orchestrateur reviewer self-improving automatique itération abonnement pro max quota budget' },
+  { id: 'modules',        emoji: '🧠', title: 'Modules',               summary: 'Auto-amélioration de Claude et équipe de 7 agents.',             sections: ['modules'], keywords: 'module overlay équipe agents team eval improve amélioration mémoire routage orchestrateur reviewer self-improving abonnement pro max quota budget' },
   { id: 'secrets',        emoji: '🔐', title: 'Secrets & sécurité',    summary: 'Stockage centralisé de tes tokens et clés d\'API, chiffrement.',  sections: ['env'], keywords: 'secret token clé api mot de passe env.local chiffrement chiffrer variable environnement dpapi' },
   { id: 'outils',         emoji: '🛠️', title: 'Outils & maintenance',  summary: 'Hooks, sauvegardes, mises à jour automatiques.',                  sections: ['tools', 'update'], keywords: 'hook sauvegarde backup mise à jour update git pull stash restore apparence thème conflits orphelins' },
   { id: 'reference',      emoji: '⌨️', title: 'Référence & dépannage', summary: 'Raccourcis clavier et solutions aux problèmes courants.',         sections: ['shortcuts', 'troubleshoot'], keywords: 'raccourci clavier shortcut dépannage troubleshoot sanity check serveur hors ligne erreur problème' },

@@ -4,6 +4,30 @@ Les nouveautés de Nebula, version par version. La plus récente est en haut.
 La mise à jour se fait depuis Nebula : badge « MAJ » en haut de l'écran, ou
 Outils > Mises à jour.
 
+## 2.7.0 - 2026-10-17
+
+### Changements
+
+- **Boucle d'amélioration pilotée par Nebula retirée** : le bouton « Lancer
+  une itération », le mode automatique et l'onglet Amélioration disparaissent.
+  Un essai coûtait environ 1 M de jetons, c'était trop lourd.
+- **Amélioration au fil des conversations** : quand un agent de l'équipe
+  bute, Claude le note dans `.claude/improvements.md` et te propose le
+  correctif du corps de l'agent. Une fois validé, tu régénères et tu
+  relances la session. `/eval` et `/improve` restent disponibles pour
+  mesurer à la main.
+- **Modèle et effort des agents sur la ligne du module** « Équipe d'agents »
+  (onglet Configuration), sous Routage et Relecture, dans le dépliable
+  « Régler ». Les avertissements d'abonnement y figurent aussi.
+- **Badge « N agent(s) à régénérer » et bouton « Régénérer »** quand le
+  corps d'un agent a changé.
+
+### À faire après la mise à jour
+
+1. Redémarre le dashboard.
+2. Sur chaque projet qui a l'équipe d'agents : Configuration > Ré-appliquer,
+   puis relance Claude Code.
+
 ## 2.6.0 - 2026-10-17
 
 ### Nouveautés

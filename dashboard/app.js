@@ -38,9 +38,8 @@ const WS_TABS = [
   ['extensions', 'Extensions'],
   ['sessions', 'Sessions'],
   ['fichiers', 'Fichiers'],
-  // Onglet optionnel : present seulement si le module claude-team est actif
-  // (STATE.overlaysActive). 3e element = overlay requis.
-  ['amelioration', 'Amélioration', CLAUDE_TEAM_ID],
+  // Les onglets optionnels portent un 3e element = overlay requis
+  // (STATE.overlaysActive) ; aucun pour l'instant.
 ];
 // Onglets a afficher pour un workspace (les optionnels selon les modules actifs).
 function wsTabsFor(wsId) {
@@ -258,7 +257,6 @@ async function renderWorkspace(wsId, tab) {
   if (animate) countUp(page);
   wsUpdateDirtyDots();
   if (current !== 'extensions' && !prev) wsPrefetchExtCounts(wsId);
-  if (tabKeys.includes('amelioration') && current !== 'amelioration') wsPrefetchImprovementCount(wsId);
 }
 
 function wsTabButtonHtml(k, l, on, count) {
@@ -268,11 +266,6 @@ function wsTabPanelHtml(k) {
   return `<section class="ws-tabpanel" id="ws-panel-${k}" role="tabpanel" aria-labelledby="ws-tab-${k}" tabindex="0" data-panel="${k}" hidden></section>`;
 }
 
-// Badge de l'onglet Amelioration = nombre d'iterations du journal (GET leger).
-function wsPrefetchImprovementCount(wsId) {
-  API.get(`/api/workspaces/${wsId}/improvement`)
-    .then(r => wsSetTabCount(wsId, 'amelioration', ((r.stats || {}).iterations) || 0)).catch(() => {});
-}
 function wsSetTabCount(wsId, key, n) {
   if (!WS_PAGE || WS_PAGE.wsId !== wsId || !WS_PAGE.root.isConnected) return;
   const tab = WS_PAGE.root.querySelector(`#ws-tab-${key}`);
@@ -298,7 +291,6 @@ function wsSyncOptionalTabs() {
     bar.insertAdjacentHTML('beforeend', wsTabButtonHtml(k, l, false));
     lastPanel().insertAdjacentHTML('afterend', wsTabPanelHtml(k));
     WS_PAGE.panels[k] = { el: WS_PAGE.root.querySelector(`#ws-panel-${k}`), mounted: false, isDirty: () => false };
-    if (k === 'amelioration') wsPrefetchImprovementCount(WS_PAGE.wsId);
   }
   for (const k of Object.keys(WS_PAGE.panels)) {
     if (wantKeys.includes(k)) continue;
@@ -365,7 +357,6 @@ function wsMountPanel(key) {
   else if (key === 'extensions') mountWsExtensionsTab(w, p);
   else if (key === 'sessions') mountWsSessionsTab(w, p);
   else if (key === 'fichiers') mountWsFilesTab(w, p);
-  else if (key === 'amelioration') mountWsImprovementTab(w, p);  // js/pages/improvement.js
 }
 
 // Rafraichit des onglets apres une action (au lieu d'un route() qui
@@ -445,8 +436,12 @@ function wsRefreshSiBadge() {
   if (wsHasOverlay(WS_PAGE.wsId, CLAUDE_TEAM_ID)) {
     const b = el('button', 'pill accent', `${I.cpu}Équipe d'agents`);
     b.type = 'button';
-    b.title = "Équipe d'agents et amélioration mesurée active : voir l'onglet Amélioration";
-    b.addEventListener('click', () => wsSelectTab('amelioration', true));
+    b.title = "Équipe d'agents active : routage, relecture, modèle et effort sur la ligne du module (onglet Configuration)";
+    b.addEventListener('click', () => {
+      wsSelectTab('config', true);
+      const mod = WS_PAGE.root.querySelector('#ws-panel-config .mods');
+      if (mod) mod.scrollIntoView({ behavior: motionOK() ? 'smooth' : 'auto', block: 'nearest' });
+    });
     slot.appendChild(b);
   }
 }
@@ -815,12 +810,15 @@ async function renderWsOverlays(wsId, host) {
         <div class="mod-h"><h3>${escapeHtml(ov.label || ov.id)}</h3>${ov.active ? '<span class="pill ok"><span class="sdot"></span>Actif</span>' : '<span class="pill mute">Inactif</span>'}${routing ? teamRoutingPillHtml(routing) : ''}${reqPills}</div>
         <p>${escapeHtml(ov.description || '')}</p>
         ${routing ? teamRoutingBlockHtml(routing) : ''}
+        ${ov.active && ov.id === CLAUDE_TEAM_ID ? '<div class="mod-routing mod-teamcfg" data-teamcfg></div>' : ''}
         ${ov.active && (ov.features || []).length ? '<button type="button" class="mod-more" aria-expanded="false">Ce que le module installe ' + I.right + '</button>' : ''}
         ${overlayFeaturesHtml(ov)}
         ${missing.length && !ov.active ? `<div class="mod-req">${I.alert}<span>Requiert ${missing.map(r => `<b>${escapeHtml((byId.get(r) || {}).label || r)}</b>`).join(', ')} : <button type="button" class="linklike" data-req="${escapeHtml(missing[0])}">activer d'abord ce module</button>.</span></div>` : ''}
       </div>
       <div class="mod-act"><small>${n} fichier${n > 1 ? 's' : ''}${ov.active ? '' : ', idempotent'}</small></div>`;
     if (routing) bindTeamRouting(wsId, row, routing);
+    const tcSlot = row.querySelector('[data-teamcfg]');
+    if (tcSlot) mountTeamConfigRow(wsId, tcSlot);  // js/pages/team-config.js
     const actions = row.querySelector('.mod-act');
     const applyBtn = ov.active ? btn('Ré-appliquer', 'btn-sm', I.refresh) : btn('Activer', 'btn-primary', I.plus);
     applyBtn.title = ov.active
@@ -927,7 +925,7 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
   const EFFORTS = [TEAM_EFFORT_CHOICES[0], ...levels.map(v => TEAM_EFFORT_CHOICES.find(e => e[0] === v) || [v, v])];
   const optList = (list, cur) => list.map(([v, l]) => `<option value="${escapeHtml(v)}"${v === (cur || '') ? ' selected' : ''}>${escapeHtml(l)}</option>`).join('');
   // Itération /improve en attente de verdict (GET /team) : modèles et
-  // efforts verrouillés comme dans la carte de l'onglet Amélioration, et
+  // efforts verrouillés comme dans la ligne « Modèle et effort » du module, et
   // jamais envoyés (le candidat serait mesuré sur une autre configuration).
   const pend = hasTeam && ov.active ? (wsTeam.pending || null) : null;
   body.innerHTML = `
@@ -5501,9 +5499,9 @@ const TOURS = {
       target: '.module-card[data-overlay="claude-team"], .mods-sec, .page', navigate: '#/templates',
     },
     {
-      title: '📈 L\'onglet Amélioration',
-      body: `<p>Une fois l'équipe activée, l'onglet <strong>Amélioration</strong> du workspace suit une boucle <strong>mesurée</strong> : un changement d'agent n'est gardé que s'il améliore le score des évals, sans aucune régression.</p>
-        <p>Le <em>mode automatique</em> est désactivé par défaut et plafonné par un budget. Le détail est dans l'Aide, thème Modules.</p>`,
+      title: '🧭 Équipe réglée sur la ligne du module',
+      body: `<p>Dans l'onglet <strong>Configuration</strong> du workspace, la ligne du module claude-team porte le <strong>routage</strong> (Manuel, Assisté, Auto), la <strong>relecture du code</strong> (toujours, dès 3 fichiers, jamais) et <strong>Modèle et effort</strong> (bouton « Régler », propositions expliquées).</p>
+        <p>L'amélioration se fait au fil des conversations : Claude note les frictions de l'équipe dans <code class="mono">improvements.md</code> et propose le correctif, tu valides.</p>`,
       target: '#h-modules, .page', navigate: '#/aide/modules',
     },
     {

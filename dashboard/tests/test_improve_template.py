@@ -1,4 +1,4 @@
-"""Gabarit /improve : documentation du journal écrit par Nebula."""
+"""Gabarit /improve : /improve manuel uniquement (plus de runner Nebula)."""
 from __future__ import annotations
 
 import json
@@ -15,8 +15,9 @@ class ImproveTemplateTests(unittest.TestCase):
     def test_mentions(self):
         for f in (IMPROVE, LOOP):
             text = f.read_text(encoding="utf-8")
-            for word in ("branch: null", "runner", "failures_after"):
-                self.assertIn(word, text, f"{f.name} : {word}")
+            self.assertIn("failures_after", text, f.name)
+            self.assertNotIn("runner: nebula", text, f.name)
+            self.assertNotIn('runner: "nebula"', text, f.name)
 
     def test_pas_de_tiret_cadratin(self):
         for f in (IMPROVE, LOOP):

@@ -56,8 +56,7 @@ deux `/improve` :
 | 1 : candidat | A | baseline, critique, diff appliqué, agents régénérés, cible sauvegardée dans `.claude/journal/pending/<n>/` | ligne `status: pending` (`baseline_version` = empreinte mesurée, `config_version` = empreinte du candidat) |
 | 2 : verdict | B (nouvelle) | contrôle de l'empreinte, mesure, accepté ou restauré | ligne de résolution, même `iteration` (la dernière ligne d'une itération fait foi) |
 
-Un seul candidat en attente à la fois. Nebula (onglet Amélioration)
-affiche « Candidat n à mesurer » tant que la résolution n'est pas
+Un seul candidat en attente à la fois. Nebula affiche « Candidat n à mesurer » tant que la résolution n'est pas
 journalisée, et « altéré » si l'empreinte courante n'est plus celle du
 candidat. Si la cible n'est pas suivie par git (`.claude/` ignoré),
 `commit: null` et `untracked: true` ; l'amélioration acceptée est à
@@ -124,21 +123,13 @@ contient n'est pas réutilisée). Une ligne invalide est ignorée par
 l'onglet « Amélioration » de Nebula (comptée comme invalide), jamais
 réécrite.
 
-### Lignes écrites par Nebula
+### Champs optionnels
 
-Le moteur d'itération de Nebula écrit dans le même journal. Ses lignes
-portent `runner: "nebula"` et un `job_id`, et diffèrent ainsi :
-
-- `branch: null` : pas de branche `improve/<n>` ; une ligne `pending`
-  avec `branch: null` ou `runner: nebula` n'a rien à fusionner. Sa
-  sauvegarde est dans `.claude/journal/pending/<n>/`.
-- `diff_archive` : chemin de l'archive d'un candidat écarté,
-  `.claude/journal/rejected/<n>/candidate.diff`.
-- `failures_after` : ids des cas échoués après le candidat, écrit sur la
-  ligne de résolution (à reproduire aussi en manuel).
-- Champs de coût **optionnels**, jamais exigés : `cost_usd`, `tokens`,
-  `duration_ms`, `calls`, et `reason` (motif du verdict). Une ligne
-  manuelle valide peut tous les omettre.
+`failures_after` : ids des cas échoués après le candidat, écrit sur la
+ligne de résolution. `diff_archive` (chemin d'un candidat écarté,
+`.claude/journal/rejected/<n>/candidate.diff`), `cost_usd`, `tokens`,
+`duration_ms`, `calls` et `reason` sont optionnels, jamais exigés. `/improve`
+reste manuel : Nebula ne lance aucune itération.
 
 ## Pont avec `improvements.md`
 
