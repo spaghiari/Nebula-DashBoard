@@ -875,6 +875,34 @@ async function renderWsOverlays(wsId, host) {
 const TEAM_MODEL_CHOICES = [['sonnet', 'sonnet (rapide)'], ['opus', 'opus (profond)'], ['haiku', 'haiku (léger)'], ['fable', 'fable'], ['inherit', 'inherit : modèle de la session']];
 const TEAM_EFFORT_CHOICES = [['', 'effort : défaut de la session'], ['low', 'effort faible'], ['medium', 'effort moyen'], ['high', 'effort élevé'], ['xhigh', 'effort très élevé'], ['max', 'effort max']];
 
+// Avertissements de consommation selon l'abonnement (GET
+// /api/claude/subscription : `rules` recalculées en direct à chaque changement
+// de sélecteur). Effort vide = medium ; `auto` toujours faux dans la modale.
+const TEAM_EFFORT_ORDER = ['low', 'medium', 'high', 'xhigh', 'max'];
+function teamSubWarnings(sub, picks) {
+  if (!sub || !Array.isArray(sub.rules)) return [];
+  const rank = e => Math.max(0, TEAM_EFFORT_ORDER.indexOf(e || 'medium'));
+  const out = [];
+  for (const r of sub.rules) {
+    const w = r.when || {};
+    if (w.plan && w.plan !== sub.plan) continue;
+    if (w.auto) continue;
+    if (w.conflict && !sub.conflict) continue;
+    if (w.model === undefined && w.effort_min === undefined) {
+      out.push({ code: r.code, level: r.level, message: r.message, agents: [] });
+      continue;
+    }
+    const hit = picks.filter(p => (w.model === undefined || String(p.model || '').toLowerCase().includes(String(w.model).toLowerCase()))
+      && (w.effort_min === undefined || rank(p.effort) >= rank(w.effort_min))).map(p => p.id);
+    if (hit.length) out.push({ code: r.code, level: r.level, message: r.message, agents: hit });
+  }
+  return out;
+}
+
+function teamSubWarnHtml(list) {
+  return list.map(w => `<div class="callout ${w.level === 'alert' ? 'callout-warn' : 'callout-info'}" style="margin-top:var(--sp-2)"><div>${escapeHtml(w.message)}${w.agents.length ? ` (${w.agents.map(a => escapeHtml(a)).join(', ')})` : ''}</div></div>`).join('');
+}
+
 function modalApplyOverlay(wsId, ov, host, opts = {}) {
   const hasTeam = (ov.generators || []).includes('team_agents');
   // Module équipe déjà actif : modèles et efforts pré-remplis depuis le
@@ -965,6 +993,7 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
           <select class="select" name="model-${escapeHtml(a.id)}" data-agent="${escapeHtml(a.id)}" aria-label="Modèle de ${escapeHtml(a.id)}"${pend ? ' disabled' : ''}>${optList(MODELS, a.model)}</select>
           <select class="select" name="effort-${escapeHtml(a.id)}" data-effort="${escapeHtml(a.id)}" data-initial="${escapeHtml(a.effort || '')}" aria-label="Effort de ${escapeHtml(a.id)}"${pend ? ' disabled' : ''}>${optList(EFFORTS, a.effort)}</select>
         </div>`).join('')}</div>
+      <div data-sub-warn aria-live="polite"></div>
     </div>
     ${ov.active ? `<label class="xswitch" style="padding:0"><input type="checkbox" name="regenerate"> Régénérer les agents générés par Nebula (ceux qui portent encore le marqueur généré)</label>` : ''}` : ''}
   `;
@@ -982,6 +1011,24 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
     };
     modeSel.addEventListener('change', syncMode);
     syncMode();
+  }
+
+  // Avertissements d'abonnement en direct ; route en échec = rien d'affiché.
+  const warnBox = body.querySelector('[data-sub-warn]');
+  if (warnBox) {
+    let sub = null;
+    const refreshWarn = () => {
+      const mSel = new Map([...body.querySelectorAll('select[data-agent]')].map(x => [x.dataset.agent, x]));
+      const eSel = new Map([...body.querySelectorAll('select[data-effort]')].map(x => [x.dataset.effort, x]));
+      const picks = agents.map(a => {
+        const m = mSel.get(a.id);
+        const e = eSel.get(a.id);
+        return { id: a.id, model: m ? m.value : a.model, effort: e ? e.value || null : null };
+      });
+      warnBox.innerHTML = teamSubWarnHtml(teamSubWarnings(sub, picks));
+    };
+    body.addEventListener('change', ev => { if (ev.target.matches && ev.target.matches('select[data-agent], select[data-effort]')) refreshWarn(); });
+    API.get(`/api/claude/subscription?ws=${encodeURIComponent(wsId)}`).then(r => { sub = r; refreshWarn(); }).catch(() => {});
   }
 
   const cancel = btn('Annuler', 'btn-ghost');
@@ -5401,44 +5448,69 @@ const TOURS = {
   main: [
     {
       title: '👋 Bienvenue dans Nebula',
-      body: `<p>Nebula pilote ton écosystème <strong>Claude Code</strong> en local. En 8 étapes (~2 min), je te montre l'essentiel.</p>
+      body: `<p>Nebula pilote ton écosystème <strong>Claude Code</strong> en local : projets, outils, mais aussi <strong>modules</strong> (auto-amélioration, équipe d'agents) et mises à jour. En 13 étapes (~3 min), je te montre l'essentiel.</p>
         <p class="dim" style="font-size:12px">Tu peux <kbd>Échap</kbd> à tout moment, ou cliquer "Passer". Tu pourras relancer cette visite quand tu veux.</p>`,
       target: null, navigate: '#/',
     },
     {
-      title: '📁 Workspaces — tes projets Claude',
+      title: '📁 Workspaces : tes projets Claude',
       body: `<p>Chaque workspace = un projet Claude Code (un dossier avec son <code class="mono">CLAUDE.md</code>, ses MCPs scopés, ses skills).</p>
         <p>D'ici, tu lances <em>claude</em> directement dans le bon dossier d'un clic.</p>`,
       target: '#ws-host, .empty', navigate: '#/',
     },
     {
-      title: '➕ Créer un workspace',
-      body: `<p>Le bouton <strong>Nouveau workspace</strong> en haut à droite te lance la création depuis un template (Standard, Python, Node…). On copie l'arborescence et on remplace les <code class="mono">{{placeholders}}</code>.</p>`,
+      title: '➕ Créer ou retrouver tes projets',
+      body: `<p><strong>Nouveau workspace</strong> crée un projet depuis un template. <strong>Adopter</strong> enregistre un dossier qui existe déjà : bouton <em>Parcourir…</em> pour le choisir, ou l'onglet <em>Plusieurs projets d'un dossier</em> pour en adopter plusieurs d'un coup.</p>
+        <p>Adopter ne copie rien et ne modifie rien dans ton dossier.</p>`,
       target: '#topbar-actions', navigate: '#/',
     },
     {
-      title: '🔌 MCPs — super-pouvoirs de Claude',
+      title: '🔌 MCPs : super-pouvoirs de Claude',
       body: `<p>Les <strong>MCPs</strong> (Model Context Protocol) donnent à Claude accès à des outils externes : filesystem, GitHub, n8n, ta base de données…</p>
         <p>Pas besoin d'écrire du JSON : utilise les <strong>recettes</strong> (catalogue 1-clic) ou le formulaire visuel. Nebula sync automatiquement vers les workspaces ciblés.</p>`,
       target: '.page', navigate: '#/mcps',
     },
     {
-      title: '🔐 Secrets — <code class="mono">.env.local</code>',
+      title: '🔐 Secrets : <code class="mono">.env.local</code>',
       body: `<p>Tokens, API keys, mots de passe : <strong>jamais en dur</strong> dans tes configs MCP ou templates. Tu les stockes ici une fois et tu les réutilises avec <code class="mono">\${MA_VAR}</code> dans n'importe quel champ MCP.</p>
-        <p>Sur Windows, tu peux <strong>chiffrer le fichier en un clic</strong> avec le bouton <em>Activer le chiffrement</em> — illisible si copié ailleurs ou ouvert par un autre compte, transparent à l'usage.</p>`,
+        <p>Sur Windows, tu peux <strong>chiffrer le fichier en un clic</strong> avec le bouton <em>Activer le chiffrement</em> : illisible si copié ailleurs ou ouvert par un autre compte, transparent à l'usage.</p>`,
       target: '.page', navigate: '#/tools',
     },
     {
-      title: '🧠 Skills — bibliothèque centrale',
+      title: '🧠 Skills : bibliothèque centrale',
       body: `<p>Les <strong>skills</strong> sont des compétences réutilisables (prompts longs structurés) que Claude active dynamiquement.</p>
         <p>Le modèle "magasin" : tu maintiens une bibliothèque, et tu <strong>distribues</strong> chaque skill vers Global et/ou des workspaces spécifiques. Une seule édition, plusieurs cibles.</p>`,
       target: '.page', navigate: '#/skills',
     },
     {
-      title: '📦 Templates — moules de workspaces',
-      body: `<p>Un template, c'est l'arborescence de fichiers copiée à chaque <em>Nouveau workspace</em>. Le bouton <strong>+ Nouveau template</strong> propose des starters (Standard, Python, Node, Docker).</p>
-        <p>Chaque template a un panneau <em>Conseils & qualité</em> qui scanne les bonnes pratiques.</p>`,
-      target: '.page', navigate: '#/templates',
+      title: '🧩 Modules : des super-pouvoirs à poser sur un projet',
+      body: `<p>La page <strong>Templates</strong> contient les moules de workspaces, et surtout la section <strong>Modules</strong> : des ajouts qui se posent <em>par-dessus</em> un projet, sans écraser un seul de ses fichiers.</p>
+        <p>Pour en activer un : <em>Activer sur un workspace…</em>. Ensuite, dans le workspace, onglet <strong>Configuration</strong> : <em>Ré-appliquer</em> met le module à jour, <em>Retirer</em> montre d'abord un aperçu et ne supprime rien (tout part dans une archive).</p>`,
+      target: '.mods-sec, .page', navigate: '#/templates',
+    },
+    {
+      title: '🔁 Auto-amélioration de Claude',
+      body: `<p>Ce module donne une <strong>mémoire</strong> à ton projet : conventions, pièges rencontrés, idées et actions à faire sont notés dans des registres versionnés.</p>
+        <p>Résultat : Claude apprend de ton projet au fil des sessions et ne repart plus de zéro. Active-le depuis sa carte.</p>`,
+      target: '.module-card[data-overlay="claude-self-improving"], .mods-sec, .page', navigate: '#/templates',
+    },
+    {
+      title: '👥 Équipe d\'agents',
+      body: `<p>Ce module ajoute <strong>7 agents</strong> : orchestrateur, chercheur, architecte, exécutant, relecteur, évaluateur et critique. Tape <code class="mono">/team &lt;objectif&gt;</code> dans Claude et le travail est découpé et réparti entre eux.</p>
+        <p>Le routage est automatique, et tu peux régler le <strong>modèle</strong> et l'<strong>effort</strong> de chaque agent. Attention au coût : un agent sur <em>opus</em> consomme davantage, surtout avec un abonnement Pro.</p>`,
+      target: '.module-card[data-overlay="claude-team"], .mods-sec, .page', navigate: '#/templates',
+    },
+    {
+      title: '📈 L\'onglet Amélioration',
+      body: `<p>Une fois l'équipe activée, l'onglet <strong>Amélioration</strong> du workspace suit une boucle <strong>mesurée</strong> : un changement d'agent n'est gardé que s'il améliore le score des évals, sans aucune régression.</p>
+        <p>Le <em>mode automatique</em> est désactivé par défaut et plafonné par un budget. Le détail est dans l'Aide, thème Modules.</p>`,
+      target: '#h-modules, .page', navigate: '#/aide/modules',
+    },
+    {
+      title: '🔄 Mises à jour de Nebula',
+      body: `<p>Dans <strong>Outils</strong>, la section <em>Mises à jour</em> vérifie à chaque ouverture si une nouvelle version existe. Un badge <strong>MAJ</strong> apparaît alors dans l'interface.</p>
+        <p>Tu y trouves aussi les liens vers le projet et les notes de version.</p>`,
+      targetLabel: 'Mises à jour', target: '.tools-stack, .page', navigate: '#/tools',
     },
     {
       title: '🛡️ Santé + Journal sur la home',
@@ -5447,16 +5519,33 @@ const TOURS = {
           <li><strong>Santé</strong> : signale les configs MCP cassées, désynchronisées ou inutilisées.</li>
           <li><strong>Journal</strong> : tes notes rapides projet par projet.</li>
         </ul>`,
-      target: '.rail', navigate: '#/',
+      target: '.rail, .page', navigate: '#/',
     },
     {
       title: '🎯 Tu sais l\'essentiel',
-      body: `<p>Pour aller plus loin : la page <strong>Aide</strong> détaille tout (raccourcis, dépannage, modèles avancés). Tu peux <strong>relancer cette visite</strong> à tout moment depuis Aide → bouton "Visite guidée".</p>
+      body: `<p>Pour aller plus loin : la page <strong>Aide</strong> détaille tout (modules, raccourcis, dépannage). Tu peux <strong>relancer cette visite</strong> à tout moment depuis Aide → bouton "Visite guidée".</p>
         <p style="margin-top:8px">Bon code !</p>`,
       target: null,
     },
   ],
 };
+
+// Cible d'une étape : liste de sélecteurs (repli dans l'ordre) ; `targetLabel` vise d'abord
+// le titre de section (.section-label) contenant ce texte, avec repli sur `target`.
+function _tourResolveTarget(step) {
+  if (step.targetLabel) {
+    const lab = [...document.querySelectorAll('.section-label')]
+      .find(n => n.textContent.includes(step.targetLabel));
+    if (lab) return lab;
+  }
+  if (!step.target) return null;
+  // Priorité à l'ordre de la liste (querySelector prendrait le premier dans le DOM).
+  for (const sel of step.target.split(',')) {
+    const n = document.querySelector(sel.trim());
+    if (n) return n;
+  }
+  return null;
+}
 
 function _ensureTourOverlay() {
   let overlay = document.getElementById('tour-overlay');
@@ -5539,6 +5628,15 @@ async function tourGoto(idx) {
   }
   // Petit délai pour les animations CSS
   await new Promise(r => setTimeout(r, 80));
+  // Page rendue en asynchrone (cartes de modules...) : on laisse jusqu'a 3 s
+  // au premier sélecteur de la cible pour apparaitre, sinon repli sur la suite.
+  if (step.target) {
+    const first = step.target.split(',')[0].trim();
+    for (let k = 0; k < 60 && !document.querySelector(first) && STATE.tour && STATE.tour.step === idx; k++) {
+      await new Promise(r => setTimeout(r, 50));
+    }
+  }
+  if (!STATE.tour || STATE.tour.step !== idx) return;
 
   const overlay = _ensureTourOverlay();
   overlay.classList.add('is-active');
@@ -5548,7 +5646,7 @@ async function tourGoto(idx) {
   overlay.querySelector('[data-tour-prev]').disabled = idx === 0;
   overlay.querySelector('[data-tour-next]').textContent = idx === def.length - 1 ? 'Terminer ✓' : 'Suivant →';
 
-  const targetEl = step.target ? document.querySelector(step.target) : null;
+  const targetEl = _tourResolveTarget(step);
   _positionTourBubble(targetEl);
   try { sessionStorage.setItem('nebula-tour-progress', JSON.stringify({ name: STATE.tour.name, step: idx })); } catch {}
 }
@@ -5597,7 +5695,7 @@ function _tourKeyHandler(e) {
 function _tourResizeHandler() {
   if (!STATE.tour) return;
   const step = STATE.tour.definition[STATE.tour.step];
-  const targetEl = step.target ? document.querySelector(step.target) : null;
+  const targetEl = _tourResolveTarget(step);
   _positionTourBubble(targetEl);
 }
 

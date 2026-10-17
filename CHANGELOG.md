@@ -4,6 +4,49 @@ Les nouveautés de Nebula, version par version. La plus récente est en haut.
 La mise à jour se fait depuis Nebula : badge « MAJ » en haut de l'écran, ou
 Outils > Mises à jour.
 
+## 2.6.0 - 2026-10-17
+
+### Nouveautés
+
+- **Boucle d'amélioration pilotée par Nebula** : bouton « Lancer une
+  itération » dans l'onglet Amélioration. Nebula fait tourner Claude Code en
+  arrière-plan (permissions restreintes, jamais de contournement) : mesure
+  de départ, une seule proposition du critique, mesure du candidat, puis
+  verdict. Un changement n'est gardé (et commité sur ta branche courante)
+  que s'il améliore le score sans aucune régression ; sinon tout revient à
+  l'identique et le diff écarté est archivé. Bouton « Arrêter » à tout
+  moment, plafonds de 4 $ estimés par itération et 12 $ par jour.
+- **Mode automatique** (désactivé par défaut) : jusqu'à N itérations par
+  jour (de 1 à 10). Il attend qu'aucune session Claude Code ne soit ouverte
+  sur le projet (il voit celles lancées par Nebula ou actives récemment),
+  se met en pause si ton quota est atteint (reprise à l'heure de réinitialisation
+  annoncée) ou après plusieurs rejets d'affilée (reprise sur ton clic).
+- **Onglet Amélioration repensé** : la prochaine étape en premier, puis le
+  score, le taux d'itérations gardées, le gain cumulé, la consommation et
+  la durée moyennes, et une frise des itérations (pourquoi un changement a été gardé ou
+  écarté).
+- **Abonnement Claude détecté** (Pro, Max, API) depuis la configuration
+  locale de Claude Code, sans lire tes jetons, et corrigeable dans Outils.
+  Des avertissements signalent les réglages gourmands pour ton abonnement,
+  à l'activation de l'équipe et dans l'onglet Amélioration.
+- **Visite guidée enrichie** : 13 étapes, dont les modules, l'équipe
+  d'agents et l'amélioration mesurée.
+- **Méthode de délégation sobre** pour l'équipe d'agents : petites tâches
+  sur des fichiers distincts, en parallèle, l'exécutant économique par
+  défaut, des tests ciblés pendant le travail et la suite complète une
+  seule fois à la fin. Les sessions longues et coûteuses deviennent rares.
+
+### À faire après la mise à jour
+
+1. Redémarre le dashboard.
+2. Sur chaque projet où l'équipe d'agents est active : onglet
+   Configuration, ligne « Équipe d'agents », **Ré-appliquer**. Cela installe
+   la nouvelle méthode de délégation et la commande `/improve` qui
+   comprend les itérations lancées par Nebula (l'ancienne version est
+   sauvegardée en `.bak`). Relance ensuite Claude Code sur ce projet.
+3. Vérifie ton abonnement dans Outils, carte « Mon abonnement Claude », et corrige-le
+   si la détection se trompe.
+
 ## 2.5.0 - 2026-10-17
 
 ### Nouveautés

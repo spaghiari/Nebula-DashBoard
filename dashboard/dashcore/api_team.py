@@ -26,6 +26,7 @@ Stdlib only ; toute écriture sous _MUTATION_LOCK (réentrant).
 """
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 import json
 import re
@@ -852,6 +853,28 @@ def _claude_path(ws_dir: Path, rel: str) -> Path | None:
     return p if p.is_relative_to(base) else None
 
 
+BASELINE_FILE = "journal/baseline.json"
+
+
+def read_baseline_file(ws_dir: Path) -> dict | None:
+    """Mesure de référence durable posée par le job `measure` de Nebula
+    (`.claude/journal/baseline.json`). None si absente ou illisible."""
+    p = _claude_path(ws_dir, BASELINE_FILE)
+    if p is None or not p.is_file():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict) or not isinstance(d.get("config_version"), str):
+        return None
+    if isinstance(d.get("score"), bool) or not isinstance(d.get("score"), (int, float)):
+        return None
+    if not isinstance(d.get("failures"), list):
+        return None
+    return d
+
+
 def _parse_journal(path: Path) -> tuple[list[dict], int]:
     """Lignes JSON du journal (objets seulement) + nombre de lignes invalides."""
     entries: list[dict] = []
@@ -946,7 +969,9 @@ def improvement_state(ws_id: str) -> tuple[int, dict]:
             # config_version d'une ligne pending est celle du CANDIDAT).
             "baseline_version": str(e.get("baseline_version") or "") or None,
             "untracked": bool(e.get("untracked")),
+            "_raw": e,
         })
+    _enrich_journal(journal)
     # Protocole en deux phases (cf. commands/improve.md) : une itération
     # peut avoir une ligne `pending` (candidat posé, session A) puis une
     # ligne de résolution (session B). La DERNIÈRE ligne d'une itération
@@ -987,6 +1012,23 @@ def improvement_state(ws_id: str) -> tuple[int, dict]:
         last_entry and config_hash and last_entry["config_version"] == config_hash
         and not last_entry["unrunnable"]
     )
+    # Mesure autonome (job `measure`) : baseline.json, sans ligne de journal.
+    bfile = read_baseline_file(ws_dir) if manifest is not None else None
+    last_measure = None
+    if bfile:
+        unr = bfile.get("unrunnable") if isinstance(bfile.get("unrunnable"), int) else 0
+        cur = bool(config_hash and bfile["config_version"] == config_hash)
+        last_measure = {"score": float(bfile["score"]),
+                        "measured_at": str(bfile.get("measured_at") or ""),
+                        "unrunnable": unr, "config_version": bfile["config_version"],
+                        "current": cur}
+        if cur and not unr:
+            baseline_current = True
+    baseline_version = last_entry["config_version"] if last_entry else None
+    if baseline_version is None and last_measure:
+        baseline_version = last_measure["config_version"]
+    if last_score is None and last_measure:
+        last_score = last_measure["score"]
     # Candidat en attente de verdict : toujours en place si son empreinte
     # est l'empreinte courante (sinon il a été altéré entre les sessions).
     pending_info = None
@@ -1000,18 +1042,20 @@ def improvement_state(ws_id: str) -> tuple[int, dict]:
             "baseline_version": pending["baseline_version"],
             "in_place": bool(config_hash and pending["config_version"] == config_hash),
         }
-    return 200, {
+    stats_extra = _extra_stats(journal, by_iter, resolved)
+    result = {
         "active": manifest is not None,
         "journal": journal,
         "invalid_lines": invalid,
         "config_hash": config_hash,
         "baseline_current": baseline_current,
-        "baseline_version": last_entry["config_version"] if last_entry else None,
+        "baseline_version": baseline_version,
+        "last_measure": last_measure,
         "pending": pending_info,
         "stats": {"iterations": len(by_iter), "accepted": accepted, "rejected": rejected,
                   "pending": len(pending_entries),
                   "last_score": last_score, "scores": scores,
-                  "consecutive_rejects": streak},
+                  "consecutive_rejects": streak, **stats_extra},
         "loop": {k: loop.get(k) for k in ("accept_if", "max_iterations",
                                            "stop_after_consecutive_rejects", "runs_per_eval")},
         "evals": {
@@ -1021,7 +1065,243 @@ def improvement_state(ws_id: str) -> tuple[int, dict]:
             "holdout_cases": _count_jsonl(holdout_p) if holdout_p else 0,
         },
         "registers": registers,
+        "todo_items": _todo_items(ws_dir / ".claude" / "improvements.md"),
+        "cases": _cases_summary(eval_p, entries),
     }
+    result["next_step"] = next_step(result)
+    return 200, result
+
+
+# --- Métriques de l'onglet Amélioration ----------------------------------------
+
+_TOKEN_KEYS = ("input", "output", "cache_read", "cache_creation")
+
+
+def _num(v):
+    """Nombre >= 0 (bool exclu), sinon None."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    return v if v >= 0 else None
+
+
+def _enrich_journal(journal: list[dict]) -> None:
+    """Ajoute à chaque ligne les métriques AGRÉGÉES de son itération (coût,
+    jetons, durée, appels : sommes de la ligne `pending` et de la ligne de
+    résolution), calculées avant la règle « la dernière ligne fait foi ».
+    Les sommes sont répétées sur chaque ligne d'une même itération : pour
+    totaliser, passer par `stats`. Retire la clé interne `_raw`."""
+    groups: dict = {}
+    for j in journal:
+        groups.setdefault(j["iteration"], []).append(j)
+    for lines in groups.values():
+        raws = [j["_raw"] for j in lines]
+        costs = [c for c in (_num(r.get("cost_usd")) for r in raws) if c is not None]
+        durs = [c for c in (_num(r.get("duration_ms")) for r in raws) if c is not None]
+        calls = [c for c in (_num(r.get("calls")) for r in raws) if c is not None]
+        tok_lines = [r["tokens"] for r in raws if isinstance(r.get("tokens"), dict)]
+        tokens = None
+        if tok_lines:
+            tokens = {k: sum(_num(t.get(k)) or 0 for t in tok_lines) for k in _TOKEN_KEYS}
+        nebula = any(r.get("runner") == "nebula" for r in raws)
+
+        def last(key, raws=raws):
+            for r in reversed(raws):
+                if r.get(key) not in (None, ""):
+                    return r[key]
+            return None
+
+        fa = last("failures_after")
+        if isinstance(fa, list):
+            fa = len(fa)
+        elif not isinstance(fa, int) or isinstance(fa, bool):
+            fa = None
+        reason, archive = last("reason"), last("diff_archive")
+        agg = {
+            "cost_usd": round(sum(costs), 6) if costs else None,
+            "tokens": tokens,
+            "duration_ms": sum(durs) if durs else None,
+            "calls": sum(calls) if calls else None,
+            "runner": "nebula" if nebula else "manual",
+            "reason": str(reason) if reason is not None else None,
+            "diff_archive": str(archive) if archive is not None else None,
+            "failures_after": fa,
+        }
+        for j in lines:
+            j.update(agg)
+    for j in journal:
+        j.pop("_raw", None)
+
+
+def _extra_stats(journal: list[dict], by_iter: dict, resolved: list[dict]) -> dict:
+    """Statistiques ajoutées : taux d'acceptation, gain cumulé, coûts moyens,
+    itérations Nebula du jour (date locale)."""
+    acc = [j for j in resolved if j["status"] == "accepted"]
+    gains = [j["score_after"] - j["score_before"] for j in acc
+             if j["score_after"] is not None and j["score_before"] is not None]
+    costs = [j["cost_usd"] for j in by_iter.values() if j["cost_usd"] is not None]
+    toks = [j["tokens"] for j in by_iter.values() if j["tokens"] is not None]
+    today = _dt.date.today().isoformat()
+    first_date: dict = {}
+    for j in journal:  # date de DÉMARRAGE = 1re ligne de l'itération
+        first_date.setdefault(j["iteration"], j["date"])
+    today_n = sum(1 for it, j in by_iter.items()
+                  if j["runner"] == "nebula" and first_date.get(it, "")[:10] == today)
+    return {
+        "acceptance_rate": round(len(acc) / len(resolved), 4) if resolved else None,
+        "cumulative_gain": round(sum(gains), 4),
+        "avg_cost_usd": round(sum(costs) / len(costs), 6) if costs else None,
+        "avg_tokens": ({k: round(sum(t[k] for t in toks) / len(toks), 1) for k in _TOKEN_KEYS}
+                       if toks else None),
+        "today_iterations": today_n,
+    }
+
+
+_PRIO_RE = re.compile(r"\(\s*(P\d)\b")
+_DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+
+
+def _todo_items(path: Path) -> list[dict]:
+    """Items `[TODO]` d'improvements.md : `{title, priority, date}` (lecture seule)."""
+    from dashcore.improve_engine import extract_todo_items  # import tardif : cycle
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, ValueError):
+        return []
+    out = []
+    for it in extract_todo_items(text):
+        head = it["block"].splitlines()[0] if it["block"] else ""
+        pm, dm = _PRIO_RE.search(head), _DATE_RE.search(head)
+        out.append({"title": it["title"], "priority": pm.group(1) if pm else None,
+                    "date": dm.group(1) if dm else None})
+    return out
+
+
+def _cases_summary(eval_p: Path | None, entries: list[dict]) -> list[dict]:
+    """Résumé du jeu d'évals : `{id, agent, grader, last_result}`. Le dernier
+    résultat vient de la dernière ligne du journal portant une liste d'échecs
+    (`pass` / `fail` ; `unrunnable` si l'id figure dans `unrunnable_ids`),
+    null sans mesure. LECTURE seule."""
+    if eval_p is None:
+        return []
+    cases, _ = _parse_journal(eval_p)
+    failed, unrun = None, set()
+    for e in reversed(entries):
+        for key in _FAILURE_KEYS:
+            ids = _failure_ids(e.get(key))
+            if ids is not None:
+                failed = ids
+                break
+        if failed is not None:
+            unrun = _failure_ids(e.get("unrunnable_ids")) or set()
+            break
+    out = []
+    for c in cases:
+        cid = c.get("id")
+        if not isinstance(cid, str):
+            continue
+        if failed is None:
+            res = None
+        elif cid in unrun:
+            res = "unrunnable"
+        else:
+            res = "fail" if cid in failed else "pass"
+        out.append({"id": cid, "agent": c.get("agent") if isinstance(c.get("agent"), str) else None,
+                    "grader": c.get("grader") if isinstance(c.get("grader"), str) else None,
+                    "last_result": res})
+    return out
+
+
+def next_step(state: dict, job: dict | None = None, auto: dict | None = None) -> dict:
+    """Prochaine étape de la boucle d'amélioration (fonction PURE).
+
+    `state` : résultat d'`improvement_state`. `job` : job en cours
+    (`step`, `progress`). `auto` : `enabled`, `paused_until` (ISO),
+    `campaign_start_iteration`, `daily_limit` ou `budget_reached`.
+    Retourne `{state, title, detail, actions}` ; ordre de priorité :
+    inactive, no_cases, job_running, quota_paused, undecidable, pending, rejects_stop,
+    campaign_cap, auto_waiting, no_baseline, stale_baseline, ready."""
+    auto = auto or {}
+
+    def res(st, title, detail, actions):
+        return {"state": st, "title": title, "detail": detail, "actions": actions}
+
+    if not state.get("active"):
+        return res("inactive", "Module inactif",
+                   "Le module d'équipe n'est pas activé sur ce workspace.", [])
+    if not (state.get("evals") or {}).get("cases"):
+        return res("no_cases", "Aucun cas d'évaluation",
+                   "Ajoutez au moins un cas d'éval avant de lancer la boucle.", [])
+    if job:
+        step = job.get("step") or "en cours"
+        prog = job.get("progress")
+        detail = f"Étape : {step}." + (f" Progression : {prog}." if prog not in (None, "") else "")
+        return res("job_running", "Itération en cours", detail, ["cancel"])
+    if auto.get("paused_until"):
+        try:
+            until = _dt.datetime.fromisoformat(str(auto["paused_until"]))
+            now = _dt.datetime.now(until.tzinfo)
+            paused = until > now
+        except ValueError:
+            paused = True
+        reason = auto.get("pause_reason")
+        if paused and reason == "undecidable" and auto.get("enabled", True):
+            it = (state.get("pending") or {}).get("iteration")
+            return res("undecidable", "Verdict impossible à trancher",
+                       f"L'itération {it} n'a pas pu être tranchée : trop de cas d'évals "
+                       "n'ont pas pu s'exécuter. Le mode automatique est en pause.",
+                       ["resolve", "abandon", "resume"])
+        if paused and reason == "dirty_config" and auto.get("enabled", True):
+            return res("dirty_config", "Configuration de l'équipe non commitée",
+                       "Des fichiers de l'équipe (team.json, corps ou agents générés) ont des "
+                       "modifications non commitées : commite-les ou annule-les, puis reprends.",
+                       ["resume"])
+        if paused and reason == "budget" and auto.get("enabled", True):
+            return res("auto_waiting", "Budget du jour atteint",
+                       "Le mode automatique reprendra demain.", [])
+        if paused and reason in (None, "quota"):
+            return res("quota_paused", "Automatique en pause",
+                       f"Quota atteint : reprise prévue à {auto['paused_until']}.", [])
+    pending = state.get("pending")
+    if pending:
+        if pending.get("in_place"):
+            return res("pending", "Modification à l'essai en attente de verdict",
+                       f"L'itération {pending.get('iteration')} attend d'être mesurée.",
+                       ["resolve", "abandon"])
+        return res("pending", "Modification altérée",
+                   f"Le fichier à l'essai de l'itération {pending.get('iteration')} a changé "
+                   "depuis la session précédente : le verdict n'est plus fiable.", ["abandon"])
+    loop = state.get("loop") or {}
+    stats = state.get("stats") or {}
+    stop = loop.get("stop_after_consecutive_rejects")
+    streak = stats.get("consecutive_rejects", 0) or 0
+    ack = auto.get("ack_rejects_at") or 0
+    if not isinstance(ack, int) or ack > streak:
+        ack = 0
+    if isinstance(stop, int) and stop > 0 and streak - ack >= stop:
+        return res("rejects_stop", "Boucle arrêtée après des rejets successifs",
+                   f"{stats.get('consecutive_rejects')} modifications rejetées de suite.", ["resume"])
+    cap = loop.get("max_iterations")
+    start = auto.get("campaign_start_iteration")
+    if isinstance(cap, int) and cap > 0 and isinstance(start, int):
+        done = len({j["iteration"] for j in state.get("journal") or []
+                    if isinstance(j.get("iteration"), int) and j["iteration"] >= start})
+        if done >= cap:
+            return res("campaign_cap", "Plafond de la campagne atteint",
+                       f"{done} itérations sur {cap} autorisées.", [])
+    if auto.get("enabled"):
+        limit = auto.get("daily_limit")
+        reached = bool(auto.get("budget_reached")) or (
+            isinstance(limit, int) and stats.get("today_iterations", 0) >= limit)
+        if reached:
+            return res("auto_waiting", "Automatique en attente",
+                       "Budget du jour atteint : prochaine itération demain.", [])
+    if not state.get("baseline_version"):
+        return res("no_baseline", "Pas de mesure de référence",
+                   "Mesurez d'abord la configuration actuelle.", ["measure"])
+    if not state.get("baseline_current"):
+        return res("stale_baseline", "Mesure de référence périmée",
+                   "La configuration a changé depuis la dernière mesure.", ["measure", "run"])
+    return res("ready", "Prête", "Lancez une nouvelle itération.", ["run"])
 
 
 # --- Modèle et effort par agent : propositions + application ------------------
@@ -1166,6 +1446,13 @@ def set_agents_config(ws_id: str, agents_cfg, vars: dict | None = None) -> tuple
         return 404, {"error": "workspace absent sur disque"}
     if not isinstance(agents_cfg, dict) or not agents_cfg:
         return 400, {"error": "corps attendu : {\"agents\": {\"<id>\": {\"model\", \"effort\"}}}"}
+    # Job de la boucle en cours : il mesure la configuration actuelle, la
+    # changer en cours de route fausserait la mesure (refus avant écriture).
+    from dashcore import improve_jobs  # import tardif : cycle via improve_engine
+    if improve_jobs.is_running(ws_id):
+        return 409, {"error": "une itération de la boucle d'amélioration est en cours : "
+                              "arrête-la ou attends sa fin avant de changer les modèles ou l'effort",
+                     "reason": "job_running"}
     path = ws_dir / MANIFEST_REL
     with _MUTATION_LOCK:
         try:

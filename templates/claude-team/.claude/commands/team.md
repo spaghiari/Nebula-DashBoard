@@ -51,6 +51,26 @@ d'un plan. Si `*-impl-validator` existe, il complète `<p>-reviewer`
 5. **Livrer** : résultat + critères cochés + hypothèses prises + points
    ouverts + overrides de modèle notés.
 
+## Méthode de délégation sobre
+
+1. Tâches courtes, chacune avec la liste exacte des fichiers qu'elle peut
+   modifier ; en parallèle les tâches qui ne partagent AUCUN fichier,
+   en série celles qui en partagent.
+2. Contrats entre modules (signatures, formats de données) fixés AVANT de
+   déléguer des tâches parallèles qui en dépendent, et écrits dans chaque
+   consigne.
+3. `<p>-executor` par défaut pour toute étape bien délimitée ; `*-expert`
+   seulement pour ce qui croise beaucoup de fichiers ou demande la
+   mémoire du projet.
+4. Pendant le travail, chaque agent ne lance que ses tests ciblés ; la
+   suite complète est lancée UNE fois, par toi, à la fin du lot.
+5. Consigne complète dès le départ (objectif, fichiers autorisés,
+   contrats, tests attendus, critères de fin), sans ajouts en cours de
+   route.
+6. Jamais de modification temporaire d'un fichier partagé (test par
+   mutation, désactivation provisoire) pendant que d'autres agents
+   travaillent : elle rend les tests des autres instables.
+
 ## Règles
 
 - Tu ne fais pas le travail toi-même : tu délègues, vérifies, assembles.

@@ -5,7 +5,8 @@ import json
 import threading
 from dashcore.config import UI_STATE_FILE, log
 
-_DEFAULTS: dict = {"theme": "nebula", "onboarded": False}
+_DEFAULTS: dict = {"theme": "nebula", "onboarded": False, "claude_plan": "auto"}
+_CLAUDE_PLANS = frozenset({"auto", "pro", "max", "api"})
 _ALLOWED_KEYS = frozenset(_DEFAULTS)
 _THEME_LEGACY = {"atelier": "nebula", "atelier-clair": "nebula-clair"}
 _lock = threading.RLock()
@@ -20,6 +21,8 @@ def _read() -> dict:
                 # Migration douce : ancien thème "atelier*" → "nebula*"
                 if merged.get("theme") in _THEME_LEGACY:
                     merged["theme"] = _THEME_LEGACY[merged["theme"]]
+                if merged.get("claude_plan") not in _CLAUDE_PLANS:
+                    merged["claude_plan"] = "auto"
                 return merged
     except Exception:
         pass
@@ -40,6 +43,8 @@ def get_ui_state() -> tuple[int, dict]:
 
 
 def patch_ui_state(patch: dict) -> tuple[int, dict]:
+    if "claude_plan" in patch and patch["claude_plan"] not in _CLAUDE_PLANS:
+        return 400, {"error": "claude_plan invalide (auto|pro|max|api)"}
     with _lock:
         state = _read()
         for k, v in patch.items():

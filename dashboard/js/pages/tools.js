@@ -18,6 +18,64 @@
    ================================================================ */
 'use strict';
 
+const CLAUDE_PLAN_LABELS = { pro: 'Pro', max: 'Max', team: 'Team', api: "Clé API (facturé à l'usage)", unknown: 'Non détecté' };
+
+function claudePlanLabel(sub) {
+  const plan = sub && sub.plan;
+  if (plan === 'max') {
+    const m = /(\d+)x/.exec(String(sub.tier || ''));
+    return m ? `Max (${m[1]}x)` : 'Max';
+  }
+  return CLAUDE_PLAN_LABELS[plan] || CLAUDE_PLAN_LABELS.unknown;
+}
+
+// Carte « Mon abonnement Claude » : abonnement detecte, source, selecteur manuel.
+async function renderClaudePlanCard(host) {
+  host['innerHTML'] = '<div class="card"><span class="dim">Chargement…</span></div>';
+  let sub, ui;
+  try {
+    [sub, ui] = await Promise.all([API.get('/api/claude/subscription'), API.get('/api/ui-state')]);
+  } catch (e) {
+    host['innerHTML'] = `<div class="card"><div class="error-box">${escapeHtml(e.message)}</div></div>`;
+    return;
+  }
+  const manual = (ui && ui.claude_plan) || 'auto';
+  const sources = {
+    manual: 'réglé à la main',
+    claude_json: 'lu dans ta config Claude Code',
+    cli: 'lu dans ta config Claude Code',
+    credentials: 'lu dans ta config Claude Code',
+    none: 'aucune information trouvée',
+  };
+  const srcText = sources[sub.source] || sources.none;
+  const card = el('div', 'card');
+  card['innerHTML'] = `
+    <div style="font-size:13px;font-weight:500;margin-bottom:4px">Mon abonnement Claude</div>
+    <div style="display:flex;align-items:center;gap:var(--sp-2);flex-wrap:wrap">
+      <span class="pill">${escapeHtml(claudePlanLabel(sub))}</span>
+      <span class="dim" style="font-size:11.5px">${escapeHtml(srcText)}</span>
+    </div>
+    <p class="muted" style="margin:var(--sp-2) 0;font-size:12.5px">Nebula s'en sert seulement pour t'avertir quand un réglage (opus, effort élevé, mode automatique) consomme vite ton quota.</p>
+    ${sub.conflict ? `<div class="callout"><p style="margin:0;font-size:12.5px">Détection incertaine : tes fichiers Claude Code se contredisent (ex. Pro d'un côté, Max de l'autre). Choisis ton abonnement ici pour des conseils justes.</p></div>` : ''}
+  `;
+  const row = el('div');
+  row.style.cssText = 'display:flex;gap:var(--sp-2);flex-wrap:wrap;margin-top:var(--sp-2)';
+  for (const [val, label] of [['auto', 'Auto'], ['pro', 'Pro'], ['max', 'Max'], ['api', 'Clé API']]) {
+    const b = btn(label, 'btn-sm' + (val === manual ? ' btn-primary' : ''));
+    b.addEventListener('click', async () => {
+      try {
+        await API.post('/api/ui-state', { claude_plan: val });
+      } catch (e) { toastErr(e.message); return; }
+      toastOk(`Abonnement : ${label}`);
+      renderClaudePlanCard(host);
+    });
+    row.appendChild(b);
+  }
+  card.appendChild(row);
+  host['innerHTML'] = '';
+  host.appendChild(card);
+}
+
 async function renderTools() {
   setBreadcrumbs([{ label: 'Outils' }]);
   setTopbarActions([]);
@@ -58,6 +116,11 @@ async function renderTools() {
   stack.appendChild(el('div', 'section-label', '<span class="num">B.</span> Mises à jour'));
   const updatesHost = el('div');
   stack.appendChild(updatesHost);
+
+  // Mon abonnement Claude : detection + reglage manuel (cle ui-state claude_plan)
+  const planHost = el('div');
+  stack.appendChild(planHost);
+  renderClaudePlanCard(planHost);
   // Pas encore d'info (page ouverte avant la verification du chargement) :
   // on la lance ; l'anti-rebond evite un double fetch.
   if (!STATE.systemVersion) checkForUpdates().then(renderUpdateBadge).catch(() => {});

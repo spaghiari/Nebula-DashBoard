@@ -29,6 +29,26 @@ session (phase 1), puis `/improve` dans la session suivante (phase 2).
 puisque le candidat suivant ne peut être mesuré qu'après un redémarrage.
 L'argument N est ignoré avec un avertissement.
 
+## Lignes écrites par Nebula
+
+Le journal peut contenir des lignes écrites par Nebula (moteur
+d'itération de l'onglet « Amélioration »), reconnaissables à
+`runner: "nebula"` et à un `job_id`. Elles suivent le même format, avec
+des différences à connaître avant de jouer `/improve` à la main :
+
+- `branch: null` : Nebula n'ouvre jamais de branche `improve/<n>`. Une
+  ligne `pending` avec `branch: null` ou `runner: nebula` n'a **aucune
+  branche à fusionner ni à supprimer** ; la phase 2 ne touche pas à git
+  pour cette itération.
+- La sauvegarde de la cible est dans `.claude/journal/pending/<n>/`
+  (comme en manuel). L'archive d'un candidat écarté est dans
+  `.claude/journal/rejected/<n>/candidate.diff` (champ `diff_archive`).
+- Champs de coût, **tous optionnels, ne jamais les exiger** : `cost_usd`,
+  `tokens`, `duration_ms`, `calls`, `reason` (motif du verdict). Une ligne
+  manuelle peut les omettre.
+- `failures_after` : ids des cas échoués après le candidat. Ne pas
+  l'inventer pour une ligne `pending`.
+
 ## Invariants (non négociables)
 
 - **Évals verrouillées** : aucune écriture sous `.claude/evals/`
@@ -113,10 +133,14 @@ L'argument N est ignoré avec un avertissement.
    - Accepté : supprimer la sauvegarde `.claude/journal/pending/<n>/` ;
      si suivi par git, fusion de `improve/<n>` dans la branche de travail,
      commit `update(<p>): improve/<n> - <hypothèse courte>`, branche
-     supprimée.
+     supprimée. Si la ligne `pending` a `branch: null` ou
+     `runner: nebula`, il n'y a pas de branche à fusionner : le candidat
+     est déjà en place, seule la ligne de résolution est à écrire.
    - Rejeté : restaurer la cible depuis la sauvegarde, régénérer les
      agents, supprimer `.claude/journal/pending/<n>/` ; si suivi par git,
-     revenir à la branche de travail et supprimer `improve/<n>`.
+     revenir à la branche de travail et supprimer `improve/<n>` (sauf si
+     `branch: null` : rien à supprimer). Archiver au besoin le diff écarté
+     dans `.claude/journal/rejected/<n>/candidate.diff`.
 4. **Journal** : appender UNE ligne de **résolution**, même `iteration`
    que la ligne `pending` (la dernière ligne d'une itération fait foi) :
 
@@ -124,6 +148,11 @@ L'argument N est ignoré avec un avertissement.
    {"iteration": 3, "date": "YYYY-MM-DD", "target": ".claude/team/agents/architect.md", "hypothesis": "...", "score_before": 0.75, "score_after": 0.83, "regressions": [], "status": "accepted", "commit": null, "untracked": true, "config_version": "9c2e4f0a11bb", "unrunnable": 0}
    ```
 
+   `failures_after` = ids des cas échoués lors de la mesure du candidat
+   (liste vide si aucun) ; ajouter-le toujours à la ligne de résolution,
+   la baseline suivante s'en sert. Les champs de coût de Nebula
+   (`cost_usd`, `tokens`, `duration_ms`, `calls`) ne sont pas à écrire à
+   la main.
    `config_version` = empreinte de la configuration **en place après le
    verdict** (le candidat si acceptée, la baseline restaurée si rejetée),
    recalculée après restauration ou régénération. `unrunnable` = cas

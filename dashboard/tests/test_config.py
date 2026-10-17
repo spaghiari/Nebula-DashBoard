@@ -167,5 +167,78 @@ class TeamConstantsTests(unittest.TestCase):
             **config.TEAM_ROLE_DEFAULTS["reviewer"], "model": "opus", "effort": "high"})
 
 
+_IMPROVE_PROBE = (
+    "import json; from dashcore import config as c; print(json.dumps({"
+    "'cmd': c.NEBULA_CLAUDE_CMD, 'jobs': str(c.IMPROVE_JOBS_DIR), 'logs': str(c.IMPROVE_LOGS_DIR),"
+    "'auto': str(c.IMPROVE_AUTO_FILE), 'data': str(c.DATA_DIR), 'logs_root': str(c.LOGS_DIR)}))"
+)
+
+
+class ImproveConstantsTests(unittest.TestCase):
+    """Constantes du moteur d'amélioration piloté par Nebula."""
+
+    def _probe(self, **env) -> dict:
+        full = dict(os.environ)
+        full.pop("NEBULA_CLAUDE_CMD", None)
+        full.update(env)
+        out = subprocess.run([sys.executable, "-c", _IMPROVE_PROBE], cwd=str(DASHBOARD_DIR),
+                             env=full, capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_chemins_sous_data_et_logs(self):
+        c = self._probe()
+        self.assertIsNone(c["cmd"])
+        self.assertEqual(c["jobs"], os.path.join(c["data"], "improve-jobs"))
+        self.assertEqual(c["auto"], os.path.join(c["data"], "improve_auto.json"))
+        self.assertEqual(c["logs"], os.path.join(c["logs_root"], "improve"))
+        # NEBULA_DATA_DIR déplace aussi les jobs et l'état du mode automatique.
+        moved = self._probe(NEBULA_DATA_DIR=str(SANDBOX / "ailleurs"))
+        self.assertTrue(moved["jobs"].startswith(str((SANDBOX / "ailleurs").resolve())))
+
+    def test_surcharge_du_binaire_claude(self):
+        self.assertEqual(self._probe(NEBULA_CLAUDE_CMD="  C:/x/fake.py ")["cmd"], "C:/x/fake.py")
+        self.assertIsNone(self._probe(NEBULA_CLAUDE_CMD="  ")["cmd"])
+
+    def test_plafonds_et_timeouts(self):
+        self.assertEqual(config.IMPROVE_MAX_USD_PER_ITERATION, 4.0)
+        self.assertEqual(config.IMPROVE_MAX_USD_PER_DAY, 12.0)
+        self.assertEqual(config.IMPROVE_AUTO_ITERATIONS_PER_DAY, 3)
+        self.assertEqual(config.IMPROVE_CALL_TIMEOUT, 900)
+        self.assertGreater(config.IMPROVE_JOB_TIMEOUT, config.IMPROVE_CALL_TIMEOUT)
+
+    def test_outils_et_arguments_interdits(self):
+        self.assertIn("Bash", config.IMPROVE_DISALLOWED_TOOLS)
+        self.assertNotIn("Bash", config.IMPROVE_RELAY_TOOLS)
+        self.assertIn("Agent", config.IMPROVE_RELAY_TOOLS)
+        for bad in ("--bare", "--dangerously-skip-permissions", "bypassPermissions"):
+            self.assertIn(bad, config.IMPROVE_FORBIDDEN_ARGS)
+
+    def test_liste_blanche_du_critique(self):
+        import re
+
+        def allowed(rel):
+            return (any(re.fullmatch(p, rel) for p in config.IMPROVE_CRITIC_TARGETS)
+                    and not any(re.fullmatch(p, rel) for p in config.IMPROVE_CRITIC_FORBIDDEN))
+        # Les commandes de la boucle (improve, eval, eval-add, team) passent ces
+        # listes brutes mais sont refusées par le moteur via
+        # IMPROVE_CRITIC_LOOP_COMMANDS (cf. test_improve_engine).
+        self.assertEqual(set(config.IMPROVE_CRITIC_LOOP_COMMANDS),
+                         {"improve", "eval", "eval-add", "team"})
+        for ok in (".claude/team/agents/researcher.md", ".claude/team.json",
+                   ".claude/commands/pipeline.md", ".claude/memory/pitfalls.md"):
+            self.assertTrue(allowed(ok), ok)
+        for ko in (".claude/team/agents/critic.md", ".claude/team/agents/evaluator.md",
+                   ".claude/memory/conventions/improvement-loop.md", ".claude/evals/eval-set.jsonl",
+                   ".claude/evals/README.md", ".claude/agents/dash-researcher.md",
+                   ".claude/settings.json", ".claude/memory/x.txt", "CLAUDE.md",
+                   ".claude/team/agents/sub/x.md", ".claude/commands/sub/x.md",
+                   # Segments `.` / `..` : refusés par le motif lui-même.
+                   ".claude/memory/../team/agents/critic.md",
+                   ".claude/memory/../evals/eval-set.jsonl", ".claude/memory/../../outside.md",
+                   ".claude/memory/./x.md", ".claude/memory/a/../../x.md"):
+            self.assertFalse(allowed(ko), ko)
+
+
 if __name__ == "__main__":
     unittest.main()

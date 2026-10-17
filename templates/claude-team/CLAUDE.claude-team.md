@@ -76,6 +76,28 @@ Nebula (onglet Configuration, ligne du module) ; aucune régénération.
   (`équipe : aucun`). Le budget ne dispense jamais de la délégation ni
   de la relecture pour du code livré.
 
+### Méthode de délégation sobre
+
+1. **Tâches courtes, fichiers listés** : découper en tâches courtes, chacune
+   avec la liste exacte des fichiers qu'elle peut modifier ; lancer en
+   parallèle les tâches qui ne partagent AUCUN fichier, sérialiser celles
+   qui en partagent.
+2. **Contrats d'abord** : fixer les contrats entre modules (signatures,
+   formats de données) AVANT de déléguer des tâches parallèles qui en
+   dépendent, et les écrire dans chaque consigne.
+3. **Bon exécutant** : `<p>-executor` par défaut pour toute étape bien
+   délimitée ; `*-expert` seulement pour ce qui croise beaucoup de fichiers
+   ou demande la mémoire du projet.
+4. **Tests ciblés, suite complète une fois** : pendant le travail, chaque
+   agent ne lance que ses tests ciblés ; la suite complète est lancée UNE
+   fois, par l'orchestrateur, à la fin du lot.
+5. **Consigne complète dès le départ** : objectif, fichiers autorisés,
+   contrats, tests attendus, critères de fin, plutôt que des ajouts en
+   cours de route.
+6. **Rien de temporaire sur un fichier partagé** : jamais de modification
+   temporaire (test par mutation, désactivation provisoire) pendant que
+   d'autres agents travaillent ; elle rend leurs tests instables.
+
 ### Commandes
 
 - `/team <objectif>` : **le fil principal joue l'orchestrateur** (corps

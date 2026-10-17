@@ -348,9 +348,14 @@ function _helpSections() {
         <li><code class="mono">/eval</code> : mesure l'équipe contre le jeu d'évals figé de <code class="mono">.claude/evals/</code>.</li>
         <li><code class="mono">/improve</code> : une itération d'amélioration en deux phases ; la seconde se lance dans une <strong>nouvelle session</strong> Claude Code.</li>
         <li><code class="mono">/eval-add</code> : transforme un échec observé en nouveau cas d'éval.</li>
-        <li>L'onglet <strong>Amélioration</strong> du workspace affiche scores, journal et registres.</li>
+        <li>L'onglet <strong>Amélioration</strong> du workspace affiche la prochaine étape, le score actuel, le taux d'itérations gardées, le coût moyen, le journal et les registres.</li>
+        <li>Le bouton <strong>Lancer une itération</strong> de cet onglet fait tourner la boucle par Nebula, en arrière-plan, sans ouvrir de session : mesure de départ, proposition du critique, mesure du candidat, puis verdict (gardé et commité, ou écarté et archivé). Bouton <strong>Arrêter</strong> à tout moment. Plafonds : 4 $ estimés par itération et 12 $ par jour.</li>
+        <li>Le <strong>mode automatique</strong> (désactivé par défaut) enchaîne jusqu'à N itérations par jour (budget réglable de 1 à 10), attend qu'aucune session Claude Code ne soit ouverte sur le projet (il voit celles lancées par Nebula ou actives récemment), se met en pause si ton quota est atteint (reprise à l'heure de réinitialisation) ou après plusieurs rejets d'affilée (reprise sur ton clic).</li>
         <li>Sa carte <strong>Équipe : modèle et effort</strong> règle le modèle (<code class="mono">inherit</code> = celui de la session) et l'effort de raisonnement de chaque agent, de « faible » à « max ». Les propositions sont expliquées et ne s'appliquent qu'au clic ; après un changement, relance <code class="mono">/eval</code> dans une nouvelle session pour remesurer.</li>
       </ul>
+
+      <h3>Abonnement et consommation</h3>
+      <p>Nebula détecte ton abonnement Claude (Pro, Max ou API) d'après la configuration locale de Claude Code, sans lire tes jetons. Tu peux le corriger dans <strong>Outils</strong> (carte « Mon abonnement Claude ») si la détection se trompe. À l'activation de l'équipe et dans l'onglet Amélioration, des avertissements signalent les réglages gourmands pour ton abonnement (opus partout, effort élevé, mode automatique sur Pro).</p>
 
       <h3>Routage et coût</h3>
       <p>Le routage est livré en mode <strong>auto</strong> : chaque demande est orientée vers le bon agent, et tout code livré est relu par le relecteur (modèle opus). C'est le plus complet, mais aussi le plus gourmand en tokens. Sur la ligne du module (onglet Configuration), passe le routage en <strong>assisté</strong> ou <strong>manuel</strong>, et la relecture en <strong>dès 3 fichiers</strong> ou <strong>jamais</strong>.</p>
@@ -556,7 +561,7 @@ const HELP_TOPICS = [
   { id: 'mcps',           emoji: '🔌', title: 'MCPs',                  summary: 'Configurer les serveurs Model Context Protocol et leurs recettes.', sections: ['mcps', 'recipes'], keywords: 'model context protocol serveur transport stdio http sse diagnostiquer recette registry sync statut' },
   { id: 'skills-plugins', emoji: '✨', title: 'Skills & Plugins',      summary: 'Bibliothèque de compétences et extensions Claude Code.',          sections: ['skills', 'plugins'], keywords: 'skill plugin bibliothèque magasin distribuer marketplace installer github désync scope' },
   { id: 'templates',      emoji: '📋', title: 'Templates',             summary: 'Modèles réutilisables pour démarrer un workspace rapidement.',    sections: ['templates'], keywords: 'modèle starter placeholder qualité aperçu standard python node docker' },
-  { id: 'modules',        emoji: '🧠', title: 'Modules',               summary: 'Auto-amélioration de Claude et équipe de 7 agents.',             sections: ['modules'], keywords: 'module overlay équipe agents team eval improve amélioration mémoire routage orchestrateur reviewer self-improving' },
+  { id: 'modules',        emoji: '🧠', title: 'Modules',               summary: 'Auto-amélioration de Claude et équipe de 7 agents.',             sections: ['modules'], keywords: 'module overlay équipe agents team eval improve amélioration mémoire routage orchestrateur reviewer self-improving automatique itération abonnement pro max quota budget' },
   { id: 'secrets',        emoji: '🔐', title: 'Secrets & sécurité',    summary: 'Stockage centralisé de tes tokens et clés d\'API, chiffrement.',  sections: ['env'], keywords: 'secret token clé api mot de passe env.local chiffrement chiffrer variable environnement dpapi' },
   { id: 'outils',         emoji: '🛠️', title: 'Outils & maintenance',  summary: 'Hooks, sauvegardes, mises à jour automatiques.',                  sections: ['tools', 'update'], keywords: 'hook sauvegarde backup mise à jour update git pull stash restore apparence thème conflits orphelins' },
   { id: 'reference',      emoji: '⌨️', title: 'Référence & dépannage', summary: 'Raccourcis clavier et solutions aux problèmes courants.',         sections: ['shortcuts', 'troubleshoot'], keywords: 'raccourci clavier shortcut dépannage troubleshoot sanity check serveur hors ligne erreur problème' },
@@ -603,7 +608,7 @@ const HELP_TOPIC_CTAS = {
 async function renderHelp() {
   setBreadcrumbs([{ label: 'Aide' }]);
   const tourBtn = btn('Visite guidée', 'btn-primary', I.play);
-  tourBtn.title = 'Lance un tour interactif en 8 étapes (~2 min)';
+  tourBtn.title = 'Lance un tour interactif en 13 étapes (~3 min)';
   tourBtn.addEventListener('click', () => startTour('main'));
   setTopbarActions([tourBtn]);
 
@@ -645,7 +650,7 @@ function renderHelpHub() {
       <span class="help-promo-ic" aria-hidden="true">🎯</span>
       <div class="help-promo-t">
         <b>Première fois ici ?</b>
-        <p>Lance la <strong>visite guidée interactive</strong> (~2 min) : elle te montre les fonctions essentielles avec spotlight sur l'UI réelle.</p>
+        <p>Lance la <strong>visite guidée interactive</strong> (13 étapes, ~3 min) : elle te montre les fonctions essentielles avec spotlight sur l'UI réelle.</p>
       </div>
     `;
     const launchBtn = btn('Démarrer la visite', 'btn-primary', I.play);

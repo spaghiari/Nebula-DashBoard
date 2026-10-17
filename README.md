@@ -53,7 +53,7 @@ scripts\start-dashboard.bat
 ```
 
 Ouvre http://127.0.0.1:4777/ et laisse-toi guider : au premier lancement,
-une **visite guidée** (9 étapes, spotlight sur l'interface réelle) te
+une **visite guidée** (13 étapes, spotlight sur l'interface réelle) te
 montre l'essentiel. Tu peux la relancer à tout moment depuis la page Aide.
 
 ---
@@ -280,6 +280,23 @@ n'est appliqué sans clic. Changer la configuration rend la mesure de
 référence périmée : relance `/eval` dans une nouvelle session de Claude
 Code. Tant qu'une itération `/improve` attend son verdict, aucun modèle ni
 effort ne peut changer (ni ici, ni par « Ré-appliquer »).
+
+**Nebula peut aussi faire tourner la boucle pour toi** : bouton « Lancer
+une itération » de l'onglet Amélioration. Claude Code tourne en
+arrière-plan avec des permissions restreintes (jamais de contournement des
+permissions), un changement n'est gardé et commité sur ta branche courante
+que s'il gagne sans régression, sinon tout revient à l'identique et le diff
+écarté est archivé. Plafonds : 4 $ estimés par itération, 12 $ par jour.
+Le **mode automatique**, désactivé par défaut, enchaîne quelques
+itérations par jour, attend qu'aucune session ne soit ouverte sur le projet
+et se met en pause si ton quota est atteint ou après plusieurs rejets
+d'affilée.
+
+Nebula détecte ton **abonnement Claude** (Pro, Max, API) sans lire tes
+jetons, corrigeable dans Outils, et signale les réglages gourmands pour ton
+abonnement. L'équipe suit une **méthode de délégation sobre** : petites
+tâches parallèles sur des fichiers distincts, exécutant économique par
+défaut, suite de tests complète une seule fois à la fin.
 <!-- /claude-team -->
 
 </details>
@@ -435,6 +452,12 @@ claude-workspace/
 │   │   ├── api_workspaces.py    # Workspaces, templates, settings
 │   │   ├── api_overlays.py      # Overlays
 │   │   ├── api_team.py          # Module claude-team : agents, boucle d'amélioration
+│   │   ├── claude_runner.py     # Claude Code headless (permissions restreintes)
+│   │   ├── claude_account.py    # Abonnement Claude détecté, avertissements
+│   │   ├── improve_engine.py    # Itération d'amélioration : mesure, candidat, verdict
+│   │   ├── improve_jobs.py      # Job en arrière-plan, annulation, reprise
+│   │   ├── improve_scheduler.py # Mode automatique (budget, pauses)
+│   │   ├── unidiff.py           # Application stricte d'un diff
 │   │   ├── api_files.py         # Explorateur de fichiers
 │   │   ├── api_mcps.py          # MCPs, conflits, scan, sync, recettes
 │   │   ├── api_plugins.py       # Plugins, skills, agents, commandes

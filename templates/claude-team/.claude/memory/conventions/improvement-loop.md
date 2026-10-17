@@ -124,6 +124,22 @@ contient n'est pas réutilisée). Une ligne invalide est ignorée par
 l'onglet « Amélioration » de Nebula (comptée comme invalide), jamais
 réécrite.
 
+### Lignes écrites par Nebula
+
+Le moteur d'itération de Nebula écrit dans le même journal. Ses lignes
+portent `runner: "nebula"` et un `job_id`, et diffèrent ainsi :
+
+- `branch: null` : pas de branche `improve/<n>` ; une ligne `pending`
+  avec `branch: null` ou `runner: nebula` n'a rien à fusionner. Sa
+  sauvegarde est dans `.claude/journal/pending/<n>/`.
+- `diff_archive` : chemin de l'archive d'un candidat écarté,
+  `.claude/journal/rejected/<n>/candidate.diff`.
+- `failures_after` : ids des cas échoués après le candidat, écrit sur la
+  ligne de résolution (à reproduire aussi en manuel).
+- Champs de coût **optionnels**, jamais exigés : `cost_usd`, `tokens`,
+  `duration_ms`, `calls`, et `reason` (motif du verdict). Une ligne
+  manuelle valide peut tous les omettre.
+
 ## Pont avec `improvements.md`
 
 ```

@@ -16,6 +16,14 @@ En mode `auto` (`routing.mode` de `.claude/team.json`), le fil principal route l
 4. **Boucler** : si le reviewer rejette, renvoie à l'executor ses remarques précises (max 2 allers-retours, sinon escalade à l'humain).
 5. **Livrer** : résultat + critères de réussite cochés + hypothèses prises + points ouverts.
 
+# Méthode de délégation sobre
+1. Découpe en tâches courtes, chacune avec la liste exacte des fichiers qu'elle peut modifier ; lance en parallèle les tâches qui ne partagent AUCUN fichier, sérialise celles qui en partagent.
+2. Fixe les contrats entre modules (signatures, formats de données) AVANT de déléguer des tâches parallèles qui en dépendent, et écris-les dans chaque consigne.
+3. `<p>-executor` par défaut pour toute étape bien délimitée ; `*-expert` seulement pour ce qui croise beaucoup de fichiers ou demande la mémoire du projet.
+4. Pendant le travail, chaque agent ne lance que ses tests ciblés ; la suite complète est lancée UNE fois, par toi, à la fin du lot.
+5. Une consigne complète dès le départ (objectif, fichiers autorisés, contrats, tests attendus, critères de fin) plutôt que des ajouts en cours de route.
+6. Jamais de modification temporaire d'un fichier partagé (test par mutation, désactivation provisoire) pendant que d'autres agents travaillent : elle rend les tests des autres instables.
+
 # Contrat de délégation (à envoyer à chaque agent)
 ```
 OBJECTIF: <une phrase>

@@ -315,8 +315,9 @@ class ImprovementStateTests(unittest.TestCase):
     def test_journal_vide_et_absent(self):
         status, p = team.improvement_state("w1")
         self.assertEqual(status, 200)
-        self.assertEqual(p["stats"], {"iterations": 0, "accepted": 0, "rejected": 0, "pending": 0,
-                                      "last_score": None, "scores": [], "consecutive_rejects": 0})
+        base = {"iterations": 0, "accepted": 0, "rejected": 0, "pending": 0,
+                "last_score": None, "scores": [], "consecutive_rejects": 0}
+        self.assertEqual({k: p["stats"][k] for k in base}, base)
         self.assertEqual(p["evals"]["cases"], 0)
         self.assertTrue(p["evals"]["locked"])
         _write(self.ws / ".claude" / "journal" / "changes.jsonl", "")
@@ -427,6 +428,33 @@ class ImprovementStateTests(unittest.TestCase):
         self.assertTrue(team.improvement_state("w1")[1]["baseline_current"])
         _write(self.ws / ".claude" / "team" / "agents" / "critic.md", "# v2\n")
         self.assertFalse(team.improvement_state("w1")[1]["baseline_current"])
+
+    def test_baseline_json_mesure_autonome(self):
+        for a in MANIFEST["agents"]:
+            if a["id"] != "bad id":
+                _write(self.ws / ".claude" / a["file"], f"# {a['id']}\n")
+        team.generate_agents(self.ws, {"name": "w1", "label": "W"})
+        h = team.team_config_hash(self.ws, "w1")
+        bp = self.ws / ".claude" / "journal" / "baseline.json"
+        base = {"config_version": h, "score": 0.7, "failures": ["c1"], "unrunnable": 0,
+                "unrunnable_ids": [], "measured_at": "2026-10-17T10:00:00+02:00",
+                "runner": "nebula", "cases": 5}
+        p = team.improvement_state("w1")[1]
+        self.assertIsNone(p["last_measure"])
+        _write(bp, json.dumps(base))
+        p = team.improvement_state("w1")[1]
+        self.assertTrue(p["baseline_current"])
+        self.assertEqual(p["stats"]["last_score"], 0.7)
+        self.assertEqual(p["last_measure"], {"score": 0.7, "measured_at": base["measured_at"],
+                                             "unrunnable": 0, "config_version": h, "current": True})
+        # Inexécutable ou empreinte différente : informative, pas réutilisable.
+        _write(bp, json.dumps({**base, "unrunnable": 1}))
+        p = team.improvement_state("w1")[1]
+        self.assertFalse(p["baseline_current"])
+        _write(bp, json.dumps({**base, "config_version": "ancien"}))
+        p = team.improvement_state("w1")[1]
+        self.assertFalse(p["baseline_current"])
+        self.assertFalse(p["last_measure"]["current"])
 
     def test_candidat_pending_deux_phases(self):
         """Phase 1 de /improve : ligne `pending` (candidat en place, empreinte =
@@ -1654,6 +1682,209 @@ class LegacyAgentFileModelTests(unittest.TestCase):
             body = (self.ws / ".claude" / a["file"]).read_text(encoding="utf-8")
             self.assertEqual(self._path(a["id"]).read_text(encoding="utf-8"),
                              team.render_agent(a, MANIFEST, self.vars, body))
+
+
+class ImprovementMetricsTests(unittest.TestCase):
+    def setUp(self):
+        reset_sandbox()
+        self.ws = make_workspace("w1")
+        write_json_file(self.ws / ".claude" / "team.json", MANIFEST)
+
+    def _journal(self, *rows) -> None:
+        _write(self.ws / ".claude" / "journal" / "changes.jsonl",
+               "\n".join(json.dumps(r) for r in rows) + "\n")
+
+    def test_journal_ancien_couts_null(self):
+        self._journal({"iteration": 1, "date": "2026-01-01", "status": "accepted",
+                       "score_before": 0.5, "score_after": 0.6})
+        _, p = team.improvement_state("w1")
+        j = p["journal"][0]
+        self.assertIsNone(j["cost_usd"])
+        self.assertIsNone(j["tokens"])
+        self.assertIsNone(j["duration_ms"])
+        self.assertIsNone(j["calls"])
+        self.assertEqual(j["runner"], "manual")
+        self.assertIsNone(j["reason"])
+        self.assertIsNone(j["diff_archive"])
+        self.assertIsNone(j["failures_after"])
+        self.assertIsNone(p["stats"]["avg_cost_usd"])
+        self.assertIsNone(p["stats"]["avg_tokens"])
+        self.assertEqual(p["stats"]["today_iterations"], 0)
+
+    def _mixed(self):
+        today = __import__("datetime").date.today().isoformat()
+        self._journal(
+            {"iteration": 1, "date": "2026-01-01", "status": "accepted",
+             "score_before": 0.5, "score_after": 0.6},
+            {"iteration": 2, "date": today, "status": "pending", "runner": "nebula", "job_id": "j1",
+             "cost_usd": 0.25, "duration_ms": 1000, "calls": 2,
+             "tokens": {"input": 10, "output": 5, "cache_read": 100, "cache_creation": 1}},
+            {"iteration": 2, "date": today, "status": "accepted", "runner": "nebula",
+             "score_before": 0.6, "score_after": 0.7, "cost_usd": 0.75, "duration_ms": 500, "calls": 3,
+             "tokens": {"input": 20, "output": 15, "cache_read": 0, "cache_creation": 9},
+             "failures_after": ["c1", "c2"], "reason": "gain suffisant", "diff_archive": "a.diff"},
+            {"iteration": 3, "date": today, "status": "rejected", "runner": "nebula",
+             "score_before": 0.7, "score_after": 0.7, "cost_usd": 1.0})
+
+    def test_journal_mixte_sommes(self):
+        self._mixed()
+        _, p = team.improvement_state("w1")
+        by = {}
+        for j in p["journal"]:
+            by[j["iteration"]] = j
+        self.assertEqual(by[2]["cost_usd"], 1.0)
+        self.assertEqual(by[2]["tokens"], {"input": 30, "output": 20, "cache_read": 100,
+                                           "cache_creation": 10})
+        self.assertEqual(by[2]["duration_ms"], 1500)
+        self.assertEqual(by[2]["calls"], 5)
+        self.assertEqual(by[2]["runner"], "nebula")
+        self.assertEqual(by[2]["reason"], "gain suffisant")
+        self.assertEqual(by[2]["diff_archive"], "a.diff")
+        self.assertEqual(by[2]["failures_after"], 2)
+        self.assertEqual(by[1]["runner"], "manual")
+        self.assertIsNone(by[1]["cost_usd"])
+        self.assertEqual(by[3]["cost_usd"], 1.0)
+        self.assertIsNone(by[3]["tokens"])
+        # la dernière ligne fait toujours foi pour le statut
+        self.assertEqual(p["stats"]["accepted"], 2)
+
+    def test_stats_nouveaux(self):
+        self._mixed()
+        s = team.improvement_state("w1")[1]["stats"]
+        self.assertEqual(s["acceptance_rate"], round(2 / 3, 4))
+        self.assertEqual(s["cumulative_gain"], 0.2)
+        self.assertEqual(s["avg_cost_usd"], 1.0)
+        self.assertEqual(s["avg_tokens"], {"input": 30.0, "output": 20.0, "cache_read": 100.0,
+                                           "cache_creation": 10.0})
+        self.assertEqual(s["today_iterations"], 2)
+
+    def test_acceptance_rate_null_sans_resolue(self):
+        self._journal({"iteration": 1, "status": "pending"})
+        s = team.improvement_state("w1")[1]["stats"]
+        self.assertIsNone(s["acceptance_rate"])
+        self.assertEqual(s["cumulative_gain"], 0)
+
+    def test_todo_items(self):
+        _write(self.ws / ".claude" / "improvements.md",
+               "- **[TODO] a** (P1, ajouté 2026-10-01 par nebula)\n  détail\n"
+               "- **[DONE 2026-10-01] b**\n- **[TODO] d**\n")
+        items = team.improvement_state("w1")[1]["todo_items"]
+        self.assertEqual(items, [{"title": "a", "priority": "P1", "date": "2026-10-01"},
+                                 {"title": "d", "priority": None, "date": None}])
+
+    def test_cases(self):
+        _write(self.ws / ".claude" / "evals" / "eval-set.jsonl",
+               '{"id":"c1","agent":"w1-executor","grader":"test"}\n'
+               '{"id":"c2","agent":"w1-reviewer","grader":"rubric"}\n'
+               '{"id":"c3","agent":"w1-reviewer","grader":"regex"}\n')
+        cases = team.improvement_state("w1")[1]["cases"]
+        self.assertEqual([c["last_result"] for c in cases], [None, None, None])
+        self.assertEqual(cases[0]["grader"], "test")
+        self._journal({"iteration": 1, "status": "accepted", "failures_after": ["c2"],
+                       "unrunnable_ids": ["c3"]})
+        cases = team.improvement_state("w1")[1]["cases"]
+        self.assertEqual([c["last_result"] for c in cases], ["pass", "fail", "unrunnable"])
+        self.assertEqual(cases[1]["agent"], "w1-reviewer")
+
+
+class NextStepTests(unittest.TestCase):
+    def _state(self, **kw):
+        st = {"active": True, "evals": {"cases": 3}, "pending": None, "journal": [],
+              "stats": {"consecutive_rejects": 0, "today_iterations": 0},
+              "loop": {"max_iterations": 5, "stop_after_consecutive_rejects": 3},
+              "baseline_version": "h1", "baseline_current": True}
+        st.update(kw)
+        return st
+
+    def test_inactive_et_no_cases(self):
+        self.assertEqual(team.next_step(self._state(active=False))["state"], "inactive")
+        n = team.next_step(self._state(evals={"cases": 0}))
+        self.assertEqual(n["state"], "no_cases")
+
+    def test_job_running_prioritaire(self):
+        n = team.next_step(self._state(pending={"in_place": True}),
+                           job={"step": "mesure", "progress": "2/5"})
+        self.assertEqual(n["state"], "job_running")
+        self.assertIn("mesure", n["detail"])
+        self.assertIn("2/5", n["detail"])
+
+    def test_quota_paused(self):
+        future = (__import__("datetime").datetime.now() + __import__("datetime").timedelta(hours=2)).isoformat()
+        n = team.next_step(self._state(), auto={"paused_until": future})
+        self.assertEqual(n["state"], "quota_paused")
+        past = (__import__("datetime").datetime.now() - __import__("datetime").timedelta(hours=2)).isoformat()
+        self.assertEqual(team.next_step(self._state(), auto={"paused_until": past})["state"], "ready")
+
+    def test_pending(self):
+        n = team.next_step(self._state(pending={"iteration": 4, "in_place": True}))
+        self.assertEqual((n["state"], n["actions"]), ("pending", ["resolve", "abandon"]))
+        self.assertIn("verdict", n["title"])
+        n = team.next_step(self._state(pending={"iteration": 4, "in_place": False}))
+        self.assertEqual((n["state"], n["actions"]), ("pending", ["abandon"]))
+        self.assertIn("altérée", n["title"])
+
+    def test_rejects_stop(self):
+        n = team.next_step(self._state(stats={"consecutive_rejects": 3, "today_iterations": 0}))
+        self.assertEqual((n["state"], n["actions"]), ("rejects_stop", ["resume"]))
+        # Acquitté par « Reprendre » : la série en cours ne bloque plus.
+        n = team.next_step(self._state(stats={"consecutive_rejects": 3, "today_iterations": 0}),
+                           auto={"ack_rejects_at": 3})
+        self.assertEqual(n["state"], "ready")
+        # Acquittement plus grand que la série (série cassée puis reprise) : ignoré.
+        n = team.next_step(self._state(stats={"consecutive_rejects": 3, "today_iterations": 0}),
+                           auto={"ack_rejects_at": 5})
+        self.assertEqual(n["state"], "rejects_stop")
+
+    def test_pauses_par_raison(self):
+        dt = __import__("datetime")
+        far = (dt.datetime.now() + dt.timedelta(days=3650)).isoformat()
+        n = team.next_step(self._state(pending={"iteration": 4, "in_place": True}),
+                           auto={"paused_until": far, "pause_reason": "undecidable"})
+        self.assertEqual((n["state"], n["actions"]), ("undecidable", ["resolve", "abandon", "resume"]))
+        self.assertIn("4", n["detail"])
+        soon = (dt.datetime.now() + dt.timedelta(hours=3)).isoformat()
+        n = team.next_step(self._state(), auto={"paused_until": soon, "pause_reason": "budget"})
+        self.assertEqual(n["state"], "auto_waiting")
+        n = team.next_step(self._state(), auto={"paused_until": far, "pause_reason": "dirty_config"})
+        self.assertEqual((n["state"], n["actions"]), ("dirty_config", ["resume"]))
+        n = team.next_step(self._state(), auto={"paused_until": far, "pause_reason": "dirty_config",
+                                                "enabled": False})
+        self.assertEqual(n["state"], "ready")
+        n = team.next_step(self._state(), auto={"paused_until": soon, "pause_reason": "quota"})
+        self.assertEqual(n["state"], "quota_paused")
+
+    def test_campaign_cap(self):
+        journal = [{"iteration": i} for i in (3, 4, 4, 5, 6, 7)]
+        n = team.next_step(self._state(journal=journal), auto={"campaign_start_iteration": 3})
+        self.assertEqual(n["state"], "campaign_cap")
+        n = team.next_step(self._state(journal=journal), auto={"campaign_start_iteration": 4})
+        self.assertEqual(n["state"], "ready")
+        self.assertEqual(team.next_step(self._state(journal=journal))["state"], "ready")
+
+    def test_auto_waiting(self):
+        st = self._state(stats={"consecutive_rejects": 0, "today_iterations": 2})
+        n = team.next_step(st, auto={"enabled": True, "daily_limit": 2})
+        self.assertEqual(n["state"], "auto_waiting")
+        n = team.next_step(st, auto={"enabled": True, "daily_limit": 3})
+        self.assertEqual(n["state"], "ready")
+        n = team.next_step(self._state(), auto={"enabled": True, "budget_reached": True})
+        self.assertEqual(n["state"], "auto_waiting")
+
+    def test_baseline_et_ready(self):
+        n = team.next_step(self._state(baseline_version=None, baseline_current=False))
+        self.assertEqual((n["state"], n["actions"]), ("no_baseline", ["measure"]))
+        n = team.next_step(self._state(baseline_current=False))
+        self.assertEqual((n["state"], n["actions"]), ("stale_baseline", ["measure", "run"]))
+        n = team.next_step(self._state())
+        self.assertEqual((n["state"], n["actions"]), ("ready", ["run"]))
+
+    def test_expose_dans_improvement_state(self):
+        reset_sandbox()
+        ws = make_workspace("w1")
+        write_json_file(ws / ".claude" / "team.json", MANIFEST)
+        n = team.improvement_state("w1")[1]["next_step"]
+        self.assertEqual(n["state"], "no_cases")
+        self.assertEqual(set(n), {"state", "title", "detail", "actions"})
 
 
 if __name__ == "__main__":
