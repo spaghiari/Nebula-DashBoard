@@ -469,14 +469,18 @@ function _helpSections() {
 
       <h3>Vérification automatique</h3>
       <ul class="help-list">
-        <li><strong>1ʳᵉ vérif de session</strong> — un fermer/rouvrir d'onglet (ou un nouveau navigateur) déclenche systématiquement un <code class="mono">git fetch</code> frais, peu importe quand le dernier check a eu lieu. Garantit qu'un refresh montre toujours les MAJ disponibles.</li>
-        <li><strong>Anti-spam</strong> — au sein d'une même session, l'intervalle entre 2 fetchs distants est de <strong>1h</strong> (pour ne pas marteler le remote).</li>
-        <li><strong>Re-check périodique</strong> — toutes les 30 min en arrière-plan tant que l'onglet reste ouvert.</li>
+        <li><strong>À chaque chargement de la page</strong> : un <code class="mono">git fetch</code> frais est lancé. Seul un anti-rebond de <strong>2 min</strong> évite de relancer pour des F5 en rafale.</li>
+        <li><strong>Retour sur l'onglet</strong> : nouvelle vérification si la dernière date de plus de 10 min.</li>
+        <li><strong>Re-check périodique</strong> : toutes les 30 min en arrière-plan tant que l'onglet reste ouvert.</li>
+        <li><strong>Échec de vérification</strong> (réseau, dépôt privé sans identifiants) : aucune alerte intrusive, la cause est affichée dans <em>Outils &gt; Mises à jour</em> (« Impossible de vérifier : ... »). La vérification automatique n'ouvre jamais de fenêtre de connexion Git.</li>
         <li>Si des commits sont en attente : <strong>badge gradient pulsant "X MAJ"</strong> apparaît dans le topbar à droite (visible sur toutes les pages), plus un badge descriptif dans la sidebar footer.</li>
       </ul>
 
+      <h3>La section Outils &gt; Mises à jour</h3>
+      <p>Version installée, état (« À jour », « N mises à jour disponibles », « Impossible de vérifier »), date de la dernière vérification, boutons <em>Mettre à jour</em> et <em>Vérifier maintenant</em>. Les changements à venir sont listés lisiblement : message sans le préfixe technique, badge Nouveauté / Correctif / Amélioration / Doc, date relative et lien <em>voir le détail</em> vers le commit. Liens <em>Voir le projet</em>, <em>Lire le README</em> et <em>Signaler un problème</em> (masqués si le dépôt n'est pas une URL web). Réinitialisation, sauvegardes (stash) et état git sont dans <em>Options avancées</em>.</p>
+
       <h3>Appliquer une mise à jour</h3>
-      <p>Clic sur le badge → modale avec : version locale (sha), tracking branch, liste des commits à venir (sha + message + auteur + date relative).</p>
+      <p>Clic sur le badge (ou <em>Voir le détail</em>) → modale avec le même en-tête et la même liste lisible.</p>
       <p>Bouton <em>Appliquer</em> → exécute <code class="mono">git pull --ff-only</code>. Détection auto :</p>
       <ul class="help-list">
         <li>Si seuls JS/CSS/HTML ont changé → bouton <em>Recharger la page</em> (F5 suffit).</li>

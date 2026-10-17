@@ -3426,7 +3426,8 @@ body {
 .nav-link:focus-visible,
 .mcp-card:focus-visible, .recipe-card:focus-visible,
 .list-row:focus-visible, .theme-card:focus-visible, .quick-btn:focus-visible, .tab:focus-visible,
-.seg-control button:focus-visible, .icon-btn:focus-visible, .help-hub-card:focus-visible {
+.seg-control button:focus-visible, .icon-btn:focus-visible, .help-hub-card:focus-visible,
+.upd-adv > summary:focus-visible, .upd-tech > summary:focus-visible, .upd-link:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

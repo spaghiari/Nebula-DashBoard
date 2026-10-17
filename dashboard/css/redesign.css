@@ -1202,6 +1202,94 @@ a.hc-row:hover { background: var(--hover); }
   .impr-facts { grid-template-columns: 1fr; }
 }
 
+/* === 11c. MISES A JOUR (section Outils + modale) =====================
+   En-tete commun (etat, version, derniere verification), liste lisible des
+   changements, liens vers le projet, options avancees repliables.
+   Uniquement des tokens du design system (4 styles, 5 themes). */
+.upd-card { padding: 0; overflow: hidden; }
+.upd-head {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: start;
+  padding: var(--card-pad);
+}
+.upd-modal .upd-head { padding: 0 0 var(--sp-4); border-bottom: 1px solid var(--border); margin-bottom: var(--sp-4); }
+.upd-ic {
+  width: 40px; height: 40px; border-radius: var(--r-md); display: grid; place-items: center;
+  background: var(--chip-bg); color: var(--text-muted);
+}
+.upd-ic svg { width: 20px; height: 20px; }
+.upd-ok .upd-ic { background: var(--ok-soft); color: var(--ok); }
+.upd-accent .upd-ic { background: var(--accent-soft); color: var(--accent); }
+.upd-warn .upd-ic { background: var(--warn-soft); color: var(--warn); }
+.upd-err .upd-ic { background: var(--err-soft); color: var(--err); }
+.upd-head-main { min-width: 0; }
+.upd-title { font-size: var(--fs-h3); font-weight: 650; letter-spacing: -0.01em; color: var(--text); line-height: 1.3; }
+.upd-err .upd-title { color: var(--err); }
+.upd-sub { margin-top: 3px; font-size: 12.5px; line-height: 1.45; color: var(--text-muted); overflow-wrap: anywhere; }
+.upd-tech { margin-top: 6px; font-size: 11.5px; color: var(--text-muted); }
+.upd-tech summary { cursor: pointer; }
+.upd-tech pre {
+  margin: 6px 0 0; padding: 8px 10px; max-height: 140px; overflow: auto; white-space: pre-wrap;
+  overflow-wrap: anywhere; font-size: 11px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm);
+}
+.upd-facts { display: flex; gap: 18px; margin: 0; text-align: right; }
+.upd-facts dt { font-size: 11px; color: var(--text-dim); }
+.upd-facts dd { margin: 2px 0 0; font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.upd-facts code { font-size: 11.5px; font-weight: 500; color: var(--text-muted); }
+.upd-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 var(--card-pad) var(--card-pad); }
+.upd-body { padding: 0 var(--card-pad) var(--card-pad); }
+.upd-modal .upd-body { padding: 0; margin-bottom: var(--sp-4); }
+.upd-list-h { font-size: 12px; font-weight: 650; color: var(--text-muted); margin-bottom: 8px; }
+.upd-list {
+  list-style: none; margin: 0; padding: 0; max-height: 340px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--r-md);
+}
+.upd-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; }
+.upd-item + .upd-item { border-top: 1px solid var(--border); }
+.upd-item .pill { flex: none; min-width: 92px; justify-content: center; margin-top: 1px; }
+.upd-item-main { min-width: 0; }
+.upd-item-msg { font-size: 13px; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+.upd-item-meta { margin-top: 2px; font-size: 11.5px; color: var(--text-muted); }
+.upd-link { display: inline-flex; align-items: center; gap: 3px; color: var(--accent); text-decoration: none; }
+.upd-link:hover { text-decoration: underline; }
+.upd-link svg { width: 11px; height: 11px; }
+.upd-more { margin-top: 6px; font-size: 11.5px; }
+.upd-foot { padding: 10px var(--card-pad); border-top: 1px solid var(--border); }
+.upd-modal .upd-foot { padding: var(--sp-3) 0 0; }
+.upd-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.upd-links a.btn { text-decoration: none; }
+.upd-adv { border-top: 1px solid var(--border); }
+.upd-modal .upd-adv { margin-top: var(--sp-4); border: 1px solid var(--border); border-radius: var(--r-md); }
+.upd-adv > summary {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap; cursor: pointer; list-style: none;
+  padding: 12px var(--card-pad); font-size: 13px; font-weight: 600; color: var(--text-muted);
+}
+.upd-adv > summary::-webkit-details-marker { display: none; }
+.upd-adv > summary svg { width: 15px; height: 15px; flex: none; }
+.upd-adv > summary .dim { font-weight: 400; font-size: 11.5px; }
+.upd-adv > summary:hover { color: var(--text); }
+.upd-adv[open] > summary { color: var(--text); }
+.upd-adv-body { padding: 0 var(--card-pad) var(--card-pad); display: flex; flex-direction: column; gap: 12px; }
+.upd-git { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0; }
+.upd-git dt { font-size: 11px; color: var(--text-dim); }
+.upd-git dd { margin: 2px 0 0; font-size: 12.5px; color: var(--text); overflow-wrap: anywhere; }
+.upd-adv-note { margin: 0; font-size: 12px; color: var(--text-muted); }
+.upd-adv-reset {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 12px; background: var(--surface-2); border: 1px dashed var(--border-strong); border-radius: var(--r-md);
+}
+.upd-reset-strong { border-style: solid; margin-top: var(--sp-3); margin-bottom: var(--sp-4); }
+.upd-adv-reset .dim { font-size: 11.5px; line-height: 1.5; }
+.upd-adv-t { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.upd-adv-reset > .btn { flex: none; }
+@media (max-width: 640px) {
+  .upd-head { grid-template-columns: auto minmax(0, 1fr); }
+  .upd-facts { grid-column: 1 / -1; justify-content: flex-start; text-align: left; flex-wrap: wrap; }
+  .upd-item { flex-direction: column; gap: 6px; }
+  .upd-item .pill { min-width: 0; }
+  .upd-adv-reset { flex-direction: column; align-items: stretch; }
+  .upd-actions .btn { flex: 1 1 auto; }
+}
+
 /* === 12. MOUVEMENT REDUIT ========================================== */
 @media (prefers-reduced-motion: reduce) {
   .rise, .fade-in, .tok i, .palette, .palette-overlay, .toast, .mx-bar { animation: none !important; }

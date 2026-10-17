@@ -289,11 +289,25 @@ qu'elle n'est pas terminée.
 <details>
 <summary><strong>🔄 Mises à jour automatiques</strong></summary>
 
-Nebula vérifie les nouveautés au démarrage puis toutes les 30 minutes. Quand
-il y en a, un badge **« X MAJ »** s'allume en haut de l'écran. Un clic
-affiche la liste des changements et le bouton **Appliquer la mise à jour**.
-Nebula te dit ensuite s'il suffit de rafraîchir la page ou s'il faut
-redémarrer le serveur.
+Nebula vérifie les nouveautés **à chaque ouverture de la page** (un F5
+répété dans les 2 minutes ne relance pas la vérification), quand tu
+reviens sur l'onglet après plus de 10 minutes, puis toutes les 30 minutes.
+Quand il y en a, un badge **« X MAJ »** s'allume en haut de l'écran.
+
+Tout est réuni dans **Outils > Mises à jour** : version installée, état
+(« À jour », « N mises à jour disponibles » ou « Impossible de vérifier »
+avec la cause), date de la dernière vérification, bouton **Mettre à jour**
+et liste lisible des changements à venir (Nouveauté, Correctif,
+Amélioration, Doc), chacun avec un lien vers son détail sur le site du
+dépôt. Des liens ouvrent le projet, son README et la page pour signaler un
+problème. Réinitialisation, sauvegardes locales et état git sont rangés
+dans **Options avancées**. Nebula te dit ensuite s'il suffit de rafraîchir
+la page ou s'il faut redémarrer le serveur.
+
+Dépôt privé : la vérification automatique utilise les identifiants déjà
+enregistrés par Git (Git Credential Manager, clé SSH) sans jamais ouvrir
+de fenêtre de connexion. S'ils manquent, l'écran l'indique ; le bouton
+**Mettre à jour** peut alors ouvrir la connexion de Git.
 
 **Tes réglages ne sont jamais perdus** : avant chaque mise à jour, tes
 modifications locales sont mises de côté (`git stash`), puis remises en
@@ -304,7 +318,7 @@ la pile de stash.
 |---|---|
 | Fichiers modifiés ou supprimés en local | Mis de côté puis restaurés |
 | Fichiers non suivis qui gêneraient | Mis de côté eux aussi |
-| Verrou git orphelin (plus de 60 s) | Retiré automatiquement |
+| Verrou git orphelin (plus de 5 min, aucun git en cours) | Retiré automatiquement |
 | Historique divergent | Bouton « Réinitialiser à la version distante » |
 | Réseau, authentification, disque plein | Message clair sur la cause |
 

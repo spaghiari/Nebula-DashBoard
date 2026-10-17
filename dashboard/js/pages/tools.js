@@ -1,8 +1,8 @@
 /* ================================================================
    Nebula - Page Tools (Outils)
    ----------------------------------------------------------------
-   renderTools : page Outils avec sections Demarrage / Apparence /
-   Acces rapide / Hooks globaux / Variables d'env / Sauvegardes.
+   renderTools : page Outils avec sections Demarrage / Mises a jour /
+   Apparence / Acces rapide / Hooks globaux / Variables d'env / Sauvegardes.
    loadEnvVars : panneau .env.local avec DPAPI encrypt/decrypt + CRUD
    par cle, groupement par prefixe avant le premier underscore.
    loadBackups : liste des derniers backups + bouton "Sauvegarder maintenant".
@@ -11,7 +11,8 @@
    fmtDate, fmtBytes, I.*, setBreadcrumbs, setTopbarActions, toastOk,
    toastErr, confirmDialog, THEMES, getCurrentTheme, applyTheme.
    Forward-refs (app.js) : resetOnboarded, startFirstRunWizard,
-   modalSystemUpdate, modalHooks, modalHooksErrorsViewer.
+   modalSystemUpdate, renderUpdatesCard, checkForUpdates, renderUpdateBadge,
+   modalHooks, modalHooksErrorsViewer.
 
    Ref : CM-2 batch 6, refactor 2026-05-13.
    ================================================================ */
@@ -51,8 +52,18 @@ async function renderTools() {
   startupNote.appendChild(startupP);
   stack.appendChild(startupNote);
 
+  // Mises a jour : carte dediee (etat, changements a venir, liens projet,
+  // options avancees). Rendue par renderUpdatesCard (app.js) depuis
+  // STATE.systemVersion, re-rendue apres chaque verification.
+  stack.appendChild(el('div', 'section-label', '<span class="num">B.</span> Mises à jour'));
+  const updatesHost = el('div');
+  stack.appendChild(updatesHost);
+  // Pas encore d'info (page ouverte avant la verification du chargement) :
+  // on la lance ; l'anti-rebond evite un double fetch.
+  if (!STATE.systemVersion) checkForUpdates().then(renderUpdateBadge).catch(() => {});
+
   // Apparence -- selecteur de theme
-  stack.appendChild(el('div', 'section-label', '<span class="num">B.</span> Apparence & assistance'));
+  stack.appendChild(el('div', 'section-label', '<span class="num">C.</span> Apparence & assistance'));
   const themeCard = el('div', 'card');
   themeCard['innerHTML'] = `<p class="muted" style="margin:0 0 var(--sp-3);font-size:13px">Choisis l'ambiance visuelle de ton dashboard. Le choix est synchronisé sur ce serveur Nebula.</p>`;
   const themeGrid = el('div', 'theme-grid');
@@ -102,24 +113,10 @@ async function renderTools() {
   tutorialRow.appendChild(replayBtn);
   themeCard.appendChild(tutorialRow);
 
-  // Verifier les mises a jour
-  const updateRow = el('div');
-  updateRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:var(--sp-3);margin-top:var(--sp-3);padding-top:var(--sp-3);border-top:1px solid var(--border)';
-  updateRow['innerHTML'] = `
-    <div>
-      <div style="font-size:13px;font-weight:500;margin-bottom:2px">Mises à jour</div>
-      <div class="dim" style="font-size:11.5px">Synchronisation avec le dépôt git officiel d'Nebula</div>
-    </div>
-  `;
-  const updateBtn = btn('Vérifier maintenant', 'btn-sm', I.refresh);
-  updateBtn.addEventListener('click', () => modalSystemUpdate());
-  updateRow.appendChild(updateBtn);
-  themeCard.appendChild(updateRow);
-
   stack.appendChild(themeCard);
 
   // Quick open
-  stack.appendChild(el('div', 'section-label', '<span class="num">C.</span> Accès rapide'));
+  stack.appendChild(el('div', 'section-label', '<span class="num">D.</span> Accès rapide'));
   const quick = el('div', 'quick-grid');
   const quickItems = [
     { label: '~/.claude.json', target: 'claude-json' },
@@ -141,7 +138,7 @@ async function renderTools() {
   stack.appendChild(quick);
 
   // Hooks globaux + log d'erreurs
-  stack.appendChild(el('div', 'section-label', '<span class="num">D.</span> Hooks globaux'));
+  stack.appendChild(el('div', 'section-label', '<span class="num">E.</span> Hooks globaux'));
   const hooksCard = el('div', 'card');
   hooksCard['innerHTML'] = `<div class="dim" style="font-size:12px;margin-bottom:var(--sp-2)">Édition complète via la modale. Le viewer d'erreurs ne couvre actuellement que les hooks réflexifs ; les autres hooks .sh écrivent leur stderr dans le transcript Claude Code, pas dans un log.</div>`;
   const hooksRow = el('div');
@@ -156,19 +153,20 @@ async function renderTools() {
   stack.appendChild(hooksCard);
 
   // Env vars
-  stack.appendChild(el('div', 'section-label', '<span class="num">E.</span> Variables d\'environnement'));
+  stack.appendChild(el('div', 'section-label', '<span class="num">F.</span> Variables d\'environnement'));
   const envHost = el('div');
   stack.appendChild(envHost);
   loadEnvVars(envHost);
 
   // Backups
-  stack.appendChild(el('div', 'section-label', '<span class="num">F.</span> Sauvegardes'));
+  stack.appendChild(el('div', 'section-label', '<span class="num">G.</span> Sauvegardes'));
   const backupHost = el('div');
   stack.appendChild(backupHost);
   loadBackups(backupHost);
 
   page.appendChild(stack);
   c.appendChild(page);
+  renderUpdatesCard(updatesHost);
 }
 
 async function loadEnvVars(host) {

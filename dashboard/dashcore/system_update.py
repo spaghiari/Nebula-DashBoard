@@ -11,11 +11,14 @@ hardcodées (pas d'injection possible via les paramètres utilisateur).
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from dashcore.config import LEGACY_ORIGIN_URL, ORIGIN_URL, ROOT, log
 
@@ -23,6 +26,35 @@ from dashcore.config import LEGACY_ORIGIN_URL, ORIGIN_URL, ROOT, log
 GIT_TIMEOUT_FETCH = 20
 GIT_TIMEOUT_QUICK = 5
 GIT_TIMEOUT_PULL = 60
+
+# Un fetch terminé il y a moins de FETCH_REUSE_SECONDS est réutilisé tel quel :
+# deux onglets (ou un F5 en rafale) qui vérifient en même temps ne lancent
+# qu'un seul `git fetch`, le second attend le premier sous _GIT_LOCK.
+FETCH_REUSE_SECONDS = 15
+
+# Vérification en arrière-plan : jamais de demande d'identifiants (invite
+# terminal ou fenêtre Git Credential Manager à chaque chargement de page).
+# Les identifiants déjà enregistrés restent utilisés ; s'ils manquent, le
+# fetch échoue vite et l'écran des mises à jour l'explique. `git pull`
+# (« Mettre à jour », action explicite) garde le comportement interactif.
+_NONINTERACTIVE_GIT_ENV = {"GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+
+
+def _noninteractive_env() -> dict:
+    """Environnement du fetch d'arrière-plan. Ajoute `ssh -o BatchMode=yes`
+    (OpenSSH n'attend ni passphrase ni confirmation de clé d'hôte dans la
+    console du serveur, sinon le fetch bloque `_GIT_LOCK` jusqu'au timeout)
+    seulement si l'utilisateur n'a pas déjà choisi sa commande SSH
+    (`GIT_SSH_COMMAND` ou `core.sshCommand`, ex. plink) : on ne l'écrase pas."""
+    env = dict(_NONINTERACTIVE_GIT_ENV)
+    if not os.environ.get("GIT_SSH_COMMAND"):
+        rc, out, _ = _git("config", "--get", "core.sshCommand")
+        if rc != 0 or not out:
+            env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+    return env
+
+# Dernier fetch par dépôt (clé = str(ROOT)) : {"attempt_at", "ok_at", "error"}.
+_FETCH_STATE: dict[str, dict] = {}
 
 # Âge minimum (secondes) avant de considérer un .git/index.lock comme
 # orphelin. 5 min : un repack/gc ou un fetch lent peut légitimement tenir
@@ -81,8 +113,12 @@ def _filter_user_data(status_lines: list[str]) -> list[str]:
     return out
 
 
-def _git(*args: str, timeout: int = GIT_TIMEOUT_QUICK) -> tuple[int, str, str]:
-    """Lance une commande git dans ROOT et retourne (returncode, stdout, stderr)."""
+def _git(*args: str, timeout: int = GIT_TIMEOUT_QUICK,
+         env: dict[str, str] | None = None) -> tuple[int, str, str]:
+    """Lance une commande git dans ROOT et retourne (returncode, stdout, stderr).
+
+    `env` complète l'environnement courant (jamais remplacé en entier).
+    """
     git_cli = shutil.which("git") or "git"
     try:
         r = subprocess.run(
@@ -91,6 +127,7 @@ def _git(*args: str, timeout: int = GIT_TIMEOUT_QUICK) -> tuple[int, str, str]:
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
             timeout=timeout,
+            env={**os.environ, **env} if env else None,
         )
         return r.returncode, (r.stdout or "").strip(), (r.stderr or "").strip()
     except FileNotFoundError:
@@ -146,6 +183,141 @@ def _normalize_git_url(url: str) -> str:
     return f"{host}/{path}".lower()
 
 
+# --- URL web du dépôt (liens « Voir le projet », issues, commits) ----------
+#
+# SÉCURITÉ : l'URL du remote peut contenir des identifiants
+# (https://TOKEN@github.com/... ou https://user:pass@...). L'URL web n'est
+# RECONSTRUITE qu'à partir de l'hôte, du port http(s) et du chemin : la partie
+# userinfo, la query et le fragment ne sont jamais recopiés. Seuls http(s) sont
+# produits ; chemin local, file://, git:// ou schéma inconnu -> aucune URL.
+
+_HOST_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$")
+_WEB_PATH_RE = re.compile(r"^[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)+$")
+_URL_SCHEME_RE = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*)://([^/?#]*)([^?#]*)")
+_SSH_SCHEMES = frozenset({"ssh", "git+ssh", "ssh+git"})
+_HOST_LABELS = (("github.com", "GitHub"), ("gitlab.com", "GitLab"),
+                ("codeberg.org", "Codeberg"), ("bitbucket.org", "Bitbucket"))
+# Identifiants dans une URL citée par un message d'erreur git.
+_URL_USERINFO_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/@\s'\"]+@")
+
+
+def _redact_credentials(text: str) -> str:
+    """Retire tout `user:pass@` des URL présentes dans un texte (stderr git)."""
+    return _URL_USERINFO_RE.sub(r"\1", text or "")
+
+
+def _repo_web_url(remote_url: str) -> str:
+    """URL web (http/https) d'un remote git, sans identifiants. '' si non dérivable.
+
+    Formes gérées : https://hôte/owner/repo(.git), git@hôte:owner/repo(.git),
+    ssh://git@hôte[:port]/owner/repo(.git). Le port SSH n'est pas un port web :
+    il est ignoré ; un port http(s) explicite (hors 80/443) est conservé.
+    """
+    u = (remote_url or "").strip()
+    if not u or "\\" in u:
+        return ""
+    port = ""
+    m = _URL_SCHEME_RE.match(u)
+    if m:
+        scheme = m.group(1).lower()
+        if scheme in ("http", "https"):
+            web_scheme = scheme
+        elif scheme in _SSH_SCHEMES:
+            web_scheme = "https"
+        else:
+            return ""
+        hostport = m.group(2).rsplit("@", 1)[-1]
+        host, _, port = hostport.partition(":")
+        path = m.group(3)
+        if web_scheme != scheme or port in ("80", "443"):
+            port = ""
+    else:
+        m = _SCP_LIKE_RE.match(u)
+        if not m:
+            return ""
+        host, path = m.group(1), m.group(2)
+        web_scheme = "https"
+        if len(host) == 1:  # « C:/depots/x.git » : lettre de lecteur, pas un hôte
+            return ""
+    host = host.lower()
+    if not _HOST_RE.match(host) or (port and not port.isdigit()):
+        return ""
+    path = path.strip("/")
+    if path.lower().endswith(".git"):
+        path = path[:-4].rstrip("/")
+    if not _WEB_PATH_RE.match(path) or any(s in (".", "..") for s in path.split("/")):
+        return ""
+    netloc = f"{host}:{port}" if port else host
+    return f"{web_scheme}://{netloc}/{path}"
+
+
+def _repo_host_label(web_url: str) -> str:
+    """Nom lisible de l'hébergeur (« GitHub »...), sinon le nom d'hôte."""
+    host = (urlsplit(web_url).hostname or "") if web_url else ""
+    for domain, label in _HOST_LABELS:
+        if host == domain or host.endswith("." + domain):
+            return label
+    return host
+
+
+def _repo_links(remote_url: str) -> dict:
+    """Champs `repo_*` exposés par /api/system/version (vides si non dérivables).
+
+    GitHub, Forgejo et Gitea partagent `/issues` et `/commit/<sha>` ; GitLab
+    préfixe ces routes par `/-/`. Le README s'affiche à la racine du dépôt.
+    """
+    web = _repo_web_url(remote_url)
+    if not web:
+        return {"repo_web_url": "", "repo_host_label": "",
+                "repo_issues_url": "", "repo_commit_url": ""}
+    sep = "/-/" if "gitlab" in (urlsplit(web).hostname or "") else "/"
+    return {
+        "repo_web_url": web,
+        "repo_host_label": _repo_host_label(web),
+        "repo_issues_url": f"{web}{sep}issues",
+        "repo_commit_url": f"{web}{sep}commit/",
+    }
+
+
+def _tracked_remote_url(branch: str) -> str:
+    """URL du remote suivi par `branch` (repli : origin). '' si aucune."""
+    remote = "origin"
+    if branch and branch != "HEAD":
+        rc, name, _ = _git("config", "--get", f"branch.{branch}.remote")
+        if rc == 0 and name and name != ".":
+            remote = name
+    rc, url, _ = _git("remote", "get-url", remote)
+    return url if rc == 0 else ""
+
+
+def _iso(ts: float) -> str | None:
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds") if ts else None
+
+
+def _fetch_remote() -> tuple[bool, str]:
+    """`git fetch` non interactif, sérialisé et dédoublonné.
+
+    Sous _GIT_LOCK : un fetch ne s'entrelace ni avec un autre fetch ni avec un
+    pull/reset (mêmes refs, même FETCH_HEAD). Un fetch terminé il y a moins de
+    FETCH_REUSE_SECONDS est réutilisé : la 2e requête concurrente attend la
+    1re puis reprend son résultat au lieu de relancer git.
+    Retourne (succès, erreur sans identifiants).
+    """
+    with _GIT_LOCK:
+        state = _FETCH_STATE.setdefault(str(ROOT), {"attempt_at": 0.0, "ok_at": 0.0, "error": ""})
+        if time.time() - state["attempt_at"] < FETCH_REUSE_SECONDS:
+            return not state["error"], state["error"]
+        _migrate_origin_remote()
+        rc, _, err = _git("fetch", "--quiet", timeout=GIT_TIMEOUT_FETCH,
+                          env=_noninteractive_env())
+        error = "" if rc == 0 else (_redact_credentials(err).strip() or "git fetch a échoué")
+        state["attempt_at"] = time.time()
+        state["error"] = error
+        if not error:
+            state["ok_at"] = state["attempt_at"]
+        return not error, error
+
+
 def _migrate_origin_remote() -> bool:
     """Réoriente `origin` de l'ancien GitLab vers Forgejo (cf. config.py).
 
@@ -162,7 +334,8 @@ def _migrate_origin_remote() -> bool:
             return False
         # Cible injoignable (poste hors du LAN, Forgejo arrêté) : on garde
         # l'ancien origin plutôt que de basculer vers un dépôt mort.
-        rc_l, _, err_l = _git("ls-remote", "--heads", ORIGIN_URL, timeout=GIT_TIMEOUT_FETCH)
+        rc_l, _, err_l = _git("ls-remote", "--heads", ORIGIN_URL, timeout=GIT_TIMEOUT_FETCH,
+                              env=_noninteractive_env())
         if rc_l != 0:
             log.info("Bascule du remote origin différée, %s injoignable : %s", ORIGIN_URL, err_l)
             return False
@@ -319,7 +492,18 @@ def _tracking_branch() -> str:
 def system_version_info(check_remote: bool = False) -> dict:
     """Infos détaillées sur la version locale et l'état de mise à jour.
 
-    Si `check_remote` est True, lance `git fetch` (lent, à éviter au load).
+    Si `check_remote` est True, lance `git fetch` (cf. `_fetch_remote` :
+    non interactif, sérialisé, dédoublonné sur FETCH_REUSE_SECONDS).
+
+    Champs ajoutés pour l'écran des mises à jour :
+    - `repo_web_url`, `repo_host_label`, `repo_issues_url`, `repo_commit_url`
+      (préfixe à compléter par le sha), dérivés du remote suivi, sans
+      identifiants ; chaînes vides si le remote n'est pas une URL web ;
+    - `checked_at` (ISO, dernier fetch réussi de ce processus, ou None),
+      `check_error` / `check_hint` (dernière tentative échouée, sinon None) ;
+    - par commit à venir : `sha_full` et `date` (ISO, date du commit).
+    Un fetch en échec n'interrompt plus la réponse : `fetch_error` est posé et
+    le retard est calculé sur la dernière référence distante connue.
     """
     from dashcore import __version__ as _pkg_version
     if not _is_git_repo():
@@ -359,17 +543,24 @@ def system_version_info(check_remote: bool = False) -> dict:
         "fetched": False,
     }
 
+    if check_remote and upstream:
+        ok, err = _fetch_remote()
+        if ok:
+            info["fetched"] = True
+        else:
+            info["fetch_error"] = err
+
+    # Après le fetch : `_migrate_origin_remote` a pu réorienter origin.
+    info.update(_repo_links(_tracked_remote_url(branch)))
+    state = _FETCH_STATE.get(str(ROOT)) or {}
+    info["checked_at"] = _iso(state.get("ok_at", 0.0))
+    info["check_error"] = state.get("error") or None
+    info["check_hint"] = (_diagnose_remote_failure(info["check_error"])
+                          if info["check_error"] else None)
+
     if not upstream:
         info["reason"] = "Aucune branche distante trackée."
         return info
-
-    if check_remote:
-        _migrate_origin_remote()
-        rcf, _, errf = _git("fetch", "--quiet", timeout=GIT_TIMEOUT_FETCH)
-        if rcf != 0:
-            info["fetch_error"] = errf or "git fetch a échoué"
-            return info
-        info["fetched"] = True
 
     # Compte les commits en retard ET en avance pour détecter une divergence.
     # Cas courant qui matérialise une divergence ici : workflow dev→export
@@ -387,7 +578,7 @@ def system_version_info(check_remote: bool = False) -> dict:
     if info["behind"] > 0:
         rc5, log_out, _ = _git(
             "log", f"HEAD..{upstream}",
-            "--pretty=%h\x1f%s\x1f%an\x1f%ar",
+            "--pretty=%h\x1f%s\x1f%an\x1f%ar\x1f%H\x1f%cI",
             "--max-count=30",
         )
         if rc5 == 0:
@@ -397,6 +588,8 @@ def system_version_info(check_remote: bool = False) -> dict:
                     "subject": parts[1],
                     "author": parts[2] if len(parts) > 2 else "",
                     "relative": parts[3] if len(parts) > 3 else "",
+                    "sha_full": parts[4] if len(parts) > 4 else "",
+                    "date": parts[5] if len(parts) > 5 else "",
                 }
                 for line in log_out.splitlines()
                 for parts in [line.split("\x1f")]
@@ -468,10 +661,28 @@ def _diagnose_pull_failure(pull_err: str, pull_out: str) -> str | None:
         return ("Ton dépôt local a des commits que le distant n'a pas (branche divergée). "
                 "Utilise « Réinitialiser à la version distante » pour forcer l'alignement "
                 "(tes modifs seront sauvées dans `git stash list`).")
+    return _diagnose_remote_failure(blob)
+
+
+# Identifiants absents ou refusés. Testé AVANT la connexion : un refus de clé
+# SSH affiche aussi « Could not read from remote repository ».
+_AUTH_PATTERNS = ("authentication failed", "permission denied", "could not read username",
+                  "could not read password", "terminal prompts disabled",
+                  "repository not found", "returned error: 403", "returned error: 401")
+
+
+def _diagnose_remote_failure(blob: str) -> str | None:
+    """Hint humain pour un échec d'accès au dépôt distant (fetch ou pull)."""
+    blob = (blob or "").lower()
+    if any(p in blob for p in _AUTH_PATTERNS):
+        return ("Accès au dépôt refusé : il est peut-être privé et Git n'est pas "
+                "connecté à ton compte. Connecte-toi (Git Credential Manager, jeton "
+                "ou clé SSH) puis réessaie ; « Mettre à jour » peut aussi ouvrir la "
+                "fenêtre de connexion de Git.")
     if "could not resolve host" in blob or "failed to connect" in blob or "could not read from remote" in blob:
         return "Connexion au serveur git impossible. Vérifie ta connexion internet."
-    if "authentication failed" in blob or "permission denied" in blob or "could not read username" in blob:
-        return "Authentification git échouée. Vérifie tes identifiants ou ta clé SSH."
+    if "timeout" in blob or "timed out" in blob:
+        return "Le serveur git ne répond pas (délai dépassé). Réessaie plus tard."
     if "fatal: refusing to merge unrelated histories" in blob:
         return "Histoires git non-liées. Cas rare — utilise « Réinitialiser à la version distante »."
     if "no space left" in blob:

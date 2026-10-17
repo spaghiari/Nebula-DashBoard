@@ -2436,45 +2436,288 @@ async function startFirstRunWizard() {
 /* ================================================================
    SYSTEM UPDATE — vérification & application via git
    ================================================================ */
+// Quand vérifier le dépôt distant (git fetch via ?check=1) :
+// - à CHAQUE chargement de la page, sauf F5 en rafale (anti-rebond 2 min,
+//   partagé entre onglets via localStorage) ;
+// - au retour sur l'onglet si la dernière vérification date de plus de 10 min ;
+// - toutes les 30 min (setInterval dans init()).
+// Le serveur sérialise et dédoublonne les fetch concurrents (_fetch_remote).
 const UPDATE_CHECK_KEY = 'nebula-last-update-check';
-const UPDATE_SESSION_FLAG = 'nebula-update-checked-this-session';
-const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;  // 1h
+const UPDATE_DEBOUNCE_MS = 2 * 60 * 1000;
+const UPDATE_VISIBLE_STALE_MS = 10 * 60 * 1000;
+const UPDATE_PERIOD_MS = 30 * 60 * 1000;
+let _updateCheckInflight = null;  // { remote, promise } : une requête à la fois
 
-async function checkForUpdates({ force = false } = {}) {
-  // 1ère ouverture de session (sessionStorage vide) → toujours forcer un fetch.
-  // Ainsi un fermer/rouvrir d'onglet déclenche un check frais sans attendre l'intervalle.
-  let firstOfSession = false;
-  try {
-    if (!sessionStorage.getItem(UPDATE_SESSION_FLAG)) {
-      firstOfSession = true;
-      sessionStorage.setItem(UPDATE_SESSION_FLAG, '1');
+function lastUpdateCheckAt() {
+  try { return parseInt(localStorage.getItem(UPDATE_CHECK_KEY) || '0', 10) || 0; }
+  catch { return 0; }
+}
+
+async function checkForUpdates({ force = false, minAgeMs = UPDATE_DEBOUNCE_MS } = {}) {
+  const wantRemote = force || (Date.now() - lastUpdateCheckAt()) > minAgeMs;
+  // Requête déjà en vol : on la partage si elle répond au besoin.
+  if (_updateCheckInflight && (_updateCheckInflight.remote || !wantRemote)) {
+    return _updateCheckInflight.promise;
+  }
+  // Horodaté AVANT la requête : un échec compte aussi (pas de martelage du
+  // serveur git quand le réseau ou l'authentification est en panne).
+  if (wantRemote) { try { localStorage.setItem(UPDATE_CHECK_KEY, String(Date.now())); } catch {} }
+
+  const promise = (async () => {
+    let info;
+    try { info = await API.get(`/api/system/version?check=${wantRemote ? '1' : '0'}`); }
+    catch (e) {
+      // Jamais de toast ici (vérification d'arrière-plan) : l'erreur est
+      // affichée dans l'écran des mises à jour.
+      STATE.updateCheckError = e.message || 'serveur injoignable';
+      refreshUpdatePanels();
+      return null;
     }
-  } catch { /* sessionStorage indispo */ }
+    STATE.updateCheckError = null;
+    STATE.systemVersion = info;
+    // Source unique de la version : injectée dans la sidebar (cf. brand-version
+    // de index.html, initialement "v…" placeholder).
+    if (info.version) {
+      const tag = document.getElementById('brand-version');
+      if (tag) tag.textContent = 'v' + info.version;
+    }
+    refreshUpdatePanels();
+    return info;
+  })();
+  _updateCheckInflight = { remote: wantRemote, promise };
+  try { return await promise; }
+  finally { if (_updateCheckInflight && _updateCheckInflight.promise === promise) _updateCheckInflight = null; }
+}
 
-  // Anti-spam : ne check le distant qu'une fois par UPDATE_CHECK_INTERVAL_MS
-  let shouldCheckRemote = force || firstOfSession;
-  if (!shouldCheckRemote) {
-    try {
-      const last = parseInt(localStorage.getItem(UPDATE_CHECK_KEY) || '0', 10);
-      shouldCheckRemote = (Date.now() - last) > UPDATE_CHECK_INTERVAL_MS;
-    } catch { shouldCheckRemote = true; }
-  }
+// Vérification d'arrière-plan + badge, sans jamais lever.
+function runUpdateCheck(minAgeMs, why) {
+  return checkForUpdates({ minAgeMs })
+    .then(renderUpdateBadge)
+    .catch(e => console.warn(`[updates] vérification (${why}) échouée :`, e.message));
+}
 
-  let info;
-  try { info = await API.get(`/api/system/version?check=${shouldCheckRemote ? '1' : '0'}`); }
-  catch { return null; }
+/* ---------- Écran des mises à jour : briques partagées section / modale ---------- */
 
-  if (shouldCheckRemote && info.fetched) {
-    try { localStorage.setItem(UPDATE_CHECK_KEY, String(Date.now())); } catch {}
+// Types de commit (convention `type(scope): message`) -> badge lisible.
+const COMMIT_TYPES = {
+  feature: ['Nouveauté', 'accent'], feat: ['Nouveauté', 'accent'],
+  fix: ['Correctif', 'ok'],
+  update: ['Amélioration', 'info'], refactor: ['Amélioration', 'info'],
+  perf: ['Amélioration', 'info'], style: ['Amélioration', 'info'], chore: ['Amélioration', 'info'],
+  doc: ['Doc', 'mute'], docs: ['Doc', 'mute'],
+  push: ['Version', 'mute'],
+};
+
+// « feature(ui): nouvel écran » -> { text: 'Nouvel écran', label: 'Nouveauté', tone: 'accent' }.
+// Type inconnu : sujet affiché tel quel, sans badge.
+function parseCommitSubject(subject) {
+  const s = String(subject || '').trim();
+  const m = /^([A-Za-z]+)(?:\(([^)]*)\))?!?:\s*(.+)$/.exec(s);
+  const t = m && COMMIT_TYPES[m[1].toLowerCase()];
+  if (!t) return { text: s, label: '', tone: '' };
+  return { text: m[3].charAt(0).toUpperCase() + m[3].slice(1), label: t[0], tone: t[1] };
+}
+
+// Le serveur ne renvoie que du http(s) ; double garde avant tout href.
+function safeWebUrl(u) {
+  return /^https?:\/\/[^\s"'<>]+$/i.test(String(u || '')) ? String(u) : '';
+}
+
+function extLink(url, label, icon, cls = 'btn btn-sm btn-ghost') {
+  const u = safeWebUrl(url);
+  if (!u) return '';
+  return `<a class="${cls}" href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer">${icon || ''}<span>${escapeHtml(label)}</span></a>`;
+}
+
+// État résumé : { tone: ok|accent|warn|err|mute, title, sub }.
+function updateStatus(info, err) {
+  if (!info) return { tone: 'err', title: 'Impossible de vérifier', sub: err || 'Le serveur Nebula ne répond pas.' };
+  if (!info.is_git) return { tone: 'mute', title: 'Mises à jour automatiques indisponibles', sub: info.reason || "Cette installation n'est pas un clone git." };
+  const n = info.behind || 0;
+  const failed = info.check_error ? (info.check_hint || info.check_error) : '';
+  if (info.diverged) {
+    return { tone: 'warn', title: 'Versions divergentes',
+      sub: `${info.ahead} modification(s) locale(s) absentes du dépôt, ${n} nouveauté(s) côté dépôt. Voir les options avancées.` };
   }
-  STATE.systemVersion = info;
-  // Source unique de la version : injectée dans la sidebar (cf. brand-version
-  // de index.html, initialement "v…" placeholder).
-  if (info.version) {
-    const tag = document.getElementById('brand-version');
-    if (tag) tag.textContent = 'v' + info.version;
+  if (n > 0) {
+    return { tone: 'accent', title: `${n} mise${n > 1 ? 's' : ''} à jour disponible${n > 1 ? 's' : ''}`,
+      sub: failed ? `Impossible de vérifier : ${failed} Liste issue de la dernière vérification réussie.` :'Tes données (workspaces, MCPs, secrets) ne sont pas touchées.' };
   }
-  return info;
+  if (failed) return { tone: 'err', title: 'Impossible de vérifier', sub: failed };
+  if (!info.upstream) return { tone: 'mute', title: 'Aucune branche distante suivie', sub: info.reason || 'Impossible de comparer avec le dépôt.' };
+  return { tone: 'ok', title: 'À jour', sub: 'Tu as la dernière version publiée.' };
+}
+
+const UPDATE_TONE_ICON = { ok: 'check', accent: 'download', warn: 'alert', err: 'alert', mute: 'info' };
+
+// En-tête commun : état + version + date de vérification + détail d'erreur.
+function updateSummaryHtml(info, err) {
+  const st = updateStatus(info, err);
+  const checked = info && info.checked_at ? `Vérifié ${fmtAgo(info.checked_at)}`
+    : (info && info.check_error ? 'Échec' : (info && info.is_git ? 'Jamais vérifié' : ''));
+  const version = info ? `${info.version ? 'v' + escapeHtml(info.version) : ''}${info.head ? ` <code class="mono">${escapeHtml(info.head)}</code>` : ''}` : '';
+  const rawErr = info ? info.check_error : err;
+  return `
+    <div class="upd-head upd-${st.tone}">
+      <span class="upd-ic">${I[UPDATE_TONE_ICON[st.tone]] || ''}</span>
+      <div class="upd-head-main">
+        <div class="upd-title">${escapeHtml(st.title)}</div>
+        <div class="upd-sub">${escapeHtml(st.sub)}</div>
+        ${rawErr && info ? `<details class="upd-tech"><summary>Détail technique</summary><pre class="mono">${escapeHtml(rawErr)}</pre></details>` : ''}
+      </div>
+      <dl class="upd-facts">
+        ${version ? `<div><dt>Version installée</dt><dd>${version}</dd></div>` : ''}
+        ${checked ? `<div><dt>Dernière vérification</dt><dd>${escapeHtml(checked)}</dd></div>` : ''}
+      </dl>
+    </div>`;
+}
+
+// Liste lisible des changements à venir.
+function updateCommitsHtml(info) {
+  const commits = (info && info.commits) || [];
+  if (!commits.length) return '';
+  const base = safeWebUrl(info.repo_commit_url);
+  const rows = commits.map(c => {
+    const p = parseCommitSubject(c.subject);
+    const when = c.date ? fmtAgo(c.date) : (c.relative || '');
+    const sha = /^[0-9a-f]{7,40}$/i.test(c.sha_full || '') ? c.sha_full : (/^[0-9a-f]{4,40}$/i.test(c.sha || '') ? c.sha : '');
+    const link = base && sha ? extLink(base + sha, 'voir le détail', I.ext, 'upd-link') : '';
+    return `<li class="upd-item">
+        ${p.label ? `<span class="pill ${p.tone}">${escapeHtml(p.label)}</span>` : '<span class="pill mute">Changement</span>'}
+        <div class="upd-item-main">
+          <div class="upd-item-msg">${escapeHtml(p.text)}</div>
+          <div class="upd-item-meta">${escapeHtml(when)}${c.author ? ` · ${escapeHtml(c.author)}` : ''}${link ? ` · ${link}` : ''}</div>
+        </div>
+      </li>`;
+  }).join('');
+  const more = (info.behind || 0) - commits.length;
+  return `<div class="upd-list-h">Ce qui arrive</div>
+    <ol class="upd-list">${rows}</ol>
+    ${more > 0 ? `<div class="upd-more dim">…et ${more} changement(s) plus ancien(s)</div>` : ''}`;
+}
+
+// Liens vers le projet (masqués si le remote n'est pas une URL web).
+function updateRepoLinksHtml(info) {
+  if (!info || !safeWebUrl(info.repo_web_url)) return '';
+  const host = info.repo_host_label || "l'hébergeur";
+  return `<div class="upd-links">
+      ${extLink(info.repo_web_url, `Voir le projet sur ${host}`, I.ext)}
+      ${extLink(info.repo_web_url, 'Lire le README', I.book)}
+      ${extLink(info.repo_issues_url, 'Signaler un problème', I.message)}
+    </div>`;
+}
+
+// Re-rend toutes les sections « Mises à jour » montées (page Outils).
+function refreshUpdatePanels() {
+  document.querySelectorAll('[data-update-panel]').forEach(h => renderUpdatesCard(h));
+}
+
+// Confirmation + `git reset --hard <upstream>` (pré-stash serveur), puis rechargement.
+function confirmResetToUpstream(resetBtn, info) {
+  const target = (info && info.upstream) || 'origin/main';
+  confirmDialog(
+    `Réinitialiser ton installation sur ${target} ? Tes modifications locales du code sont sauvegardées automatiquement (git stash) et restent récupérables ici. Tes données (workspaces, MCPs, secrets) ne sont pas touchées.`,
+    () => withBusy(resetBtn, async () => {
+      let rr;
+      try { rr = await API.post('/api/system/reset', {}); }
+      catch (e) { toastErr(e.message); return; }
+      if (!rr.ok) { toastErr(rr.error || 'Échec de la réinitialisation'); return; }
+      toastOk(rr.message || 'Installation alignée sur la version distante');
+      setTimeout(() => location.reload(), 1200);
+    }, { keepBusyOnSuccess: true }),
+    { danger: true, confirmLabel: 'Réinitialiser' }
+  );
+}
+
+// Zone repliable « Options avancées » : réinitialisation, sauvegardes (stash),
+// divergence. Les encarts stash ne sont chargés qu'à l'ouverture.
+function updateAdvancedBox(info, { open = false, onToggle } = {}) {
+  const box = el('details', 'upd-adv');
+  box.open = open;
+  const dirty = (info && info.dirty_files) || [];
+  box.innerHTML = `
+    <summary>${I.sliders}<span>Options avancées</span><span class="dim">réinitialisation, sauvegardes locales, état git</span></summary>
+    <div class="upd-adv-body">
+      <dl class="upd-git">
+        <div><dt>Branche</dt><dd class="mono">${escapeHtml((info && info.branch) || '?')}</dd></div>
+        <div><dt>Suit</dt><dd class="mono">${escapeHtml((info && info.upstream) || 'aucune')}</dd></div>
+        <div><dt>En avance / en retard</dt><dd class="mono">${(info && info.ahead) || 0} / ${(info && info.behind) || 0}</dd></div>
+        ${info && info.head_message ? `<div><dt>Dernier changement installé</dt><dd>${escapeHtml(parseCommitSubject(info.head_message).text)}</dd></div>` : ''}
+      </dl>
+      ${dirty.length ? `<p class="upd-adv-note">${dirty.length}+ fichier(s) du code modifié(s) localement : ils sont mis de côté puis réappliqués automatiquement pendant la mise à jour.</p>
+        <ul class="help-list">${dirty.slice(0, 6).map(f => `<li class="mono" style="font-size:11px">${escapeHtml(f)}</li>`).join('')}</ul>` : ''}
+      <div class="upd-adv-reset">
+        <div>
+          <div class="upd-adv-t">Réinitialiser à la version distante</div>
+          <div class="dim">Si la mise à jour échoue ou si les versions ont divergé : aligne le code sur <code class="mono">${escapeHtml((info && info.upstream) || 'origin/main')}</code>. Modifications locales sauvegardées avant.</div>
+        </div>
+        <div data-reset-slot></div>
+      </div>
+      <div data-stash-slot></div>
+    </div>`;
+  if (info && info.is_git && info.upstream) {
+    const resetBtn = btn('Réinitialiser', 'btn-sm btn-danger-outline', I.refresh);
+    resetBtn.addEventListener('click', () => confirmResetToUpstream(resetBtn, info));
+    box.querySelector('[data-reset-slot]').appendChild(resetBtn);
+  } else {
+    box.querySelector('.upd-adv-reset').remove();
+  }
+  let stashMounted = false;
+  const mountStashes = () => {
+    if (stashMounted || !box.open) return;
+    stashMounted = true;
+    const slot = box.querySelector('[data-stash-slot]');
+    mountStashRecover(slot);
+    mountStashManager(slot);
+  };
+  box.addEventListener('toggle', () => { mountStashes(); if (onToggle) onToggle(box.open); });
+  mountStashes();
+  return box;
+}
+
+// Section « Mises à jour » de la page Outils. Rendue depuis STATE.systemVersion,
+// re-rendue après chaque vérification (refreshUpdatePanels).
+function renderUpdatesCard(host) {
+  if (!host || !host.isConnected) return;
+  host.dataset.updatePanel = '1';
+  const info = STATE.systemVersion || null;
+  const err = STATE.updateCheckError || null;
+  host.innerHTML = '';
+  const card = el('div', 'card upd-card');
+  if (!info && !err) {
+    card.innerHTML = `<div class="page-loader"><div class="spinner"></div><span>Vérification des mises à jour…</span></div>`;
+    host.appendChild(card);
+    return;
+  }
+  card.innerHTML = updateSummaryHtml(info, err);
+  const actions = el('div', 'upd-actions');
+  if (info && info.is_git && info.behind > 0 && !info.diverged) {
+    const go = btn('Mettre à jour', 'btn-primary', I.download);
+    go.addEventListener('click', () => modalSystemUpdate({ autoApply: true }));
+    const see = btn('Voir le détail', 'btn-ghost', I.list);
+    see.addEventListener('click', () => modalSystemUpdate());
+    actions.append(go, see);
+  } else if (info && info.diverged) {
+    const fix = btn('Résoudre', 'btn-primary', I.alert);
+    fix.addEventListener('click', () => modalSystemUpdate());
+    actions.appendChild(fix);
+  }
+  const check = btn('Vérifier maintenant', 'btn', I.refresh);
+  check.addEventListener('click', () => withBusy(check, async () => {
+    const r = await checkForUpdates({ force: true });
+    renderUpdateBadge(r);
+  }));
+  actions.appendChild(check);
+  card.appendChild(actions);
+
+  const list = updateCommitsHtml(info);
+  if (list) card.appendChild(el('div', 'upd-body', list));
+  const links = updateRepoLinksHtml(info);
+  if (links) card.appendChild(el('div', 'upd-foot', links));
+  if (info && info.is_git) {
+    card.appendChild(updateAdvancedBox(info, { open: !!host._advOpen, onToggle: (o) => { host._advOpen = o; } }));
+  }
+  host.appendChild(card);
 }
 
 function renderUpdateBadge(info) {
@@ -2681,8 +2924,8 @@ async function mountStashManager(host) {
   host.appendChild(box);
 }
 
-async function modalSystemUpdate() {
-  const body = el('div');
+async function modalSystemUpdate({ autoApply = false } = {}) {
+  const body = el('div', 'upd-modal');
   body.innerHTML = `<div class="page-loader"><div class="spinner"></div><span>Vérification…</span></div>`;
   const closeBtn = btn('Fermer', 'btn-ghost');
   const { close } = openModal({ title: 'Mises à jour Nebula', body, footer: closeBtn, wide: true });
@@ -2690,163 +2933,76 @@ async function modalSystemUpdate() {
 
   // Force un fetch frais à l'ouverture
   const info = await checkForUpdates({ force: true });
-  if (!info) {
-    body.innerHTML = `<div class="error-box">Impossible de vérifier les mises à jour.</div>`;
-    return;
-  }
+  renderUpdateBadge(info);
+  // Même en-tête que la section de la page Outils (état, version, vérification).
+  body.innerHTML = updateSummaryHtml(info, STATE.updateCheckError);
+  if (!info) return;
 
   if (!info.is_git) {
-    body.innerHTML = `
-      <div class="callout callout-info">
-        <div>
-          <strong>Auto-update indisponible.</strong>
-          ${escapeHtml(info.reason || 'Cette installation n\'est pas un dépôt git.')}
-          <p style="margin:var(--sp-2) 0 0">Pour activer l'auto-update, ton install doit être un clone du repo officiel d'Nebula (le chemin importe peu — bureau, disque secondaire, etc.).</p>
-        </div>
+    body.appendChild(el('div', 'callout callout-info', `
+      <div>
+        Pour activer les mises à jour automatiques, ton installation doit être un clone git du dépôt officiel de Nebula (le dossier importe peu : bureau, disque secondaire, etc.).
       </div>
-    `;
+    `));
     return;
   }
 
-  if (info.fetch_error) {
-    body.innerHTML = `
-      <div class="error-box" style="margin-bottom:var(--sp-3)">${escapeHtml(info.fetch_error)}</div>
-      <p class="muted">Vérifie ta connexion réseau et que le remote git est accessible.</p>
-    `;
-    return;
-  }
-
-  // Clean le loader avant d'appendChild les vraies sections
-  body.innerHTML = '';
+  const links = updateRepoLinksHtml(info);
 
   // ───── Cas DIVERGENT : pas de pull possible (workflow dev→export typique).
   //       Proposer directement le reset proactif, sans laisser l'utilisateur
   //       cliquer "Appliquer" pour découvrir le 500.
   if (info.diverged) {
-    const head = el('div');
-    head.innerHTML = `
-      <div class="update-version-header">
-        <div>
-          <div class="dim mono" style="font-size:10.5px;letter-spacing:0.16em;text-transform:uppercase">Version locale</div>
-          <div class="row" style="gap:var(--sp-2);margin-top:4px">
-            <span class="mono" style="font-size:14px;font-weight:600">${escapeHtml(info.head)}</span>
-            ${info.branch ? `<span class="badge mono">${escapeHtml(info.branch)}</span>` : ''}
-          </div>
-          ${info.head_message ? `<div class="dim" style="font-size:12px;margin-top:4px">${escapeHtml(info.head_message)}</div>` : ''}
-        </div>
-        ${info.upstream ? `<div class="dim mono" style="font-size:11px;text-align:right">Tracking<br>${escapeHtml(info.upstream)}</div>` : ''}
-      </div>
-    `;
-    body.appendChild(head);
-
     body.appendChild(el('div', 'callout callout-warn', `
       <div>
-        <strong>⚠ Branches divergées</strong>
+        <strong>Branches divergées</strong>
         <p style="margin:var(--sp-2) 0 0;font-size:13px">
           Ton dépôt local a <strong>${info.ahead} commit${info.ahead > 1 ? 's' : ''}</strong>
           que le remote n'a pas, ET le remote a <strong>${info.behind} commit${info.behind > 1 ? 's' : ''}</strong>
-          que ton local n'a pas. <code class="mono">git pull --ff-only</code> est mathématiquement
-          impossible dans ce cas.
+          que ton local n'a pas. <code class="mono">git pull --ff-only</code> est impossible dans ce cas.
         </p>
         <p style="margin:var(--sp-2) 0 0;font-size:13px">
           <strong>Cas le plus courant</strong> : workflow dev→export où tes commits locaux
           granulaires ont leurs équivalents bundlés sur le remote (même contenu, hash
           différents). La solution propre est de <strong>réinitialiser ton local sur le remote</strong>
-          — tes modifs locales seront stashées par sécurité.
+          (tes modifs locales seront stashées par sécurité).
         </p>
       </div>
     `));
 
-    const resetBox = el('div');
-    resetBox.style.cssText = 'margin-top:var(--sp-3);padding:var(--sp-4);background:var(--surface-2);border:1px solid var(--border);border-radius:8px';
+    const resetBox = el('div', 'upd-adv-reset upd-reset-strong');
     resetBox.innerHTML = `
-      <div style="font-size:13px;font-weight:500;margin-bottom:6px">🔄 Réinitialiser sur ${escapeHtml(info.upstream || 'origin/main')}</div>
-      <div class="dim" style="font-size:12px;margin-bottom:var(--sp-3);line-height:1.6">
-        Exécute <code class="mono">git reset --hard ${escapeHtml(info.upstream || 'origin/main')}</code> précédé
-        d'un <code class="mono">git stash --include-untracked</code> automatique pour préserver tes
-        éventuelles modifs locales. Les fichiers utilisateurs (registre, workspaces.json,
-        .env.local) sont préservés via <code class="mono">.gitignore</code> et skip-worktree.
+      <div>
+        <div class="upd-adv-t">Réinitialiser sur ${escapeHtml(info.upstream || 'origin/main')}</div>
+        <div class="dim">
+          Exécute <code class="mono">git reset --hard ${escapeHtml(info.upstream || 'origin/main')}</code> précédé
+          d'une sauvegarde automatique (<code class="mono">git stash</code>) de tes modifs locales du code. Les fichiers
+          utilisateurs (registre, workspaces.json, .env.local) sont préservés.
+        </div>
       </div>
     `;
     const resetBtn = btn('Réinitialiser sur origin', 'btn-primary', I.refresh);
-    resetBtn.addEventListener('click', () => {
-      confirmDialog(
-        `Réinitialiser ton local sur ${info.upstream || 'origin/main'} ? Tes ${info.ahead} commit(s) locaux seront perdus de l'historique (mais leur contenu est probablement déjà sur le remote sous forme bundlée). Modifs non-committées stashées par sécurité.`,
-        async () => {
-          resetBtn.disabled = true;
-          resetBtn.innerHTML = `<div class="spinner" style="width:12px;height:12px"></div><span>Reset en cours…</span>`;
-          try {
-            const rr = await API.post('/api/system/reset', {});
-            if (!rr.ok) { toastErr(rr.error || 'Échec du reset'); resetBtn.disabled = false; resetBtn.innerHTML = `${I.refresh}<span>Réessayer</span>`; return; }
-            toastOk(rr.message || 'Local aligné sur le remote');
-            setTimeout(() => location.reload(), 1200);
-          } catch (e) { toastErr(e.message); resetBtn.disabled = false; resetBtn.innerHTML = `${I.refresh}<span>Réessayer</span>`; }
-        },
-        { danger: true, confirmLabel: 'Réinitialiser' }
-      );
-    });
+    resetBtn.addEventListener('click', () => confirmResetToUpstream(resetBtn, info));
     resetBox.appendChild(resetBtn);
     body.appendChild(resetBox);
+    body.appendChild(el('div', 'upd-body', updateCommitsHtml(info)));
+    if (links) body.appendChild(el('div', 'upd-foot', links));
     // Gestionnaire de sauvegardes : les pre-reset s'accumulent surtout ici.
     mountStashManager(body);
     return;
   }
 
-  // ───── Header avec version locale (uniquement si updates dispos ou modifs locales) ─────
-  if (info.behind > 0 || (info.dirty && info.behind > 0)) {
-    const head = el('div');
-    head.innerHTML = `
-      <div class="update-version-header">
-        <div>
-          <div class="dim mono" style="font-size:10.5px;letter-spacing:0.16em;text-transform:uppercase">Version locale</div>
-          <div class="row" style="gap:var(--sp-2);margin-top:4px">
-            <span class="mono" style="font-size:14px;font-weight:600">${escapeHtml(info.head)}</span>
-            ${info.branch ? `<span class="badge mono">${escapeHtml(info.branch)}</span>` : ''}
-          </div>
-          ${info.head_message ? `<div class="dim" style="font-size:12px;margin-top:4px">${escapeHtml(info.head_message)}</div>` : ''}
-        </div>
-        ${info.upstream ? `<div class="dim mono" style="font-size:11px;text-align:right">Tracking<br>${escapeHtml(info.upstream)}</div>` : ''}
-      </div>
-    `;
-    body.appendChild(head);
-  }
-
-  // ───── Si déjà à jour ─────
-  if (info.behind === 0) {
-    body.appendChild(el('div', 'update-uptodate', `
-      ${I.check}
-      <div>
-        <strong>Tu es à jour</strong>
-        <span class="dim">Branche <code class="mono">${escapeHtml(info.upstream || 'origin')}</code></span>
-      </div>
-    `));
-    // Filet de sécurité : un stash résiduel d'un pull précédent doit rester
-    // récupérable même quand il n'y a plus de mise à jour à appliquer.
-    mountStashRecover(body);
-    // Gestionnaire de sauvegardes : visibilité + nettoyage 1-clic (sans CLI).
-    mountStashManager(body);
+  // ───── Déjà à jour (ou vérification impossible sans retard connu) ─────
+  if (!info.behind) {
+    if (links) body.appendChild(el('div', 'upd-foot', links));
+    // Filet de sécurité : stash résiduel d'un pull précédent récupérable et
+    // sauvegardes visibles, dans les options avancées.
+    body.appendChild(updateAdvancedBox(info));
     return;
   }
 
   // ───── Mises à jour disponibles ─────
-  body.appendChild(el('div', 'section-label', `<span class="num">▾</span> ${info.behind} commit${info.behind > 1 ? 's' : ''} à venir`));
-
-  const commitList = el('div', 'update-commits');
-  for (const c of info.commits) {
-    const item = el('div', 'update-commit');
-    item.innerHTML = `
-      <div class="update-commit-meta">
-        <span class="mono" style="color:var(--accent);font-weight:600">${escapeHtml(c.sha)}</span>
-        <span class="dim" style="font-size:11px">${escapeHtml(c.relative)} · ${escapeHtml(c.author || '?')}</span>
-      </div>
-      <div class="update-commit-msg">${escapeHtml(c.subject)}</div>
-    `;
-    commitList.appendChild(item);
-  }
-  if (info.behind > info.commits.length) {
-    commitList.appendChild(el('div', 'dim', `<small>…et ${info.behind - info.commits.length} commit(s) plus anciens</small>`));
-  }
-  body.appendChild(commitList);
+  body.appendChild(el('div', 'upd-body', updateCommitsHtml(info)));
 
   // Modifs locales : INFO seulement (auto-stash gère le pull). Plus jamais bloquant.
   if (info.dirty) {
@@ -2899,7 +3055,7 @@ async function modalSystemUpdate() {
           <div data-stash-recover></div>
         </div>
       `;
-      body.appendChild(errPanel);
+      updateRow.after(errPanel);
       // Propose la récupération du stash si le pop a échoué.
       if (r.stash_pop_warning) mountStashRecover(errPanel.querySelector('[data-stash-recover]'));
 
@@ -2933,7 +3089,7 @@ async function modalSystemUpdate() {
           );
         });
         resetBox.appendChild(resetBtn);
-        body.appendChild(resetBox);
+        errPanel.after(resetBox);
       }
       return;
     }
@@ -2983,6 +3139,10 @@ async function modalSystemUpdate() {
   });
   updateRow.appendChild(applyBtn);
   body.appendChild(updateRow);
+  if (links) body.appendChild(el('div', 'upd-foot', links));
+  body.appendChild(updateAdvancedBox(info));
+  // Bouton « Mettre à jour » de la page Outils : lance directement l'application.
+  if (autoApply) applyBtn.click();
 }
 
 /* ================================================================
@@ -5131,17 +5291,18 @@ function init() {
       setTimeout(() => startFirstRunWizard(), 400);
     }
 
-    // Vérification de mise à jour en arrière-plan (non-bloquante)
-    setTimeout(() => {
-      checkForUpdates().then(renderUpdateBadge).catch(e => console.warn('[updates] check au boot échoué :', e.message));
-    }, 1500);
+    // Vérification de mise à jour à chaque chargement de la page (non
+    // bloquante) ; seul l'anti-rebond UPDATE_DEBOUNCE_MS évite les F5 en rafale.
+    setTimeout(() => runUpdateCheck(UPDATE_DEBOUNCE_MS, 'chargement'), 1500);
 
-    // Re-check périodique (toutes les 30 min) sans force, donc respecte
-    // l'anti-spam UPDATE_CHECK_INTERVAL_MS pour le fetch distant.
-    // Ce poller global n'est PAS géré par clearPagePollers (volontaire).
-    setInterval(() => {
-      checkForUpdates().then(renderUpdateBadge).catch(e => console.warn('[updates] check périodique échoué :', e.message));
-    }, 30 * 60 * 1000);
+    // Retour sur l'onglet : nouvelle vérification si la dernière est ancienne.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') runUpdateCheck(UPDATE_VISIBLE_STALE_MS, 'retour sur l\'onglet');
+    });
+
+    // Re-check périodique (toutes les 30 min). Ce poller global n'est PAS
+    // géré par clearPagePollers (volontaire).
+    setInterval(() => runUpdateCheck(UPDATE_DEBOUNCE_MS, 'périodique'), UPDATE_PERIOD_MS);
   });
 }
 
