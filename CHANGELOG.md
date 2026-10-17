@@ -4,6 +4,13 @@ Les nouveautés de Nebula, version par version. La plus récente est en haut.
 La mise à jour se fait depuis Nebula : badge « MAJ » en haut de l'écran, ou
 Outils > Mises à jour.
 
+## 2.7.2 - 2026-10-17
+
+### Correctifs
+
+- La page d'accueil du dépôt sur GitHub affiche de nouveau le README
+  principal (la doc de la CI la remplaçait).
+
 ## 2.7.1 - 2026-10-17
 
 ### Améliorations

@@ -1,4 +1,4 @@
-# CI de Nebula. Détail et exécution locale : .github/README.md
+# CI de Nebula. Détail et exécution locale : .github/CI.md
 name: CI
 
 on:

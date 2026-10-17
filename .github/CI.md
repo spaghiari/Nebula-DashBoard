@@ -27,7 +27,7 @@ nouveaux résultats.
 python .github/scripts/audit.py                 # ou : ... audit.py <racine>
 cd dashboard && python -m unittest discover -s tests
 pip install bandit==1.9.4
-bandit -r dashboard -x dashboard/tests -ll -s B104,B310,B324
+bandit -r dashboard -x dashboard/tests -ll
 ```
 
 Semgrep et gitleaks : voir les commandes dans `ci.yml` (semgrep est
