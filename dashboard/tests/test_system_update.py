@@ -146,7 +146,7 @@ class NormalizeGitUrlTests(unittest.TestCase):
 
 @unittest.skipUnless(GIT, "git introuvable dans le PATH")
 class OriginMigrationTests(unittest.TestCase):
-    """Bascule GitLab -> Forgejo : dépôt bac à sable, jamais le vrai dépôt.
+    """Bascule GitLab -> GitHub : dépôt bac à sable, jamais le vrai dépôt.
 
     La « nouvelle » URL est remplacée par un dépôt nu local pour que le pull
     qui suit la bascule fonctionne hors réseau.
@@ -254,8 +254,8 @@ class RepoWebUrlTests(unittest.TestCase):
     def test_http_et_port_web_conserves(self):
         self.assertEqual(system_update._repo_web_url("http://forge.lan:3000/a/b.git"),
                          "http://forge.lan:3000/a/b")
-        self.assertEqual(system_update._repo_web_url("https://git.exemple.lan/administrateur/Claude-Dashboard.git"),
-                         "https://git.exemple.lan/administrateur/Claude-Dashboard")
+        self.assertEqual(system_update._repo_web_url("https://git.example.org/equipe/Projet.git"),
+                         "https://git.example.org/equipe/Projet")
 
     def test_aucune_url_pour_chemin_local_ou_schema_inconnu(self):
         for url in (
@@ -284,9 +284,9 @@ class RepoWebUrlTests(unittest.TestCase):
             "repo_issues_url": "https://github.com/o/r/issues",
             "repo_commit_url": "https://github.com/o/r/commit/",
         })
-        forgejo = system_update._repo_links("https://git.exemple.lan/a/b.git")
-        self.assertEqual(forgejo["repo_host_label"], "git.exemple.lan")
-        self.assertEqual(forgejo["repo_commit_url"], "https://git.exemple.lan/a/b/commit/")
+        autre = system_update._repo_links("https://git.example.org/a/b.git")
+        self.assertEqual(autre["repo_host_label"], "git.example.org")
+        self.assertEqual(autre["repo_commit_url"], "https://git.example.org/a/b/commit/")
         gitlab = system_update._repo_links("https://gitlab.com/g/sous/r.git")
         self.assertEqual(gitlab["repo_host_label"], "GitLab")
         self.assertEqual(gitlab["repo_issues_url"], "https://gitlab.com/g/sous/r/-/issues")
@@ -355,12 +355,15 @@ class VersionInfoTests(unittest.TestCase):
         self.assertNotIn("JETONSECRET", dump)
         self.assertNotIn("x-oauth", dump)
 
-    def test_remote_local_aucun_lien_et_fetch_horodate(self):
+    def test_remote_local_liens_vers_depot_public_et_fetch_horodate(self):
+        # Les liens de l'interface pointent toujours vers le dépôt public
+        # (GitHub), jamais vers le remote local (dépôt de travail interne).
         self._upstream_commit()
         info = system_update.system_version_info(check_remote=True)
         self.assertTrue(info["fetched"])
-        self.assertEqual(info["repo_web_url"], "")
-        self.assertEqual(info["repo_issues_url"], "")
+        self.assertEqual(info["repo_web_url"], system_update.PUBLIC_REPO_URL)
+        self.assertEqual(info["repo_issues_url"], system_update.PUBLIC_REPO_URL + "/issues")
+        self.assertEqual(info["repo_host_label"], "GitHub")
         self.assertIsNotNone(info["checked_at"])
         self.assertIsNone(info["check_error"])
         self.assertEqual(info["behind"], 1)
@@ -462,6 +465,62 @@ class NonInteractiveSshTests(unittest.TestCase):
         git.assert_not_called()
         env, _ = self._env({}, ssh_command="plink -batch")
         self.assertNotIn("GIT_SSH_COMMAND", env)
+
+
+
+class LocalGitErrorTests(unittest.TestCase):
+    """Retour terrain : git échouait dans le processus du dashboard (« v2.4.0 ? »,
+    « Jamais vérifié », « Vérifier maintenant » sans effet) sans aucun message."""
+
+    def _info(self, git_side_effect, upstream="", check=True):
+        patches = (
+            mock.patch.object(system_update, "_is_git_repo", return_value=True),
+            mock.patch.object(system_update, "_current_branch", return_value="main"),
+            mock.patch.object(system_update, "_tracking_branch", return_value=upstream),
+            mock.patch.object(system_update, "_tracked_remote_url", return_value=""),
+            mock.patch.object(system_update, "_fetch_remote", return_value=(True, "")),
+            mock.patch.object(system_update, "_git", side_effect=git_side_effect),
+        )
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        return system_update.system_version_info(check)
+
+    def test_dubious_ownership_remontee_avec_solution(self):
+        err = ("fatal: detected dubious ownership in repository at 'C:/claude-workspace'\n"
+               "To add an exception for this directory, call: git config --global --add safe.directory")
+        info = self._info(lambda *a, **k: (128, "", err))
+        self.assertEqual(info["head"], "?")
+        self.assertIn("dubious ownership", info["git_error"])
+        self.assertIn("dubious ownership", info["check_error"])
+        self.assertIn("safe.directory", info["check_hint"])
+        self.assertIn("administrateur", info["check_hint"])
+
+    def test_git_hors_path_trouve_dans_program_files(self):
+        # Git for Windows « Git Bash seulement » : absent du PATH d'un dashboard
+        # lancé par double-clic sur start-dashboard.bat.
+        from dashcore import helpers
+        with mock.patch.object(helpers.shutil, "which", return_value=None), \
+                mock.patch.object(helpers.os, "name", "nt"), \
+                mock.patch.dict(helpers.os.environ, {"ProgramW6432": "C:\\PF"}, clear=True), \
+                mock.patch.object(helpers.os.path, "isfile",
+                                  side_effect=lambda p: p.replace("/", "\\") == "C:\\PF\\Git\\cmd\\git.exe"):
+            self.assertEqual(helpers.git_cli().replace("/", "\\"), "C:\\PF\\Git\\cmd\\git.exe")
+        with mock.patch.object(helpers.shutil, "which", return_value=None), \
+                mock.patch.object(helpers.os, "name", "nt"), \
+                mock.patch.dict(helpers.os.environ, {}, clear=True):
+            self.assertEqual(helpers.git_cli(), "git")
+        with mock.patch.object(helpers.shutil, "which", return_value="/usr/bin/git"):
+            self.assertEqual(helpers.git_cli(), "/usr/bin/git")
+
+    def test_sans_branche_suivie_explique(self):
+        info = self._info(lambda *a, **k: (0, "abc1234", ""))
+        self.assertNotIn("git_error", info)
+        self.assertEqual(info["check_error"], "Aucune branche distante suivie.")
+        self.assertIn("--set-upstream-to=origin/main", info["check_hint"])
+        # Sans vérification demandée : pas d'erreur affichée au chargement.
+        info = self._info(lambda *a, **k: (0, "abc1234", ""), check=False)
+        self.assertIsNone(info["check_error"])
 
 
 if __name__ == "__main__":

@@ -4,6 +4,24 @@ Les nouveautés de Nebula, version par version. La plus récente est en haut.
 La mise à jour se fait depuis Nebula : badge « MAJ » en haut de l'écran, ou
 Outils > Mises à jour.
 
+## 2.4.1 - 2026-10-17
+
+### Correctifs
+
+- **Mises à jour qui ne se vérifiaient pas** (« v2.4.0 ? », « Jamais
+  vérifié », bouton « Vérifier maintenant » sans effet) quand Nebula est
+  lancé par double-clic sur `start-dashboard.bat` et que Git for Windows est
+  installé sans être dans le PATH (option « Git Bash seulement ») : Nebula
+  trouve maintenant git à son emplacement habituel.
+- Si git échoue malgré tout, l'écran des mises à jour affiche la cause et la
+  solution au lieu de rester muet.
+- Les liens « Voir le projet », « Lire le README », « Signaler un problème »
+  et le détail des changements pointent toujours vers le dépôt GitHub.
+
+### À faire après la mise à jour
+
+1. Redémarre le dashboard (le correctif est côté serveur).
+
 ## 2.4.0 - 2026-10-17
 
 Première version avec des notes de version. Elle regroupe tout ce qui est

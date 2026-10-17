@@ -130,6 +130,32 @@ def resolve_cli(name: str) -> str:
     return shutil.which(name) or name
 
 
+def git_cli() -> str:
+    """Chemin de git, même hors du PATH.
+
+    Git for Windows installé avec l'option « Git Bash seulement » n'est pas
+    dans le PATH : un dashboard lancé par double-clic sur
+    `start-dashboard.bat` ne le trouvait pas (« v2.4.0 ? », mises à jour
+    impossibles) alors qu'il marche depuis Git Bash. On essaie alors les
+    emplacements d'installation habituels avant de renvoyer « git ».
+    """
+    found = shutil.which("git")
+    if found:
+        return found
+    if os.name == "nt":
+        bases = [os.environ.get(k) for k in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)")]
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            bases.append(os.path.join(local, "Programs"))
+        for base in bases:
+            if not base:
+                continue
+            cand = os.path.join(base, "Git", "cmd", "git.exe")
+            if os.path.isfile(cand):
+                return cand
+    return "git"
+
+
 def safe_path(path: str) -> bool:
     """Refuse les chemins avec caractères problématiques pour un shell Windows."""
     return bool(path) and not PATH_UNSAFE.search(path)

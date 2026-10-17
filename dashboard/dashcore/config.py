@@ -139,12 +139,15 @@ ALLOWED_TRANSPORTS = ("stdio", "http", "sse")
 ALLOWED_STATUS = ("connecté", "disponible", "à configurer", "désactivé")
 
 # --- Dépôt amont (auto-update) ------------------------------------------------
-# Bascule GitLab -> Forgejo (2026-10-14) : un clone dont `origin` pointe encore
+# Dépôt public du projet (liens « Voir le projet », README, problèmes, commits
+# de l'écran des mises à jour) : toujours GitHub, quel que soit le remote local.
+PUBLIC_REPO_URL = "https://github.com/spaghiari/Nebula-DashBoard"
+# Bascule de l'ancien GitLab vers GitHub : un clone dont `origin` pointe encore
 # vers l'ancien dépôt est réorienté vers le nouveau avant tout fetch/pull
 # (cf. system_update._migrate_origin_remote). Variantes https/ssh, avec ou
 # sans `.git`, reconnues ; tout autre `origin` (fork, miroir) est laissé tel quel.
 LEGACY_ORIGIN_URL = "https://git.exemple.lan/erti/claude-dashboard.git"
-ORIGIN_URL = "https://git.exemple.lan/administrateur/Claude-Dashboard.git"
+ORIGIN_URL = PUBLIC_REPO_URL + ".git"
 
 # Message renvoyé par les actions qui ouvrent une console Windows (cmd).
 WINDOWS_ONLY_MSG = ("Fonction disponible uniquement sous Windows (ouverture d'une "

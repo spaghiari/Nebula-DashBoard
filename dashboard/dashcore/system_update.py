@@ -13,14 +13,14 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 import subprocess
 import threading
 import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from dashcore.config import LEGACY_ORIGIN_URL, ORIGIN_URL, ROOT, log
+from dashcore.config import LEGACY_ORIGIN_URL, ORIGIN_URL, PUBLIC_REPO_URL, ROOT, log
+from dashcore.helpers import git_cli as _git_cli
 
 
 GIT_TIMEOUT_FETCH = 20
@@ -119,7 +119,7 @@ def _git(*args: str, timeout: int = GIT_TIMEOUT_QUICK,
 
     `env` complète l'environnement courant (jamais remplacé en entier).
     """
-    git_cli = shutil.which("git") or "git"
+    git_cli = _git_cli()
     try:
         r = subprocess.run(
             [git_cli, *args],
@@ -319,7 +319,7 @@ def _fetch_remote() -> tuple[bool, str]:
 
 
 def _migrate_origin_remote() -> bool:
-    """Réoriente `origin` de l'ancien GitLab vers Forgejo (cf. config.py).
+    """Réoriente `origin` de l'ancien GitLab vers GitHub (cf. config.py).
 
     À appeler avant tout fetch/pull. Idempotent : sans effet si `origin`
     pointe déjà ailleurs (nouveau dépôt, fork, miroir) ou n'existe pas.
@@ -332,7 +332,7 @@ def _migrate_origin_remote() -> bool:
         legacy = _normalize_git_url(LEGACY_ORIGIN_URL)
         if not legacy or _normalize_git_url(url) != legacy:
             return False
-        # Cible injoignable (poste hors du LAN, Forgejo arrêté) : on garde
+        # Cible injoignable (réseau coupé, identifiants absents) : on garde
         # l'ancien origin plutôt que de basculer vers un dépôt mort.
         rc_l, _, err_l = _git("ls-remote", "--heads", ORIGIN_URL, timeout=GIT_TIMEOUT_FETCH,
                               env=_noninteractive_env())
@@ -517,7 +517,7 @@ def system_version_info(check_remote: bool = False) -> dict:
     branch = _current_branch()
     upstream = _tracking_branch()
 
-    rc, head_sha, _ = _git("rev-parse", "--short", "HEAD")
+    rc, head_sha, head_err = _git("rev-parse", "--short", "HEAD")
     rc2, last_msg, _ = _git("log", "-1", "--pretty=%s")
 
     # Détecte les changements locaux non committés (porcelain est silencieux si propre)
@@ -551,12 +551,30 @@ def system_version_info(check_remote: bool = False) -> dict:
             info["fetch_error"] = err
 
     # Après le fetch : `_migrate_origin_remote` a pu réorienter origin.
-    info.update(_repo_links(_tracked_remote_url(branch)))
+    # Liens toujours vers le dépôt public (GitHub), jamais vers le remote local
+    # (un dépôt de travail interne ne doit pas apparaître dans l'interface).
+    info.update(_repo_links(PUBLIC_REPO_URL))
     state = _FETCH_STATE.get(str(ROOT)) or {}
     info["checked_at"] = _iso(state.get("ok_at", 0.0))
     info["check_error"] = state.get("error") or None
     info["check_hint"] = (_diagnose_remote_failure(info["check_error"])
                           if info["check_error"] else None)
+
+    # Git qui échoue dans ce processus (ex. « dubious ownership » quand le
+    # dashboard tourne sous un autre compte) : ne plus l'avaler. Sans ça,
+    # l'écran affichait « v<version> ? » et « Jamais vérifié », et « Vérifier
+    # maintenant » ne faisait rien (pas de branche suivie -> pas de fetch).
+    if rc != 0:
+        err = _redact_credentials(head_err or "git rev-parse HEAD a échoué")
+        info["git_error"] = err
+        info["check_error"] = err
+        info["check_hint"] = (_diagnose_remote_failure(err)
+                              or "Git ne répond pas dans ce dossier : vérifie que git est installé "
+                                 "et que le dossier est bien un dépôt.")
+    elif not upstream and check_remote:
+        info["check_error"] = "Aucune branche distante suivie."
+        info["check_hint"] = ("La branche locale ne suit pas de branche distante : "
+                              f"git branch --set-upstream-to=origin/{branch or 'main'}")
 
     if not upstream:
         info["reason"] = "Aucune branche distante trackée."
@@ -674,6 +692,11 @@ _AUTH_PATTERNS = ("authentication failed", "permission denied", "could not read 
 def _diagnose_remote_failure(blob: str) -> str | None:
     """Hint humain pour un échec d'accès au dépôt distant (fetch ou pull)."""
     blob = (blob or "").lower()
+    if "dubious ownership" in blob or "safe.directory" in blob:
+        return ("Git refuse ce dossier : le dashboard ne tourne pas sous le compte "
+                "propriétaire du dépôt (lancé en administrateur ?). Relance-le "
+                "normalement, ou autorise le dossier : git config --global --add "
+                f"safe.directory {ROOT.as_posix()}")
     if any(p in blob for p in _AUTH_PATTERNS):
         return ("Accès au dépôt refusé : il est peut-être privé et Git n'est pas "
                 "connecté à ton compte. Connecte-toi (Git Credential Manager, jeton "

@@ -33,7 +33,7 @@ from dashcore.config import (
 
 from dashcore.helpers import (
     _remove_dir_or_link, parse_skill_frontmatter, read_json, read_json_strict,
-    resolve_cli, resolve_ws_dir, safe_id, write_json,
+    git_cli, resolve_cli, resolve_ws_dir, safe_id, write_json,
 )
 from dashcore.workspace_io import _ws_dir_from_entry, list_workspaces
 from dashcore.api_workspaces import _workspace_settings_path
@@ -813,7 +813,7 @@ def _clone_github_shallow(owner: str, repo: str, branch: str | None) -> tuple[Pa
     import tempfile
     tmp = Path(tempfile.mkdtemp(prefix="nebula-skill-import-"))
     url = f"https://github.com/{owner}/{repo}.git"
-    cmd = ["git", "clone", "--depth", "1"]
+    cmd = [git_cli(), "clone", "--depth", "1"]
     if branch:
         cmd += ["--branch", branch]
     cmd += [url, str(tmp)]
@@ -823,7 +823,7 @@ def _clone_github_shallow(owner: str, repo: str, branch: str | None) -> tuple[Pa
             shutil.rmtree(tmp, ignore_errors=True)
             return None
         sha = subprocess.run(
-            ["git", "-C", str(tmp), "rev-parse", "HEAD"],
+            [git_cli(), "-C", str(tmp), "rev-parse", "HEAD"],
             capture_output=True, text=True, timeout=10
         ).stdout.strip()
         return tmp, sha
