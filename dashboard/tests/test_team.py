@@ -907,7 +907,8 @@ class RealTeamOverlayTests(unittest.TestCase):
         self.assertEqual(md.count("### Routage automatique (always-on)"), 1)
         self.assertIn("`<p>-reviewer`", md)
         st = team.team_state("w1")[1]
-        self.assertEqual(st["routing"]["mode"], "auto")
+        self.assertEqual(st["routing"]["mode"], "assiste")
+        self.assertEqual(st["routing"]["review_gate"], "from_3_files")
         self.assertTrue(st["routing"]["declared"])
         by_id = {a["id"]: a for a in st["agents"]}
         self.assertTrue(by_id["researcher"]["auto"])
@@ -998,7 +999,7 @@ class RoutingTests(unittest.TestCase):
         write_json_file(self.ws / ".claude" / "team.json", m)
         r = team.team_state("w1")[1]["routing"]
         self.assertFalse(r["declared"])
-        self.assertEqual((r["mode"], r["review_gate"]), ("manuel", "always"))
+        self.assertEqual((r["mode"], r["review_gate"]), ("manuel", "from_3_files"))
         # Valeur hors liste -> manuel.
         m["routing"] = {"mode": "turbo"}
         write_json_file(self.ws / ".claude" / "team.json", m)
@@ -1026,6 +1027,15 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(team.set_routing(self.ws, mode=3)[0], 400)
         self.assertEqual(path.read_bytes(), before)
 
+    def test_manifeste_existant_sans_routing_inchange(self):
+        # Sans section routing : mode effectif manuel, defaut ecrit inchange (auto/always).
+        self.assertEqual((team.ROUTING_DEFAULT["mode"], team.ROUTING_DEFAULT["review_gate"]), ("assiste", "from_3_files"))
+        st = team.routing_state({"agents": []})
+        self.assertEqual((st["declared"], st["mode"], st["review_gate"]), (False, "manuel", "from_3_files"))
+        # Manifeste declarant deja son routage : intact.
+        st = team.routing_state({"routing": {"mode": "auto", "review_gate": "always"}})
+        self.assertEqual((st["mode"], st["review_gate"]), ("auto", "always"))
+
     def test_set_routing_section_absente_et_corrompu(self):
         path = self.ws / ".claude" / "team.json"
         m = self._manifest()
@@ -1035,7 +1045,7 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(p["written"])
         self.assertTrue(p["routing"]["declared"])
-        self.assertEqual(self._manifest()["routing"], team.ROUTING_DEFAULT)
+        self.assertEqual(self._manifest()["routing"], {**team.ROUTING_DEFAULT, "mode": "auto"})
         # Section absente, mode manuel demandé : défaut écrit puis mode appliqué.
         m = self._manifest()
         del m["routing"]

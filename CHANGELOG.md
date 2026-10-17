@@ -4,6 +4,26 @@ Les nouveautés de Nebula, version par version. La plus récente est en haut.
 La mise à jour se fait depuis Nebula : badge « MAJ » en haut de l'écran, ou
 Outils > Mises à jour.
 
+## 2.7.1 - 2026-10-17
+
+### Améliorations
+
+- **Réglages par défaut moins gourmands** pour les nouvelles activations du
+  module « Équipe d'agents » : routage « assisté » et relecture « dès 3
+  fichiers ». « Auto » et « toujours » restent disponibles sur la ligne du
+  module.
+- **Vérification automatique de la qualité et de la sécurité du code** à
+  chaque publication (tests, audit, bandit, semgrep, gitleaks).
+
+### Correctifs
+
+- Exemple de nom d'auteur neutre dans la modale d'activation.
+
+### À faire après la mise à jour
+
+- Redémarrer le dashboard. Rien d'autre : les projets existants gardent leur
+  réglage, modifiable sur la ligne du module.
+
 ## 2.7.0 - 2026-10-17
 
 ### Changements

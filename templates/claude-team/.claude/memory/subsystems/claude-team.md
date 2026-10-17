@@ -87,8 +87,8 @@ se lit dans `.claude/team.json`, rien n'est régénéré pour changer de mode.
 | 2. Déclencheurs | `team.json` : `routing` + `auto` / `triggers` par agent ; description générée | « À utiliser automatiquement quand : <déclencheurs> » (`auto: true`) ou « Jamais en routage automatique : réservé à /eval et /improve » (`auto: false`) ; ligne « Routage » dans les contraintes. Claude Code lit la description pour déléguer de lui-même |
 | 3. Hook | `.claude/hooks/team-router.py` (UserPromptSubmit, sans matcher) | classe le prompt (question / conception / implementation / relecture / inconnu) et injecte une ligne `[équipe claude-team] routage auto : ...` (JSON `hookSpecificOutput.additionalContext`) ; `suggestion : ...` en `assiste` ; silencieux en `manuel`, sans section `routing`, sur une slash command |
 
-`routing.mode` : `manuel` / `assiste` / `auto` (défaut `auto`) ;
-`routing.review_gate` : `always` (défaut) / `from_3_files` / `never` ;
+`routing.mode` : `manuel` / `assiste` / `auto` (défaut livré `assiste`) ;
+`routing.review_gate` : `always` / `from_3_files` (défaut livré) / `never` ;
 `routing.budget` : `sonnet-first`. Changement depuis Nebula (onglet
 Configuration, ligne du module : sélecteurs « Routage » et « Relecture du
 code », pill d'état) ou `POST /api/workspaces/<id>/team/routing`. Un

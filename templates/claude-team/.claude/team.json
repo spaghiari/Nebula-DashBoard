@@ -29,13 +29,13 @@
   },
   "_comment_routing": "Routage always-on (couche 1 : table du fragment CLAUDE.md ; couche 2 : déclencheurs rendus dans la description des agents générés ; couche 3 : hook team-router.py sur UserPromptSubmit). mode : manuel (délégation seulement sur /team ou demande explicite), assiste (le hook injecte une suggestion, le fil principal la suit sauf raison explicite), auto (le fil principal applique la table sans qu'on le lui demande). review_gate : always (tout code livré est relu par le reviewer), from_3_files (dès 3 fichiers touchés), never. budget : sonnet-first (opus réservé au reviewer et à l'architecte). Modifiable depuis Nebula (POST /api/workspaces/<id>/team/routing) ; aucune régénération des agents nécessaire.",
   "routing": {
-    "mode": "auto",
+    "mode": "assiste",
     "modes": [
       "manuel",
       "assiste",
       "auto"
     ],
-    "review_gate": "always",
+    "review_gate": "from_3_files",
     "review_gate_values": [
       "always",
       "from_3_files",

@@ -57,11 +57,11 @@ Nebula (onglet Configuration, ligne du module) ; aucune régénération.
   validation, question de suivi sur ce qui vient d'être livré). Dans le
   doute, déléguer. Le hook `team-router.py` le rappelle à chaque
   demande ; son absence de classe n'est jamais une raison de coder seul.
-- **Gate reviewer** (`routing.review_gate`, `always` par défaut) : tout
+- **Gate reviewer** (`routing.review_gate`, `from_3_files` par défaut) : tout
   fichier de code créé ou modifié passe par `<p>-reviewer` (objectif +
   critères + diff, jamais le raisonnement) avant d'être présenté.
   Verdict À CORRIGER -> corriger puis re-relire (2 allers-retours max,
-  sinon le dire). `from_3_files` : dès 3 fichiers touchés ; `never` :
+  sinon le dire). `always` : tout fichier relu ; `from_3_files` : dès 3 fichiers touchés ; `never` :
   relecture seulement sur demande.
 - **Sortie unifiée** : l'utilisateur ne voit jamais les rapports bruts
   des agents. Claude principal synthétise (réponse, sources, ce que la

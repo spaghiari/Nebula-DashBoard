@@ -291,9 +291,9 @@ REVIEW_GATES = ("always", "from_3_files", "never")
 # Section `routing` écrite par défaut dans un manifeste qui n'en a pas
 # (workspace activé avant le routage) au premier `set_routing`.
 ROUTING_DEFAULT = {
-    "mode": "auto",
+    "mode": "assiste",
     "modes": list(ROUTING_MODES),
-    "review_gate": "always",
+    "review_gate": "from_3_files",
     "review_gate_values": list(REVIEW_GATES),
     "budget": "sonnet-first",
 }
@@ -388,7 +388,7 @@ def team_config_hash(ws_dir: Path, default_prefix: str | None = None) -> str:
         or default_prefix or ws_dir.name
     files = sorted([c / "team.json", *c.glob("team/agents/*.md"), *c.glob(f"agents/{prefix}-*.md")],
                    key=lambda x: x.relative_to(ws_dir).as_posix())
-    h = hashlib.sha1()
+    h = hashlib.sha1(usedforsecurity=False)  # nosemgrep - empreinte de contenu, pas de sécurité
     for f in files:
         try:
             content = f.read_bytes()

@@ -1171,7 +1171,7 @@ def _move(src: Path, dst: Path) -> None:
 
 def _sha1_bytes(data: bytes) -> str:
     import hashlib
-    return hashlib.sha1(data).hexdigest()
+    return hashlib.sha1(data, usedforsecurity=False).hexdigest()  # nosemgrep - empreinte de contenu, pas de sécurité
 
 
 def _removal_config(marker: dict) -> dict:

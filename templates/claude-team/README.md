@@ -106,8 +106,9 @@ Modes (`routing.mode`, défaut `auto`) :
 | `assiste` | suit la suggestion injectée sauf raison explicite | `suggestion : ...` |
 | `auto` | applique la table sans qu'on le lui demande | `routage auto : ...` |
 
-`routing.review_gate` : `always` (défaut, tout code livré est relu),
-`from_3_files`, `never`. `routing.budget` : `sonnet-first`. Le mode et la
+`routing.review_gate` : `from_3_files` (défaut livré, dès 3 fichiers
+touchés), `always` (tout code livré est relu), `never`. Le mode livré est
+`assiste` ; les manifestes existants gardent leur réglage. `routing.budget` : `sonnet-first`. Le mode et la
 gate se changent depuis Nebula (onglet Configuration, ligne du module :
 sélecteurs « Routage » et « Relecture du code », pill d'état dans
 l'en-tête) ou par `POST /api/workspaces/<id>/team/routing`

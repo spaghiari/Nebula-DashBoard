@@ -1,0 +1,110 @@
+# CI de Nebula. Détail et exécution locale : .github/README.md
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Lundi 05:17 UTC : récupère les nouvelles règles des outils de sécurité.
+    - cron: "17 5 * * 1"
+
+# Droits minimaux pour tous les jobs.
+permissions:
+  contents: read
+
+# Un nouveau run annule le précédent sur la même référence.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests (Python ${{ matrix.python }})
+    # Windows coûte plus de minutes : pas de run planifié pour ce job.
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 = version minimale (README), 3.14 = dernière stable.
+        python: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Tests unitaires (les tests UI sont ignorés sans NEBULA_UI_TESTS)
+        working-directory: dashboard
+        run: python -m unittest discover -s tests
+
+  audit:
+    name: Audit maison
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Contrôles du dépôt
+        run: python .github/scripts/audit.py
+
+  securite:
+    name: Sécurité
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Historique complet pour que gitleaks examine tous les commits.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Bandit (gravité moyenne et plus)
+        # -ll = gravité moyenne et plus. Aucune exclusion globale : les faux
+        # positifs sont traités à la source (`usedforsecurity=False` pour les
+        # empreintes SHA-1, `# nosec <règle> - <raison>` sur la ligne).
+        run: |
+          pip install bandit==1.9.4
+          bandit -r dashboard -x dashboard/tests -ll
+
+      - name: Semgrep
+        run: |
+          pip install semgrep==1.181.0
+          semgrep scan --config p/python --config p/javascript --config p/secrets --error --metrics=off dashboard
+
+      - name: Gitleaks (binaire vérifié par somme de contrôle)
+        # Binaire plutôt que gitleaks-action : aucune dépendance supplémentaire
+        # ni question de licence.
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks git --redact --verbose --no-banner .
+
+      - name: Dépendances (pip-audit seulement si elles existent)
+        # Nebula n'a aucune dépendance. Si un fichier de dépendances apparaît
+        # hors templates/, cette étape échoue : ajouter alors pip-audit.
+        run: |
+          trouves=$(git ls-files | grep -E '(^|/)(requirements[^/]*\.txt|pyproject\.toml|package\.json)$' | grep -v '^templates/' || true)
+          if [ -n "$trouves" ]; then
+            echo "Fichier(s) de dépendances apparu(s), ajouter pip-audit à la CI :"
+            echo "$trouves"
+            exit 1
+          fi
+          echo "Aucune dépendance déclarée : rien à auditer."

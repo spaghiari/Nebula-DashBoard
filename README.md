@@ -260,11 +260,11 @@ par itération, gardé seulement s'il gagne au moins 0,02 sans régression)
 et `/eval-add`.
 
 Un **routage always-on** oriente chaque demande vers le bon agent. Il est
-livré en mode `auto`, avec une relecture systématique par le relecteur
-(modèle opus) : c'est le plus complet, mais aussi le plus gourmand en
-tokens. Sur la ligne du module, dans l'onglet Configuration du workspace,
-tu peux passer le routage en « assisté » (suggestions seulement) ou
-« manuel », et la relecture du code en « dès 3 fichiers » ou « jamais ».
+livré en mode « assisté » (suggestions), avec une relecture du code « dès
+3 fichiers » par le relecteur (modèle opus), pour ménager le quota. Sur la
+ligne du module, dans l'onglet Configuration du workspace, tu peux passer
+le routage en « auto » (le plus complet, mais le plus gourmand en tokens)
+ou « manuel », et la relecture du code en « toujours » ou « jamais ».
 
 Sur la même ligne du module, le dépliable **« Régler »** règle, agent par
 agent, le modèle (`sonnet`, `opus`, `haiku`, `fable`, ou `inherit` pour

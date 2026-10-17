@@ -386,7 +386,7 @@ def _probe_http(url: str, headers: dict) -> dict:
             # On envoie les headers résolus (auth comprise) mais on ne les
             # renvoie jamais dans la réponse : pas de fuite de secret.
             req.add_header(k, v)
-        return urllib.request.urlopen(req, timeout=5, context=tls_ctx)
+        return urllib.request.urlopen(req, timeout=5, context=tls_ctx)  # nosec B310 - schéma http(s) vérifié en amont
 
     try:
         try:

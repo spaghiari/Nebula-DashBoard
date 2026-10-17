@@ -737,8 +737,8 @@ function bindTeamRouting(wsId, row, routing) {
   if (enable) {
     enable.addEventListener('click', () => withBusy(enable, async () => {
       try {
-        const r = await post({ mode: 'auto' });
-        toastOk('Routage activé (mode auto) : section routing écrite dans .claude/team.json');
+        const r = await post({ mode: 'assiste' });
+        toastOk('Routage activé (mode assisté, relecture dès 3 fichiers) : section routing écrite dans .claude/team.json');
         applyState(r.routing);
         const block = row.querySelector('[data-routing]');
         if (block) { block.outerHTML = teamRoutingBlockHtml(r.routing); bindTeamRouting(wsId, row, r.routing); }
@@ -968,7 +968,7 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
     </div>
     <div class="field" data-author-field style="display:none">
       <label class="field-label">Convention auteur</label>
-      <input class="input mono" name="author" placeholder="ex. antoine.b, ab, @slug">
+      <input class="input mono" name="author" placeholder="ex. jean.d, ab, @slug">
       <div class="muted" style="font-size:11px;margin-top:4px">
         Identifiant utilisé dans les champs <code>par &lt;author&gt;</code> des registres.
       </div>

@@ -929,7 +929,7 @@ def allowed_host_headers(bind_host: str, port: int, extra=()) -> set:
     """
     names = {"127.0.0.1", "localhost", "[::1]"}
     b = (bind_host or "").strip().strip("[]").lower()
-    if b and b not in ("0.0.0.0", "::"):
+    if b and b not in ("0.0.0.0", "::"):  # nosec B104 - comparaison, aucun bind
         names.add(_host_header_name(b))
     names.update(_host_header_name(x) for x in extra if x and x.strip())
     return {f"{n}:{port}" for n in names}
@@ -1215,7 +1215,7 @@ def main():
                           {"address_family": socket.AF_INET6})
     server = server_cls((host, port), Handler)
     server.nebula_host = host
-    url_host = {"0.0.0.0": "127.0.0.1", "::": "[::1]"}.get(host, _host_header_name(host))
+    url_host = {"0.0.0.0": "127.0.0.1", "::": "[::1]"}.get(host, _host_header_name(host))  # nosec B104 - correspondance d'affichage
     url = f"http://{url_host}:{port}/"
     log.info("Dashboard Claude Workspace — %s", url)
     log.info("  registry : %s", MCP_REGISTRY)
