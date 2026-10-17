@@ -78,6 +78,18 @@
     ".claude/commands/eval-add.md"
   ],
 
+  "_comment_removal": "Retrait du module (POST /api/workspaces/<id>/overlays/claude-team/remove) : rien n'est supprimé, tout fichier du module part dans .claude/.nebula-removed/claude-team-<horodatage>/. living = contenu du projet (manifeste, corps d'agents, évals, journal, mémoire) : archivé par défaut, laissé en place avec keep_living (sauf la signature team.json, toujours archivée). keep_if_modified = fichiers gardés s'ils diffèrent du rendu (aucun ici : le README n'est jamais copié). Agents générés : archivés s'ils portent le marqueur généré, gardés sinon (édités à la main).",
+  "removal": {
+    "living": [
+      ".claude/team.json",
+      ".claude/team/agents/*.md",
+      ".claude/evals/**",
+      ".claude/journal/**",
+      ".claude/memory/**"
+    ],
+    "keep_if_modified": []
+  },
+
   "_comment_generators": "Hooks de post-application déclaratifs, exécutés par apply_overlay après la copie et le settings_patch. team_agents = dashcore/api_team.generate_agents : génère .claude/agents/<prefix>-<id>.md pour chaque agent du manifeste (prefix = payload `prefix`, sinon team.prefix persisté, sinon id du workspace ; idempotent ; `regenerate: true` ne réécrit que les fichiers portant le marqueur généré).",
   "generators": ["team_agents"]
 }

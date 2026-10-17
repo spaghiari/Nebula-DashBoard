@@ -57,6 +57,19 @@
   "_comment_managed": "Fichiers GÉRÉS par le module : « Ré-appliquer » remplace un hook qui diffère du rendu de la version courante, après sauvegarde <nom>.<horodatage>.bak ; le bloc BEGIN/END de CLAUDE.md n'est PAS remplacé (complété par le projet). Les commandes (/check-all...), la mémoire et les registres sont instanciés par projet : jamais écrasés.",
   "managed": [".claude/hooks/*.py"],
 
+  "_comment_removal": "Retrait du module (POST /api/workspaces/<id>/overlays/claude-self-improving/remove) : rien n'est supprimé, tout fichier du module part dans .claude/.nebula-removed/claude-self-improving-<horodatage>/. living = contenu du projet (mémoire, registres, digests) : archivé par défaut, laissé en place avec keep_living (sauf la signature improvements.md, toujours archivée). keep_if_modified = fichiers gardés s'ils diffèrent du rendu (README.md, souvent propre au projet ; agents .claude/agents/*.md modifiés par le projet, comme les agents d'équipe édités à la main). .gitignore et .claude/settings.local.json ne partent jamais, même identiques au rendu (code : _ALWAYS_KEEP ; .gitignore porte la règle qui ignore l'archive). settings.json : archivé entier s'il est identique au rendu, sinon seuls les hooks et la statusLine du module sont retirés (permissions conservées) ; même retrait ciblé dans settings.local.json. CLAUDE.md : seul le bloc BEGIN..END part. Module inactif (improvements.md absent) : seules les traces certaines d'un retrait partiel sont traitées (hooks vers un script du module absent du disque, bloc CLAUDE.md), aucun fichier de même nom n'est déplacé.",
+  "removal": {
+    "living": [
+      ".claude/memory/**",
+      ".claude/ideas.md",
+      ".claude/backlog.md",
+      ".claude/improvements.md",
+      ".claude/roadmap.md",
+      ".claude/digests/**"
+    ],
+    "keep_if_modified": ["README.md", ".claude/agents/*.md"]
+  },
+
   "_comment_seeds": "Exemples travaillés (profondeur complète uniquement). Chaque seed est un fragment markdown appendé à la fin du registre cible APRÈS sa copie (donc seulement au premier apply, idempotent). Le seed n'est jamais copié comme fichier autonome. seed_dir relatif à la racine de l'overlay. mode (optionnel) restreint le seed au mode projet.",
   "seeds": [
     { "seed": ".claude/seeds/ideas.example.md", "target": ".claude/ideas.md" },

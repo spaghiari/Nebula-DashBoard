@@ -47,6 +47,7 @@ Contraintes :
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -140,7 +141,8 @@ def _overlay_agents(d: Path) -> list[dict]:
     if not manifest:
         return []
     default = (manifest.get("models") or {}).get("default") or "sonnet"
-    return [{"id": a["id"], "role": a.get("role") or "", "model": a.get("model") or default}
+    return [{"id": a["id"], "role": a.get("role") or "", "model": a.get("model") or default,
+             "effort": a.get("effort") if isinstance(a.get("effort"), str) else None}
             for a in manifest_agents(manifest)]
 
 
@@ -313,8 +315,14 @@ def _managed_globs(marker: dict) -> list[str]:
     """Globs `managed` valides du marker (relatifs, sans `..`, séparateur `/`).
     Absence de la clé = aucun fichier géré (comportement historique : copie
     si absent seulement), cf. pitfall « valeur par défaut vide »."""
+    return _valid_globs(marker.get("managed"))
+
+
+def _valid_globs(raw) -> list[str]:
+    """Globs relatifs valides d'une liste du marker (sans `\\`, `:`, `/` de
+    tête ni segment `..`). Liste absente ou invalide = aucun glob."""
     out: list[str] = []
-    for g in marker.get("managed") or []:
+    for g in raw if isinstance(raw, list) else []:
         if not isinstance(g, str) or not g.strip():
             continue
         g = g.strip()
@@ -389,6 +397,25 @@ def _write_backup(target: Path, ws_dir: Path, backups: list) -> bool:
     return True
 
 
+def _render_entry(entry: Path, vars: dict) -> tuple[str | None, bytes | None]:
+    """Rendu d'un fichier de l'overlay : (texte rendu, None) pour un fichier
+    texte (placeholders substitués), (None, octets) sinon. OSError remontée."""
+    if is_text_file(entry):
+        return render_placeholders(entry.read_text(encoding="utf-8"), vars), None
+    return None, entry.read_bytes()
+
+
+def _same_as_rendered(target: Path, new_text: str | None, new_bytes: bytes | None) -> bool:
+    """Vrai si `target` a le contenu du rendu (cf. _render_entry) ; fins de
+    ligne ignorées pour un texte. OSError remontée."""
+    if new_text is not None:
+        try:
+            return _norm_eol(target.read_bytes().decode("utf-8")) == _norm_eol(new_text)
+        except UnicodeDecodeError:
+            return False
+    return target.read_bytes() == new_bytes
+
+
 def _update_managed_file(entry: Path, target: Path, rel_posix: str, ws_dir: Path,
                          ws_root: Path, vars: dict, updated: list,
                          backups: list, skipped: list) -> None:
@@ -399,17 +426,8 @@ def _update_managed_file(entry: Path, target: Path, rel_posix: str, ws_dir: Path
         skipped.append({"path": rel_posix, "reason": "lien hors du workspace, non mis à jour"})
         return
     try:
-        if is_text_file(entry):
-            new_text = render_placeholders(entry.read_text(encoding="utf-8"), vars)
-            try:
-                same = _norm_eol(target.read_bytes().decode("utf-8")) == _norm_eol(new_text)
-            except UnicodeDecodeError:
-                same = False
-            new_bytes = None
-        else:
-            new_text = None
-            new_bytes = entry.read_bytes()
-            same = target.read_bytes() == new_bytes
+        new_text, new_bytes = _render_entry(entry, vars)
+        same = _same_as_rendered(target, new_text, new_bytes)
     except OSError as e:
         skipped.append({"path": rel_posix, "reason": f"read error: {e}"})
         return
@@ -799,26 +817,26 @@ def _missing_requires(ws_dir: Path, marker: dict) -> list[dict]:
 _HOOK_REF_RE = re.compile(r"\$\{CLAUDE_PROJECT_DIR\}[\\/]+([^\"']+?\.py)")
 
 
-def _missing_hook_refs(ws_dir: Path) -> list[str]:
-    """Liste les hooks reference par `.claude/settings.json` mais absents du
+def _missing_hook_refs(ws_dir: Path, include_local: bool = False) -> list[str]:
+    """Liste les hooks reference par `.claude/settings.json` (et
+    `.claude/settings.local.json` si `include_local`) mais absents du
     workspace. Garde fail-fast post-generation : un settings.json qui pointe
     vers un hook inexistant deadlocke Claude Code (exit 2 d'un PreToolUse =
     refus bloquant sur Bash/Edit/Write, le workspace devient inutilisable).
     Retourne la liste dedupliquee (ordre preserve) des chemins manquants."""
-    settings = ws_dir / ".claude" / "settings.json"
-    if not settings.exists():
-        return []
-    try:
-        text = settings.read_text(encoding="utf-8")
-    except OSError:
-        return []
+    names = ["settings.json"] + (["settings.local.json"] if include_local else [])
     seen: set[str] = set()
     missing: list[str] = []
-    for raw in _HOOK_REF_RE.findall(text):
-        rel = raw.replace("\\", "/")
-        if not (ws_dir / rel).exists() and rel not in seen:
-            seen.add(rel)
-            missing.append(rel)
+    for name in names:
+        try:
+            text = (ws_dir / ".claude" / name).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for raw in _HOOK_REF_RE.findall(text):
+            rel = raw.replace("\\", "/")
+            if not (ws_dir / rel).exists() and rel not in seen:
+                seen.add(rel)
+                missing.append(rel)
     return missing
 
 
@@ -895,6 +913,37 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
                       f"{labels} : active d'abord ce module sur le workspace."),
             "missing_requires": missing_req,
         }
+
+    # 0b. Itération /improve en attente de verdict : refus AVANT toute
+    #     écriture si un modèle d'agent changerait réellement (le candidat
+    #     serait mesuré sur une autre configuration). Sans changement réel
+    #     (modale qui renvoie les modèles actuels), la ré-application passe.
+    #     Même règle pour les agents générés : refus si `generate_agents`
+    #     réécrirait réellement un agent (« Régénérer » après une édition de
+    #     team.json ou d'un corps depuis la phase 1, nouveau préfixe...).
+    #     Modèles ou régénération demandés sur un manifeste présent mais
+    #     corrompu : 409 ici, avant toute copie (sinon application partielle).
+    if "team_agents" in (marker.get("generators") or []):
+        from dashcore.api_team import (
+            MANIFEST_REL, agents_rewrite_pending, models_change_pending, pending_message,
+        )
+        wants = bool(opts["models"] or opts["default_model"] or opts["regenerate"])
+        if wants and (ws_dir / MANIFEST_REL).exists():
+            try:
+                read_json_strict(ws_dir / MANIFEST_REL, None)
+            except CorruptJsonError as e:
+                return 409, {"ok": False, "overlay_id": overlay_id,
+                             "error": f"manifeste corrompu : {e} ; rien n'a été modifié"}
+        if opts["models"] or opts["default_model"]:
+            pend = models_change_pending(ws_dir, opts["models"], opts["default_model"], vars)
+            if pend:
+                return 409, {"ok": False, "overlay_id": overlay_id, "pending": pend,
+                             "error": pending_message(pend, "les modèles des agents")}
+        if was_active:
+            pend = agents_rewrite_pending(ws_dir, vars, opts)
+            if pend:
+                return 409, {"ok": False, "overlay_id": overlay_id, "pending": pend,
+                             "error": pending_message(pend, "les agents générés")}
 
     # Enrichir les vars de substitution avec les options de bootstrap.
     vars = dict(vars or {})
@@ -1001,7 +1050,20 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
 
     # 5c. Générateurs déclaratifs (ex. team_agents) : après la copie, donc
     #     les sources (manifeste, corps) sont en place.
-    gen_extra = _run_generators(ws_dir, marker, vars, opts, generated, skipped)
+    #     Manifeste corrompu alors que des modèles sont à mémoriser : 409.
+    from dashcore.api_team import PendingIterationError
+    try:
+        gen_extra = _run_generators(ws_dir, marker, vars, opts, generated, skipped)
+    except (CorruptJsonError, PendingIterationError) as e:
+        pending = isinstance(e, PendingIterationError)
+        return 409, {
+            "ok": False, "overlay_id": overlay_id,
+            "error": str(e) if pending else f"manifeste corrompu : {e}",
+            **({"pending": e.pending} if pending else {}),
+            "copied": copied, "appended": appended, "seeded": seeded,
+            "updated": updated, "backups": backups,
+            "skipped": skipped, "options": opts,
+        }
 
     # 6. Garde fail-fast : refuser de livrer un workspace ou settings.json
     #    reference un hook absent (sinon deadlock Claude Code, cf.
@@ -1054,3 +1116,805 @@ def _apply_overlay_body(ws_id: str, overlay_id: str, ws_dir, src_dir,
         "options": opts,
         **gen_extra,
     }
+
+
+# --- Variables de substitution ---------------------------------------------------
+
+def overlay_vars(ws_obj: dict) -> dict:
+    """Variables de substitution d'un overlay pour le workspace `ws_obj`
+    (entrée du registre) : mêmes clés que create_workspace. Partagé par
+    l'application, le retrait (comparaison au rendu) et la régénération."""
+    import datetime as _dt
+    return {
+        "name": ws_obj["id"],
+        "label": ws_obj.get("label") or ws_obj["id"],
+        "description": ws_obj.get("description") or "(a completer)",
+        "tools": "(a completer)",
+        "date": _dt.date.today().isoformat(),
+        "emoji": ws_obj.get("emoji") or "📁",
+    }
+
+
+# --- Retrait d'un module ---------------------------------------------------------
+#
+# Principe : rien n'est supprimé. Chaque fichier du module est DÉPLACÉ dans
+# `.claude/.nebula-removed/<module>-<AAAAMMJJ-HHMMSS>/` (même chemin relatif),
+# avec `removal.json` (plan + restauration). settings.json et CLAUDE.md ne
+# perdent que ce qui appartient au module (hooks / statusLine pointant un de
+# ses scripts, bloc BEGIN..END), après sauvegarde .bak.
+
+REMOVED_DIR_REL = Path(".claude") / ".nebula-removed"
+_SETTINGS_REL = ".claude/settings.json"
+_SETTINGS_LOCAL_REL = ".claude/settings.local.json"
+# Sauvegarde de settings.local.json écrite à la racine du dossier d'archive
+# du retrait (jamais à côté du fichier : elle échapperait au .gitignore).
+LOCAL_BACKUP_NAME = "settings.local.json.bak"
+# Fichiers jamais déplacés par un retrait, même identiques au rendu :
+# réglages locaux de l'utilisateur, et `.gitignore` qui porte la règle
+# `.claude/.nebula-removed/` (sans elle, l'archive du retrait serait suivie
+# par git).
+_ALWAYS_KEEP = {
+    _SETTINGS_LOCAL_REL: "settings.local.json toujours conservé",
+    ".gitignore": ".gitignore toujours conservé (il ignore l'archive .claude/.nebula-removed/)",
+}
+# Jetons « chemin de script Python » d'une commande de hook : `python`,
+# `python3`, `py -3`, chemin préfixé par ${CLAUDE_PROJECT_DIR} ou absolu.
+_PY_TOKEN_RE = re.compile(r"[^\s\"']+\.py\b")
+_PROJECT_DIR_PREFIXES = ("${CLAUDE_PROJECT_DIR}", "$CLAUDE_PROJECT_DIR", "%CLAUDE_PROJECT_DIR%")
+
+
+def _move(src: Path, dst: Path) -> None:
+    """Déplacement atomique (même volume : le workspace). Point unique, pour
+    que les tests puissent simuler un échec."""
+    os.replace(src, dst)
+
+
+def _sha1_bytes(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha1(data).hexdigest()
+
+
+def _removal_config(marker: dict) -> dict:
+    """Section `removal` du marker : `living` (contenu du projet, archivé par
+    défaut, laissé en place avec `keep_living`) et `keep_if_modified`
+    (gardé s'il diffère du rendu). Absence = aucun glob (cf. pitfall
+    « valeur par défaut vide »)."""
+    raw = marker.get("removal")
+    cfg = raw if isinstance(raw, dict) else {}
+    return {"living": _valid_globs(cfg.get("living")),
+            "keep_if_modified": _valid_globs(cfg.get("keep_if_modified"))}
+
+
+def _matches_any(rel_posix: str, globs: list[str]) -> bool:
+    parts = rel_posix.split("/")
+    return any(_glob_match(parts, g.split("/")) for g in globs)
+
+
+def _module_files(src_dir: Path, marker: dict) -> list[tuple[str, Path]]:
+    """Fichiers livrables du module (même parcours que la copie, sans
+    no_copy, seeds ni CLAUDE.md complet / fragment), triés. Le mode et la
+    profondeur ne filtrent pas : on retire ce qui a pu être copié."""
+    cfg = _claude_md_config(marker)
+    names = {cfg["full_file"], cfg["fragment_file"]}
+    out: list[tuple[str, Path]] = []
+    for entry in src_dir.rglob("*"):
+        rel = entry.relative_to(src_dir)
+        rel_posix = rel.as_posix()
+        if rel.name == OVERLAY_MARKER or entry.is_dir() or _is_junk(rel):
+            continue
+        if rel_posix in names or _is_seed_path(rel_posix, marker) or _is_no_copy(rel_posix, marker):
+            continue
+        out.append((rel_posix, entry))
+    return sorted(out)
+
+
+def _script_refs(command: str, ws_root: Path) -> set[str]:
+    """Scripts `.py` (chemins relatifs au workspace, posix) lancés par une
+    commande de hook. Comparaison par CHEMIN : résiste à `python3`, aux
+    guillemets et aux séparateurs `\\`."""
+    out: set[str] = set()
+    for tok in _PY_TOKEN_RE.findall(command or ""):
+        t = tok.replace("\\", "/")
+        for pre in _PROJECT_DIR_PREFIXES:
+            if t.startswith(pre):
+                t = t[len(pre):].lstrip("/")
+                break
+        else:
+            if re.match(r"^[A-Za-z]:/", t) or t.startswith("/"):
+                try:
+                    t = Path(tok).resolve().relative_to(ws_root).as_posix()
+                except (OSError, ValueError):
+                    continue
+        while t.startswith("./"):
+            t = t[2:]
+        out.add(t)
+    return out
+
+
+def _strip_module_hooks(data: dict, scripts: set[str], ws_root: Path) -> tuple[list[dict], bool]:
+    """Retire EN PLACE de `data` (settings.json parsé) les hooks dont la
+    commande lance un script de `scripts`, puis les groupes et événements
+    devenus vides, et `statusLine` s'il lance un script du module. Un hook
+    utilisateur du même matcher est conservé ; `permissions` et toute autre
+    clé ne sont jamais touchées. Retourne (entrées retirées
+    [{event, matcher, command}], statusLine retiré)."""
+    removed: list[dict] = []
+    hooks = data.get("hooks")
+    if isinstance(hooks, dict):
+        for event in list(hooks):
+            groups = hooks[event]
+            if not isinstance(groups, list):
+                continue
+            kept_groups = []
+            removed_here = False
+            for g in groups:
+                inner = g.get("hooks") if isinstance(g, dict) else None
+                if not isinstance(inner, list):
+                    kept_groups.append(g)
+                    continue
+                kept = []
+                for h in inner:
+                    cmd = h.get("command") if isinstance(h, dict) else None
+                    if isinstance(cmd, str) and _script_refs(cmd, ws_root) & scripts:
+                        removed.append({"event": event, "matcher": str(g.get("matcher") or ""),
+                                        "command": cmd})
+                        removed_here = True
+                    else:
+                        kept.append(h)
+                if len(kept) == len(inner):
+                    kept_groups.append(g)
+                elif kept:
+                    g["hooks"] = kept
+                    kept_groups.append(g)
+            if removed_here:
+                if kept_groups:
+                    hooks[event] = kept_groups
+                else:
+                    del hooks[event]
+        if not hooks and removed:
+            del data["hooks"]
+    statusline_removed = False
+    sl = data.get("statusLine")
+    if isinstance(sl, dict) and isinstance(sl.get("command"), str) \
+            and _script_refs(sl["command"], ws_root) & scripts:
+        del data["statusLine"]
+        statusline_removed = True
+    return removed, statusline_removed
+
+
+def _settings_script_refs(data, ws_root: Path) -> set[str]:
+    """Tous les scripts référencés par settings.json (hooks + statusLine)."""
+    refs: set[str] = set()
+    if not isinstance(data, dict):
+        return refs
+    hooks = data.get("hooks")
+    for groups in (hooks.values() if isinstance(hooks, dict) else []):
+        for g in groups if isinstance(groups, list) else []:
+            for h in (g.get("hooks") if isinstance(g, dict) else None) or []:
+                if isinstance(h, dict) and isinstance(h.get("command"), str):
+                    refs |= _script_refs(h["command"], ws_root)
+    sl = data.get("statusLine")
+    if isinstance(sl, dict) and isinstance(sl.get("command"), str):
+        refs |= _script_refs(sl["command"], ws_root)
+    return refs
+
+
+def _claude_md_removal(ws_dir: Path, marker: dict) -> dict:
+    """Plan du retrait du bloc BEGIN..END du module dans CLAUDE.md. Seul le
+    bloc part ; fichier entier archivé seulement s'il ne reste que des
+    blancs ; sans marqueurs : rien, signalé (`note`). Les clés `_*` sont
+    internes (non renvoyées)."""
+    cfg = _claude_md_config(marker)
+    out = {"file": cfg["full_file"], "block_present": False, "whole_file": False, "note": "",
+           "_new_text": None, "_block": None, "_sha1": None}
+    if not isinstance(marker.get("claude_md"), dict):
+        out["note"] = "module sans bloc CLAUDE.md"
+        return out
+    target = ws_dir / cfg["full_file"]
+    if not target.is_file():
+        out["note"] = f"{cfg['full_file']} absent"
+        return out
+    if not _inside_workspace(ws_dir.resolve(), target):
+        out["note"] = f"{cfg['full_file']} est un lien hors du workspace : rien retiré"
+        return out
+    try:
+        raw = target.read_bytes()
+        text = _norm_eol(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError) as e:
+        out["note"] = f"{cfg['full_file']} illisible : {e}"
+        return out
+    begin, end = cfg["begin_marker"], cfg["end_marker"]
+    b = text.find(begin)
+    if b < 0:
+        out["note"] = "marqueurs du module absents : rien retiré (à vérifier à la main)"
+        return out
+    e = text.find(end, b)
+    if e < 0:
+        out["note"] = "marqueur de fin absent : rien retiré (à vérifier à la main)"
+        return out
+    before = text[:b].rstrip("\n")
+    after = text[e + len(end):].lstrip("\n")
+    if before and after:
+        new = before + "\n\n" + after
+    elif before:
+        new = before + "\n"
+    else:
+        new = after
+    out.update(block_present=True, whole_file=not new.strip(), _new_text=new,
+               _block=text[b:e + len(end)] + "\n", _sha1=_sha1_bytes(raw))
+    return out
+
+
+def _team_agent_paths(ws_dir: Path, src_dir: Path, marker: dict,
+                      ws_id: str) -> tuple[str | None, list[str], bool]:
+    """Agents générés par le module (générateur `team_agents`) : (préfixe,
+    chemins relatifs, manifeste lisible). Préfixe lu AVANT tout déplacement
+    (team.prefix, sinon id du workspace). team.json illisible : seuls les
+    `agents/*-<id>.md` portant le marqueur généré sont retenus."""
+    if "team_agents" not in (marker.get("generators") or []):
+        return None, [], True
+    from dashcore.api_team import (
+        AGENTS_DIR_REL, MANIFEST_REL, _is_generated, effective_prefix, load_manifest,
+        manifest_agents,
+    )
+    try:
+        data = read_json_strict(ws_dir / MANIFEST_REL, None)
+    except CorruptJsonError:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("agents"), list):
+        prefix = effective_prefix(data, {"name": ws_id})
+        return prefix, [(AGENTS_DIR_REL / f"{prefix}-{a['id']}.md").as_posix()
+                        for a in manifest_agents(data)], True
+    tpl = load_manifest(src_dir)
+    ids = [a["id"] for a in manifest_agents(tpl)] if tpl else []
+    adir = ws_dir / AGENTS_DIR_REL
+    found: list[str] = []
+    for aid in ids:
+        for p in (sorted(adir.glob(f"*-{aid}.md")) if adir.is_dir() else []):
+            try:
+                if p.is_file() and _is_generated(p.read_text(encoding="utf-8")):
+                    found.append(p.relative_to(ws_dir).as_posix())
+            except OSError:
+                continue
+    return None, found, False
+
+
+def _local_settings_plan(ws_dir: Path, ws_root: Path, data, scripts: set[str]) -> dict:
+    """Retrait ciblé dans `.claude/settings.local.json` (jamais archivé
+    entier) : mêmes règles que settings.json (hooks / statusLine lançant un
+    script du module retirés, permissions et autres clés intactes)."""
+    out = {"present": isinstance(data, dict), "note": "", "entries_removed": [],
+           "statusline_removed": False, "_data": None, "_sha1": None}
+    if not isinstance(data, dict):
+        return out
+    path = ws_dir / _SETTINGS_LOCAL_REL
+    try:
+        out["_sha1"] = _sha1_bytes(path.read_bytes())
+    except OSError:
+        pass
+    if not _inside_workspace(ws_root, path):
+        out["note"] = "settings.local.json est un lien hors du workspace : non modifié"
+        return out
+    copy = json.loads(json.dumps(data))
+    removed, sl_removed = _strip_module_hooks(copy, scripts, ws_root)
+    out.update(entries_removed=removed, statusline_removed=sl_removed, _data=copy)
+    return out
+
+
+def plan_overlay_removal(ws_dir: Path, overlay: dict, src_dir: Path, marker: dict,
+                         vars: dict, *, ws_id: str, keep_living: bool = False,
+                         settings_data=None, shared: dict | None = None,
+                         local_data=None, active: bool = True) -> dict:
+    """Plan de retrait (aucune écriture). Classe chaque fichier du module :
+
+      - `archive` (déplacé) : identique au rendu, modifié, contenu vivant,
+        agent généré, signature du module (toujours, même avec keep_living) ;
+      - `keep` (laissé en place) : lien ou jonction, `keep_if_modified`
+        modifié, contenu vivant avec `keep_living`, agent généré sans
+        marqueur (édité à la main), _ALWAYS_KEEP (settings.local.json,
+        .gitignore), fichier aussi livré par un autre module actif ;
+      - `not_found` : absent du workspace (renommé, jamais copié...).
+
+    Module INACTIF (`active` faux, signature absente) : un fichier de même
+    chemin appartient au projet (README.md, .gitignore, mémoire...) et n'est
+    jamais déplacé. Seules les traces certaines d'un retrait partiel sont
+    traitées : hooks (settings.json et settings.local.json) qui lancent un
+    script du module ABSENT du disque, bloc CLAUDE.md du module (marqueurs
+    propres au module), agents portant le marqueur généré.
+
+    `settings_data` / `local_data` = settings.json / settings.local.json
+    déjà lus strictement (None si absents). `plan_id` = sha1 du plan
+    canonique, contenus compris : un fichier modifié entre l'aperçu et
+    l'exécution change l'identifiant."""
+    shared = shared or {}
+    ws_root = Path(ws_dir).resolve()
+    vars = dict(vars or {})
+    vars.setdefault("author", vars.get("name") or "nebula")
+    vars.setdefault("language", "fr")
+    rcfg = _removal_config(marker)
+    signature = overlay.get("signature_file") or marker.get("signature_file") or ""
+    archive: list[dict] = []
+    keep: list[dict] = []
+    not_found: list[str] = []
+    hashes: dict[str, str] = {}
+
+    def add_archive(rel: str, reason: str, target: Path) -> None:
+        try:
+            hashes[rel] = _sha1_bytes(target.read_bytes())
+        except OSError as e:
+            keep.append({"path": rel, "reason": f"illisible, laissé en place : {e}"})
+            return
+        archive.append({"path": rel, "reason": reason})
+
+    files = _module_files(src_dir, marker)
+    seen = {rel for rel, _ in files}
+    if signature and signature not in seen and (src_dir / signature).is_file():
+        files.append((signature, src_dir / signature))
+    template_settings = None
+    for rel, entry in files:
+        if rel == _SETTINGS_REL:
+            template_settings = entry  # traité à part (section settings)
+            continue
+        target = ws_dir / rel
+        if not os.path.lexists(target):
+            not_found.append(rel)
+            continue
+        if not active:
+            # Signature absente : rien ne prouve que ce fichier vient du
+            # module, il est au projet (jamais listé ni déplacé).
+            continue
+        if rel in _ALWAYS_KEEP:
+            keep.append({"path": rel, "reason": _ALWAYS_KEEP[rel]})
+            continue
+        if not _inside_workspace(ws_root, target) or not target.is_file():
+            keep.append({"path": rel, "reason": "lien ou jonction : laissé en place"})
+            continue
+        if rel in shared:
+            keep.append({"path": rel, "reason": f"aussi livré par le module actif « {shared[rel]} »"})
+            continue
+        try:
+            same = _same_as_rendered(target, *_render_entry(entry, vars))
+        except OSError:
+            same = False
+        living = _matches_any(rel, rcfg["living"])
+        if rel == signature:
+            add_archive(rel, "signature du module", target)
+        elif living and keep_living:
+            keep.append({"path": rel, "reason": "contenu vivant conservé (keep_living)"})
+        elif not same and _matches_any(rel, rcfg["keep_if_modified"]):
+            keep.append({"path": rel, "reason": "modifié : conservé"})
+        elif living:
+            add_archive(rel, "contenu vivant", target)
+        else:
+            add_archive(rel, "identique au rendu" if same else "modifié", target)
+
+    # Agents générés (claude-team).
+    prefix, agent_paths, manifest_ok = _team_agent_paths(ws_dir, src_dir, marker, ws_id)
+    from dashcore.api_team import _is_generated
+    for rel in agent_paths:
+        target = ws_dir / rel
+        if not os.path.lexists(target):
+            not_found.append(rel)
+        elif not _inside_workspace(ws_root, target) or not target.is_file():
+            keep.append({"path": rel, "reason": "lien ou jonction : laissé en place"})
+        else:
+            try:
+                gen = _is_generated(target.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError):
+                gen = False
+            if gen:
+                add_archive(rel, "agent généré", target)
+            else:
+                keep.append({"path": rel, "reason": "agent édité à la main (marqueur généré absent)"})
+
+    # settings.json : fichier entier archivé s'il est identique au rendu,
+    # sinon retrait ciblé des hooks / statusLine du module.
+    # Module inactif : seuls les scripts du module ABSENTS du disque (hooks
+    # cassés, trace d'un retrait partiel) ; un script présent de même nom
+    # peut être celui du projet, ses hooks restent.
+    scripts = {rel for rel in not_found if rel.endswith(".py")}
+    if active:
+        scripts |= {a["path"] for a in archive if a["path"].endswith(".py")}
+        scripts |= {k["path"] for k in keep if k["path"].endswith(".py") and k["path"] not in shared}
+    settings = {"present": isinstance(settings_data, dict), "archive_whole": False, "note": "",
+                "entries_removed": [], "statusline_removed": False, "_data": None, "_sha1": None}
+    spath = ws_dir / _SETTINGS_REL
+    if isinstance(settings_data, dict):
+        try:
+            settings["_sha1"] = _sha1_bytes(spath.read_bytes())
+        except OSError:
+            pass
+        if active and template_settings is not None and _inside_workspace(ws_root, spath):
+            try:
+                text = render_placeholders(template_settings.read_text(encoding="utf-8"), vars)
+                renders = [json.loads(_adapt_hook_text(text)), json.loads(text)]
+            except (OSError, ValueError):
+                renders = []
+            if settings_data in renders:
+                settings["archive_whole"] = True
+        if not _inside_workspace(ws_root, spath):
+            settings["note"] = "settings.json est un lien hors du workspace : non modifié"
+        elif not settings["archive_whole"]:
+            data = json.loads(json.dumps(settings_data))
+            removed, sl_removed = _strip_module_hooks(data, scripts, ws_root)
+            settings.update(entries_removed=removed, statusline_removed=sl_removed, _data=data)
+
+    local = _local_settings_plan(ws_dir, ws_root, local_data, scripts)
+    claude_md = _claude_md_removal(ws_dir, marker)
+    nothing = not archive and not settings["archive_whole"] and not settings["entries_removed"] \
+        and not settings["statusline_removed"] and not claude_md["block_present"] \
+        and not local["entries_removed"] and not local["statusline_removed"]
+    canonical = {
+        "overlay_id": overlay.get("id"), "keep_living": bool(keep_living), "active": bool(active),
+        "archive": [[a["path"], a["reason"], hashes.get(a["path"])] for a in archive],
+        "keep": [[k["path"], k["reason"]] for k in keep], "not_found": sorted(not_found),
+        "settings": [settings["_sha1"], settings["archive_whole"], settings["entries_removed"],
+                     settings["statusline_removed"]],
+        "settings_local": [local["_sha1"], local["entries_removed"], local["statusline_removed"]],
+        "claude_md": [claude_md["_sha1"], claude_md["block_present"], claude_md["whole_file"]],
+        "prefix": prefix,
+    }
+    plan_id = _sha1_bytes(json.dumps(canonical, sort_keys=True, ensure_ascii=False).encode("utf-8"))[:16]
+    return {
+        "overlay_id": overlay.get("id"), "plan_id": plan_id, "prefix": prefix,
+        "manifest_readable": manifest_ok, "keep_living": bool(keep_living),
+        "archive": archive, "keep": keep, "not_found": sorted(not_found),
+        "settings": settings, "settings_local": local, "claude_md": claude_md,
+        "nothing_to_do": nothing, "signature": signature, "active": bool(active),
+    }
+
+
+def _unique_archive_dir(ws_dir: Path, overlay_id: str) -> Path:
+    """`.claude/.nebula-removed/<module>-<AAAAMMJJ-HHMMSS>` (suffixe `-2`,
+    `-3`... si le nom existe) : une archive n'est jamais réutilisée."""
+    import datetime as _dt
+    base = ws_dir / REMOVED_DIR_REL
+    stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    n = 1
+    while True:
+        cand = base / (f"{overlay_id}-{stamp}" if n == 1 else f"{overlay_id}-{stamp}-{n}")
+        if not os.path.lexists(cand):
+            return cand
+        n += 1
+
+
+def _public_removal(plan: dict, *, dry_run: bool, archive_dir: str | None = None,
+                    settings_backup: str | None = None, claude_backup: str | None = None,
+                    local_backup: str | None = None) -> dict:
+    """Réponse de la route (sans les clés internes `_*` du plan)."""
+    s, c, sl = plan["settings"], plan["claude_md"], plan["settings_local"]
+    return {
+        "ok": True, "overlay_id": plan["overlay_id"], "dry_run": dry_run,
+        "plan_id": plan["plan_id"], "archive_dir": archive_dir,
+        # Module inactif (signature absente) : seules les traces certaines
+        # d'un retrait partiel sont traitées (cf. plan_overlay_removal).
+        "inactive": not plan["active"],
+        "archive": plan["archive"], "keep": plan["keep"], "not_found": plan["not_found"],
+        "settings": {"present": s["present"], "archived": s["archive_whole"], "note": s["note"],
+                     "entries_removed": s["entries_removed"],
+                     "statusline_removed": s["statusline_removed"], "backup": settings_backup},
+        "settings_local": {"present": sl["present"], "note": sl["note"],
+                           "entries_removed": sl["entries_removed"],
+                           "statusline_removed": sl["statusline_removed"],
+                           "backup": local_backup},
+        "claude_md": {"block_removed": c["block_present"], "whole_file": c["whole_file"],
+                      "note": c["note"], "backup": claude_backup},
+        "prefix": plan["prefix"], "keep_living": plan["keep_living"],
+        "nothing_to_do": plan["nothing_to_do"], "restart_needed": True,
+    }
+
+
+def _archive_pycache(ws_dir: Path, ws_root: Path, moved: list[str], archive_dir: Path) -> list[str]:
+    """Déplace dans l'archive le cache Python (`__pycache__/*.pyc|.pyo`) des
+    seuls dossiers d'où un script `.py` du module vient d'être déplacé, pour
+    les fichiers dont le source `<nom>.py` n'est plus dans ce dossier (un
+    script du projet encore présent garde son cache). Jamais de rmtree,
+    jamais un lien ou une jonction, jamais hors du workspace. Retourne les
+    chemins déplacés (relatifs, posix) ; un échec est journalisé, pas bloquant."""
+    out: list[str] = []
+    dirs = sorted({(Path(ws_dir) / r).parent for r in moved if r.endswith(".py")})
+    for d in dirs:
+        cache = d / "__pycache__"
+        try:
+            if cache.is_symlink() or (hasattr(cache, "is_junction") and cache.is_junction()) \
+                    or not cache.is_dir() or not _inside_workspace(ws_root, cache):
+                continue
+            entries = sorted(cache.iterdir())
+        except OSError:
+            continue
+        for f in entries:
+            if f.suffix not in (".pyc", ".pyo") or f.is_symlink() or not f.is_file():
+                continue
+            # `hook.cpython-313[.opt-1].pyc` -> source `hook.py`.
+            base = re.sub(r"\.opt-\d+$", "", f.name[:-4])
+            base = base.rsplit(".", 1)[0] if "." in base else base
+            if (d / (base + ".py")).exists():
+                continue
+            rel = f.relative_to(ws_dir).as_posix()
+            try:
+                dst = archive_dir / rel
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                _move(f, dst)
+                out.append(rel)
+            except OSError as e:
+                log.warning("retrait : cache Python %s non déplacé : %s", rel, e)
+    return out
+
+
+def _rmdir_empty(ws_dir: Path, rels: list[str]) -> list[str]:
+    """`os.rmdir` des dossiers devenus vides (parents des fichiers déplacés),
+    du plus profond au moins profond, jamais la racine ni `.claude`, jamais
+    un lien ou une jonction, jamais `rmtree`. Retourne les dossiers retirés."""
+    stop = {Path(ws_dir), Path(ws_dir) / ".claude"}
+    cands: set[Path] = set()
+    for rel in rels:
+        p = (Path(ws_dir) / rel).parent
+        while p not in stop and Path(ws_dir) in p.parents:
+            cands.add(p)
+            p = p.parent
+    removed: list[str] = []
+    for d in sorted(cands, key=lambda x: len(x.parts), reverse=True):
+        try:
+            if d.is_symlink() or (hasattr(d, "is_junction") and d.is_junction()) or not d.is_dir():
+                continue
+            if any(d.iterdir()):
+                continue
+            os.rmdir(d)
+            removed.append(d.relative_to(ws_dir).as_posix())
+        except OSError:
+            continue
+    return removed
+
+
+def remove_overlay(ws_id: str, overlay_id: str, vars: dict,
+                   options: dict | None = None) -> tuple[int, dict]:
+    """Retire le module `overlay_id` du workspace `ws_id` (cf. section).
+
+    Options : `dry_run` (aperçu, aucune écriture), `plan_id` (obligatoire
+    pour exécuter : celui de l'aperçu), `keep_living` (contenu vivant laissé
+    en place), `force` (passer outre une session Claude en cours).
+
+    Ordre figé sous _MUTATION_LOCK : garde dépendance inverse (409
+    `dependents`) -> garde session (409 `active_session` ; seules les
+    sessions lancées par Nebula sont vues) -> lecture stricte de
+    settings.json et settings.local.json (409 + `file`, avant toute
+    écriture) -> plan (module inactif : traces certaines seulement ; aperçu
+    renvoyé ici ; `plan_id` absent ou différent -> 409) -> archive +
+    removal.json EN PREMIER -> settings.json puis settings.local.json (.bak
+    puis retrait) -> vérification relue des deux (une
+    référence restante vers un script à déplacer : 500, scripts intacts) ->
+    CLAUDE.md (bloc copié dans l'archive, .bak, retrait) -> déplacement des
+    fichiers -> signature EN DERNIER (un retrait partiel laisse le module
+    « actif », un nouvel appel le termine) -> rmdir des dossiers vides ->
+    contrôle final `_missing_hook_refs`. Idempotent : rien à retirer ->
+    `nothing_to_do: true`."""
+    if not safe_id(ws_id):
+        return 400, {"error": "ws_id invalide"}
+    if not safe_id(overlay_id):
+        return 400, {"error": "overlay_id invalide"}
+    overlay = get_overlay(overlay_id)
+    if not overlay:
+        return 404, {"error": f"Module introuvable : {overlay_id}"}
+    ws_dir = resolve_ws_dir(ws_id)
+    if not ws_dir.exists():
+        return 404, {"error": "workspace absent sur disque"}
+    src_dir = TEMPLATES_DIR / overlay["dir_id"]
+    if not src_dir.exists():
+        return 404, {"error": f"Dossier du module introuvable : {overlay['dir_id']}"}
+    opts = options or {}
+    dry_run = bool(opts.get("dry_run"))
+    keep_living = bool(opts.get("keep_living"))
+    force = bool(opts.get("force"))
+    want_plan = opts.get("plan_id")
+    ov_id = overlay["id"]
+
+    with _MUTATION_LOCK:
+        marker = read_json(src_dir / OVERLAY_MARKER, {}) or {}
+        all_overlays = list_overlays()
+        # 1. Dépendance inverse : un module actif qui requiert celui-ci.
+        dependents = [{"id": o["id"], "label": o["label"]} for o in all_overlays
+                      if o["id"] != ov_id and ov_id in (o.get("requires") or [])
+                      and overlay_is_active(ws_dir, o)]
+        if dependents:
+            labels = ", ".join(f"« {d['label']} »" for d in dependents)
+            return 409, {"ok": False, "overlay_id": ov_id, "dependents": dependents,
+                         "error": (f"{labels} requiert « {overlay['label']} » : retire "
+                                   "d'abord ce module.")}
+        # 2. Session Claude en cours : hooks et agents chargés, fichiers
+        #    déplacés sous ses pieds.
+        if not force:
+            from dashcore import active_sessions
+            sess = (active_sessions.list_active() or {}).get(ws_id)
+            if isinstance(sess, dict) and sess.get("state", "running") == "running":
+                return 409, {"ok": False, "overlay_id": ov_id, "active_session": True,
+                             "error": ("Une session Claude tourne sur ce workspace : ferme-la "
+                                       "(ou force le retrait), elle garde les hooks et agents "
+                                       "du module chargés.")}
+        # 3. settings.json lu strictement AVANT toute écriture.
+        #    Même règle pour settings.local.json (ses hooks du module sont
+        #    retirés aussi) : corrompu -> 409, rien écrit.
+        parsed = {}
+        for rel in (_SETTINGS_REL, _SETTINGS_LOCAL_REL):
+            try:
+                parsed[rel] = read_json_strict(ws_dir / rel, None)
+            except CorruptJsonError as e:
+                return 409, {"ok": False, "overlay_id": ov_id, "file": rel, "error": str(e)}
+            if parsed[rel] is not None and not isinstance(parsed[rel], dict):
+                return 409, {"ok": False, "overlay_id": ov_id, "file": rel,
+                             "error": f"{rel} : objet JSON attendu"}
+        # 4. Plan (fichiers aussi livrés par un autre module actif : gardés).
+        #    Module inactif (signature absente) : plan restreint aux traces
+        #    certaines d'un retrait partiel.
+        shared: dict[str, str] = {}
+        for o in all_overlays:
+            if o["id"] != ov_id and overlay_is_active(ws_dir, o):
+                for rel in o.get("files") or []:
+                    shared.setdefault(rel, o["label"])
+        plan = plan_overlay_removal(ws_dir, overlay, src_dir, marker, vars, ws_id=ws_id,
+                                    keep_living=keep_living, settings_data=parsed[_SETTINGS_REL],
+                                    shared=shared, local_data=parsed[_SETTINGS_LOCAL_REL],
+                                    active=overlay_is_active(ws_dir, overlay))
+        if plan["nothing_to_do"] or dry_run:
+            return 200, _public_removal(plan, dry_run=dry_run)
+        if not want_plan or want_plan != plan["plan_id"]:
+            return 409, {**_public_removal(plan, dry_run=True), "ok": False,
+                         "error": ("Aperçu absent ou périmé (un fichier a changé depuis) : "
+                                   "relis l'aperçu puis confirme.")}
+        missing_before = set(_missing_hook_refs(ws_dir, include_local=True))
+        return _execute_removal(ws_id, ws_dir, overlay, plan, missing_before)
+
+
+def _execute_removal(ws_id: str, ws_dir: Path, overlay: dict, plan: dict,
+                     missing_before: set | None = None) -> tuple[int, dict]:
+    """Exécution du plan (appelée sous _MUTATION_LOCK par remove_overlay)."""
+    ov_id = overlay["id"]
+    ws_root = Path(ws_dir).resolve()
+    archive_dir = _unique_archive_dir(ws_dir, ov_id)
+    archive_rel = archive_dir.relative_to(ws_dir).as_posix()
+    s, c, sl = plan["settings"], plan["claude_md"], plan["settings_local"]
+    errors: list[dict] = []
+    settings_backup = claude_backup = local_backup = None
+
+    def fail(status: int, msg: str) -> tuple[int, dict]:
+        out = _public_removal(plan, dry_run=False, archive_dir=archive_rel,
+                              settings_backup=settings_backup, claude_backup=claude_backup,
+                              local_backup=local_backup)
+        out.update(ok=False, error=msg, errors=errors)
+        log.error("retrait %s sur %s : %s", ov_id, ws_id, msg)
+        return status, out
+
+    # 5. Archive + removal.json écrits EN PREMIER.
+    import datetime as _dt
+    public = _public_removal(plan, dry_run=False, archive_dir=archive_rel)
+    record = {
+        "overlay_id": ov_id, "label": overlay.get("label"), "workspace": ws_id,
+        "date": _dt.datetime.now().isoformat(timespec="seconds"), "plan": public,
+        "restore": [
+            "Chaque fichier de ce dossier (hors removal.json, CLAUDE.*.block.md et "
+            f"{LOCAL_BACKUP_NAME}) est à recopier au même chemin relatif depuis la racine "
+            "du workspace.",
+            "Bloc CLAUDE.md : recoller le contenu de CLAUDE." + ov_id + ".block.md dans "
+            "CLAUDE.md, ou restaurer la sauvegarde .bak indiquée dans plan.claude_md.backup.",
+            ".claude/settings.json : restaurer la sauvegarde .bak indiquée dans "
+            "plan.settings.backup (ou le fichier archivé ici s'il l'a été entier).",
+            ".claude/settings.local.json : restaurer la sauvegarde "
+            f"{LOCAL_BACKUP_NAME} de ce dossier, indiquée dans la réponse du retrait "
+            "(`settings_local.backup`), s'il y en a une ; ce fichier n'est jamais archivé.",
+            "Ou ré-appliquer le module depuis Nebula, puis recopier le contenu vivant archivé "
+            "(mémoire, registres, manifeste, évals, journal) pour retrouver celui du projet.",
+        ],
+    }
+    try:
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "removal.json").write_text(
+            json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        return fail(500, f"archive impossible ({archive_rel}) : {e} ; rien n'a été modifié")
+
+    def archive_file(rel: str) -> bool:
+        dst = archive_dir / rel
+        try:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            _move(ws_dir / rel, dst)
+            return True
+        except OSError as e:
+            errors.append({"path": rel, "error": str(e)})
+            return False
+
+    moved: list[str] = []
+    # 6. settings.json : archivé entier, ou .bak puis retrait ciblé.
+    spath = ws_dir / _SETTINGS_REL
+    if s["archive_whole"]:
+        if not archive_file(_SETTINGS_REL):
+            return fail(500, "settings.json non archivé : retrait interrompu avant les scripts")
+        moved.append(_SETTINGS_REL)
+    elif s["entries_removed"] or s["statusline_removed"]:
+        backups: list[str] = []
+        if not _write_backup(spath, ws_dir, backups):
+            return fail(500, "sauvegarde .bak de settings.json impossible : retrait interrompu")
+        settings_backup = backups[0]
+        try:
+            write_json(spath, s["_data"])
+        except OSError as e:
+            return fail(500, f"écriture de settings.json impossible : {e}")
+    # 6b. settings.local.json : jamais archivé, .bak puis retrait ciblé.
+    #     Le .bak va DANS l'archive du retrait (ignorée par le .gitignore
+    #     livré), jamais à côté du fichier : réglages locaux (env, jetons)
+    #     qu'une règle exacte `.claude/settings.local.json` ne couvrirait pas.
+    lpath = ws_dir / _SETTINGS_LOCAL_REL
+    if sl["entries_removed"] or sl["statusline_removed"]:
+        import shutil
+        lbak = archive_dir / LOCAL_BACKUP_NAME
+        try:
+            shutil.copy2(lpath, lbak)
+        except OSError as e:
+            log.warning("retrait : sauvegarde impossible %s -> %s : %s", lpath, lbak, e)
+            return fail(500, "sauvegarde .bak de settings.local.json impossible : retrait interrompu")
+        local_backup = lbak.relative_to(ws_dir).as_posix()
+        try:
+            write_json(lpath, sl["_data"])
+        except OSError as e:
+            return fail(500, f"écriture de settings.local.json impossible : {e}")
+    # 7. Vérification relue (settings.json ET settings.local.json) : plus
+    #    aucune référence vers un script à déplacer.
+    to_move_scripts = {a["path"] for a in plan["archive"] if a["path"].endswith(".py")}
+    for rel, path in ((_SETTINGS_REL, spath), (_SETTINGS_LOCAL_REL, lpath)):
+        try:
+            after = read_json_strict(path, None)
+        except CorruptJsonError as e:
+            return fail(500, f"{rel} illisible après retrait : {e}")
+        left = sorted(_settings_script_refs(after, ws_root) & to_move_scripts)
+        if left:
+            return fail(500, f"{rel} référence encore " + ", ".join(left)
+                        + " : scripts laissés en place, retrait interrompu")
+    # 8. CLAUDE.md : bloc copié dans l'archive, .bak, retrait.
+    if c["block_present"]:
+        md_name = c["file"]
+        md = ws_dir / md_name
+        try:
+            (archive_dir / f"CLAUDE.{ov_id}.block.md").write_text(c["_block"], encoding="utf-8")
+            if c["whole_file"]:
+                if archive_file(md_name):
+                    moved.append(md_name)
+            else:
+                backups = []
+                if _write_backup(md, ws_dir, backups):
+                    claude_backup = backups[0]
+                    md.write_text(c["_new_text"], encoding="utf-8")
+                else:
+                    errors.append({"path": md_name, "error": "sauvegarde .bak impossible, bloc laissé"})
+        except OSError as e:
+            errors.append({"path": md_name, "error": str(e)})
+    # 9. Fichiers (scripts compris), signature EN DERNIER.
+    sig = plan["signature"]
+    for a in plan["archive"]:
+        if a["path"] != sig and archive_file(a["path"]):
+            moved.append(a["path"])
+    sig_entry = next((a for a in plan["archive"] if a["path"] == sig), None)
+    if sig_entry and not errors:
+        if archive_file(sig):
+            moved.append(sig)
+    elif sig_entry:
+        errors.append({"path": sig, "error": "signature laissée : retrait partiel, à relancer"})
+    # 9b. Cache Python des scripts déplacés (sinon `.claude/hooks/__pycache__`
+    #     empêche de retirer le dossier vidé). Best-effort, jamais bloquant.
+    moved.extend(_archive_pycache(ws_dir, ws_root, moved, archive_dir))
+    # 10. Dossiers du module devenus vides.
+    _rmdir_empty(ws_dir, moved)
+    # 11. Contrôle final : aucun hook référencé absent.
+    # (une référence déjà cassée avant le retrait n'est pas de son fait).
+    missing = [m for m in _missing_hook_refs(ws_dir, include_local=True)
+               if m not in (missing_before or set())]
+    if missing:
+        return fail(500, "settings.json ou settings.local.json référence des hooks absents : "
+                    + ", ".join(missing))
+    if errors:
+        return fail(500, "retrait partiel : relancer le retrait pour terminer")
+    log.info("module %s retiré de %s : %d fichier(s) archivé(s) dans %s",
+             ov_id, ws_id, len(moved), archive_rel)
+    out = _public_removal(plan, dry_run=False, archive_dir=archive_rel,
+                          settings_backup=settings_backup, claude_backup=claude_backup,
+                          local_backup=local_backup)
+    out["moved"] = moved
+    return 200, out
+

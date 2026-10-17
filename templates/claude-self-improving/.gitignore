@@ -1,6 +1,7 @@
 # Local-only configuration
 CLAUDE.local.md
-.claude/settings.local.json
+# settings.local.json et ses sauvegardes (.bak) : env, jetons
+.claude/settings.local.json*
 
 # Os
 .DS_Store
@@ -11,3 +12,6 @@ Thumbs.db
 .idea/
 *.swp
 *~
+
+# Archives des modules retirés par Nebula (restaurables, cf. removal.json)
+.claude/.nebula-removed/

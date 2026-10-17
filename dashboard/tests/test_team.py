@@ -126,7 +126,13 @@ class GenerateAgentsTests(unittest.TestCase):
         self.assertEqual(_frontmatter(self._agent("critic"))["model"], "haiku")
         # executor sans `model` : default_model du payload avant models.default.
         self.assertEqual(_frontmatter(self._agent("executor"))["model"], "opus")
-        self.assertEqual(_frontmatter(self._agent("evaluator"))["model"], "opus")
+        # evaluator déclare `sonnet` : default_model ne l'écrase jamais (rendu
+        # ni manifeste).
+        self.assertEqual(_frontmatter(self._agent("evaluator"))["model"], "sonnet")
+        by_id = {a["id"]: a for a in json.loads(
+            (self.ws / ".claude" / "team.json").read_text(encoding="utf-8"))["agents"]}
+        self.assertEqual(by_id["evaluator"]["model"], "sonnet")
+        self.assertEqual(by_id["executor"]["model"], "opus")
         reset_sandbox()
         self.setUp()
         team.generate_agents(self.ws, self.vars)
@@ -290,8 +296,9 @@ class GenerateAgentsTests(unittest.TestCase):
         self.assertTrue(by_id["researcher"]["generated"])
         self.assertTrue(by_id["researcher"]["generated_by_nebula"])
         self.assertFalse(by_id["critic"]["generated"])
-        # team_state ne connaît pas l'override d'activation : modèle du manifeste.
-        self.assertEqual(by_id["researcher"]["effective_model"], "sonnet")
+        # Le choix d'activation est persisté dans le manifeste : team_state le voit.
+        self.assertEqual(by_id["researcher"]["effective_model"], "opus")
+        self.assertEqual(by_id["researcher"]["model"], "opus")
         self.assertEqual(by_id["executor"]["model"], "sonnet")
         write_json_file(self.ws / ".claude" / "settings.local.json", {"evals_unlocked": True})
         self.assertTrue(team.team_state("w1")[1]["evals_unlocked"])
@@ -769,10 +776,14 @@ class RealTeamOverlayTests(unittest.TestCase):
         self.assertEqual(before, after)
 
         # Régénération : les 7 agents générés sont réécrits (marqueur présent).
+        # default_model ne touche pas un modèle déclaré (tous le sont ici) :
+        # manifeste inchangé à l'octet, critic reste opus.
+        manifest_before = (ws / ".claude" / "team.json").read_bytes()
         status, p = ov.apply_overlay("w1", "claude-team", vars, {"regenerate": True, "default_model": "haiku"})
         self.assertEqual(len(p["generated"]), 7)
         self.assertEqual(p["prefix"], "w1")
-        self.assertEqual(_frontmatter((agents_dir / "w1-critic.md").read_text(encoding="utf-8"))["model"], "haiku")
+        self.assertEqual(_frontmatter((agents_dir / "w1-critic.md").read_text(encoding="utf-8"))["model"], "opus")
+        self.assertEqual((ws / ".claude" / "team.json").read_bytes(), manifest_before)
 
         # États exposés aux routes.
         self.assertTrue(team.team_state("w1")[1]["active"])
@@ -1204,6 +1215,445 @@ class TeamRouterHookTests(unittest.TestCase):
         (self.ws / ".claude" / "team.json").unlink()
         self._silent("où est X ?")
         self._silent("où est X ?", cwd=self.ws.parent)
+
+
+class AgentModelEffortTests(unittest.TestCase):
+    """Effort par agent, modèles persistés, propositions, route agents-config."""
+
+    def setUp(self):
+        reset_sandbox()
+        self.ws = make_workspace("w1")
+        write_json_file(self.ws / ".claude" / "team.json", MANIFEST)
+        for a in MANIFEST["agents"]:
+            if a["id"] != "bad id":
+                _write(self.ws / ".claude" / a["file"], f"# Rôle {a['id']}\n")
+        self.vars = {"name": "w1", "label": "w1"}
+
+    def _manifest(self) -> dict:
+        return json.loads((self.ws / ".claude" / "team.json").read_text(encoding="utf-8"))
+
+    def _agent(self, aid: str) -> str:
+        return (self.ws / ".claude" / "agents" / f"w1-{aid}.md").read_text(encoding="utf-8")
+
+    def _journal(self, *lines) -> None:
+        _write(self.ws / ".claude" / "journal" / "changes.jsonl",
+               "".join(json.dumps(x) + "\n" for x in lines))
+
+    def test_rendu_sans_effort_identique_a_l_octet(self):
+        agent = dict(MANIFEST["agents"][3])  # reviewer, sans effort
+        without = team.render_agent(agent, MANIFEST, self.vars, "corps")
+        self.assertNotIn("effort:", without)
+        with_effort = team.render_agent({**agent, "effort": "high"}, MANIFEST, self.vars, "corps")
+        # Seule différence : la ligne `effort:` juste après `model:`.
+        self.assertEqual(with_effort.replace("effort: high\n", "", 1), without)
+        head = with_effort.split("---\n")[1].splitlines()
+        self.assertEqual(head[head.index("model: opus") + 1], "effort: high")
+        # Effort hors liste : ignoré (aucune ligne), rendu inchangé.
+        self.assertEqual(team.render_agent({**agent, "effort": "turbo"}, MANIFEST, self.vars, "corps"),
+                         without)
+        # Empreinte inchangée pour un manifeste sans effort (rendu identique).
+        team.generate_agents(self.ws, self.vars)
+        h = team.team_config_hash(self.ws, "w1")
+        team.generate_agents(self.ws, self.vars, {"regenerate": True})
+        self.assertEqual(team.team_config_hash(self.ws, "w1"), h)
+
+    def test_fable_inherit_sans_usage(self):
+        for model in ("fable", "inherit"):
+            fm = team.agent_frontmatter({**MANIFEST["agents"][1], "model": model},
+                                        {**MANIFEST, "models": {**MANIFEST["models"],
+                                                                model: {"usage": "XUSAGE"}}},
+                                        self.vars)
+            self.assertEqual(fm["model"], model)
+            self.assertNotIn("XUSAGE", fm["description"])
+            self.assertNotIn("Modèle", fm["description"])
+
+    def test_modeles_d_activation_persistes(self):
+        team.generate_agents(self.ws, self.vars, {"models": {"researcher": "fable"}})
+        by_id = {a["id"]: a for a in self._manifest()["agents"]}
+        self.assertEqual(by_id["researcher"]["model"], "fable")
+        self.assertEqual(by_id["reviewer"]["model"], "opus")
+        self.assertNotIn("model", by_id["executor"])
+        # « Régénérer » sans payload : le choix d'activation est retrouvé.
+        team.generate_agents(self.ws, self.vars, {"regenerate": True})
+        self.assertEqual(_frontmatter(self._agent("researcher"))["model"], "fable")
+        self.assertEqual(self._manifest()["improvement_loop"], MANIFEST["improvement_loop"])
+
+    def test_modeles_d_activation_manifeste_corrompu_409(self):
+        path = self.ws / ".claude" / "team.json"
+        path.write_text("{corrompu", encoding="utf-8")
+        from dashcore.helpers import CorruptJsonError
+        with self.assertRaises(CorruptJsonError):
+            team.generate_agents(self.ws, self.vars, {"models": {"researcher": "opus"}})
+        self.assertEqual(path.read_text(encoding="utf-8"), "{corrompu")
+        # Sans choix de modèle : comportement historique (rien, sans erreur).
+        self.assertEqual(team.generate_agents(self.ws, self.vars)["generated"], [])
+
+    @staticmethod
+    def _with(**changes) -> dict:
+        """Copie de MANIFEST avec `changes[id] = {clé: valeur | None (retirée)}`."""
+        m = json.loads(json.dumps(MANIFEST))
+        for a in m["agents"]:
+            for k, v in (changes.get(a["id"]) or {}).items():
+                if v is None:
+                    a.pop(k, None)
+                else:
+                    a[k] = v
+        return m
+
+    @classmethod
+    def _full(cls, **changes) -> dict:
+        """Comme `_with`, avec l'architecte (absent du manifeste de test)."""
+        m = cls._with(**changes)
+        m["agents"].append({"id": "architect", "file": "team/agents/architect.md",
+                            "role": "Architecte", "description": "Conçoit.", "model": "opus",
+                            "capabilities": ["filesystem"], "read_only": True,
+                            **(changes.get("architect") or {})})
+        return m
+
+    def test_propositions_regles(self):
+        # Manifeste livré : modèles déclarés, aucun effort (= défaut de session,
+        # `medium` sur les modèles 5.5) -> `high` proposé aux rôles à `high`,
+        # rien aux rôles déjà à `medium`.
+        props = {s["agent"]: s for s in team.suggest_agent_config(self._full())}
+        self.assertEqual(set(props), {"architect", "reviewer", "evaluator", "critic"})
+        for aid, s in props.items():
+            with self.subTest(agent=aid):
+                self.assertEqual(s["proposed"]["effort"], "high")
+                self.assertIsNone(s["current"]["effort"])
+                self.assertEqual(s["source"], "rule")
+        # Un agent réglé à xhigh ne reçoit aucune proposition de règle.
+        m = self._full(**{a: {"effort": "xhigh"} for a in ("architect", "reviewer", "evaluator", "critic")})
+        self.assertEqual(team.suggest_agent_config(m), [])
+        # Effort déclaré SOUS la règle : relevé à la valeur de la règle.
+        m = self._full(orchestrator={"effort": "low"}, evaluator={"effort": "medium"})
+        props = {s["agent"]: s for s in team.suggest_agent_config(m)}
+        self.assertEqual(props["orchestrator"]["proposed"], {"model": "opus", "effort": "medium"})
+        self.assertEqual(props["orchestrator"]["current"], {"model": "opus", "effort": "low"})
+        self.assertEqual(props["orchestrator"]["source"], "rule")
+        self.assertIn("sur-réfléchit", props["orchestrator"]["reasons"][0])
+        self.assertEqual(props["evaluator"]["proposed"], {"model": "sonnet", "effort": "high"})
+        self.assertEqual(set(props), {"orchestrator", "evaluator", "architect", "reviewer", "critic"})
+
+    def test_propositions_jamais_de_baisse_ni_de_modele_declare_change(self):
+        # Effort au-dessus de la règle : jamais de proposition à la baisse.
+        m = self._with(**{a["id"]: {"effort": "xhigh"} for a in MANIFEST["agents"]})
+        for a in m["agents"]:
+            a["effort"] = {"orchestrator": "high", "reviewer": "max"}.get(a["id"], "xhigh")
+        self.assertEqual(team.suggest_agent_config(m), [])
+        # Modèle déclaré différent de la règle : jamais remis en cause.
+        m = self._with(reviewer={"model": "sonnet", "effort": "high"},
+                       researcher={"model": "opus", "effort": "low"})
+        props = {s["agent"]: s for s in team.suggest_agent_config(m)}
+        self.assertNotIn("reviewer", props)
+        self.assertEqual(props["researcher"]["proposed"], {"model": "opus", "effort": "medium"})
+        # Modèle venu du seul défaut : la règle du rôle peut le proposer.
+        m = self._with(reviewer={"model": None, "effort": "high"})
+        props = {s["agent"]: s for s in team.suggest_agent_config(m)}
+        self.assertEqual(props["reviewer"]["current"], {"model": "sonnet", "effort": "high"})
+        self.assertEqual(props["reviewer"]["proposed"], {"model": "opus", "effort": "high"})
+        # Aucune proposition n'abaisse l'effort, quel que soit le réglage.
+        for eff in ("low", "medium", "high", "xhigh", "max"):
+            m = self._with(**{a["id"]: {"effort": eff} for a in MANIFEST["agents"]})
+            for s in team.suggest_agent_config(m):
+                with self.subTest(effort=eff, agent=s["agent"]):
+                    self.assertGreater(team._effort_rank(s["proposed"]["effort"]),
+                                       team._effort_rank(eff))
+
+    def test_propositions_signal_mesure(self):
+        cases = [{"id": f"case-{i}", "agent": "reviewer"} for i in (1, 2, 3)]
+        cases.append({"id": "case-4", "agent": "researcher"})
+        _write(self.ws / ".claude" / "evals" / "eval-set.jsonl",
+               "".join(json.dumps(c) + "\n" for c in cases))
+        self._journal({"iteration": 1, "date": "2026-10-10", "status": "pending",
+                       "failures_before": ["case-1", "case-2", "case-4"]})
+        st = team.team_state("w1")[1]
+        self.assertEqual(st["suggestions_basis"], {"measured": True, "date": "2026-10-10",
+                                                   "iteration": 1})
+        props = {s["agent"]: s for s in st["suggestions"]}
+        # reviewer sans effort (défaut de session = medium), 1/3 réussi : la
+        # règle propose high, puis le signal +1 cran (xhigh), modèle inchangé.
+        self.assertEqual(props["reviewer"]["proposed"], {"model": "opus", "effort": "xhigh"})
+        self.assertEqual(props["reviewer"]["source"], "rule+measure")
+        self.assertIn("1/3 cas réussis à la mesure du 2026-10-10", props["reviewer"]["reasons"][-1])
+        # researcher : un seul cas, pas de signal ; règle sans objet (medium).
+        self.assertNotIn("researcher", props)
+        # Règle + signal : effort low -> règle high, puis +1 cran.
+        m = self._with(reviewer={"effort": "low"})
+        sig = team.measure_signals(self.ws, m)
+        props = {s["agent"]: s for s in team.suggest_agent_config(m, sig)}
+        self.assertEqual(props["reviewer"]["proposed"]["effort"], "xhigh")
+        self.assertEqual(props["reviewer"]["source"], "rule+measure")
+        # Effort déjà max : ni le signal ni la règle ne proposent quoi que ce
+        # soit (avant : la règle proposait `high`, une baisse).
+        m = self._with(reviewer={"effort": "max"})
+        props = {s["agent"]: s for s in team.suggest_agent_config(m, sig)}
+        self.assertNotIn("reviewer", props)
+        # Effort xhigh en échec : max.
+        m = self._with(reviewer={"effort": "xhigh"})
+        props = {s["agent"]: s for s in team.suggest_agent_config(m, sig)}
+        self.assertEqual(props["reviewer"]["proposed"]["effort"], "max")
+
+    def test_propositions_journal_vide(self):
+        write_json_file(self.ws / ".claude" / "team.json", self._full(researcher={"effort": "low"}))
+        st = team.team_state("w1")[1]
+        self.assertFalse(st["suggestions_basis"]["measured"])
+        self.assertEqual({s["agent"] for s in st["suggestions"]},
+                         {"researcher", "architect", "reviewer", "evaluator", "critic"})
+        self.assertTrue(all(s["source"] == "rule" for s in st["suggestions"]))
+        self.assertIn("fable", st["model_aliases"])
+        self.assertEqual(st["effort_levels"][-1], "max")
+        self.assertIsNone(st["agents"][0]["effective_effort"])
+
+    def test_set_agents_config(self):
+        team.generate_agents(self.ws, self.vars)
+        manual = self.ws / ".claude" / "agents" / "w1-critic.md"
+        manual.write_text("---\nname: w1-critic\n---\nà moi\n", encoding="utf-8")
+        h0 = team.team_config_hash(self.ws, "w1")
+        self._journal({"iteration": 1, "date": "2026-10-10", "status": "accepted",
+                       "score_before": 0.5, "score_after": 0.6, "config_version": h0,
+                       "unrunnable": 0})
+        self.assertTrue(team.improvement_state("w1")[1]["baseline_current"])
+        status, p = team.set_agents_config("w1", {"reviewer": {"effort": "high"},
+                                                  "critic": {"model": "sonnet"}}, self.vars)
+        self.assertEqual(status, 200, p)
+        self.assertTrue(p["written"])
+        self.assertEqual(p["generated"], [".claude/agents/w1-reviewer.md"])
+        self.assertEqual(manual.read_text(encoding="utf-8"), "---\nname: w1-critic\n---\nà moi\n")
+        self.assertTrue(any(s["path"].endswith("w1-critic.md") for s in p["skipped"]))
+        self.assertEqual(_frontmatter(self._agent("reviewer"))["effort"], "high")
+        self.assertEqual(p["config_hash_before"], h0)
+        self.assertNotEqual(p["config_hash_after"], h0)
+        self.assertTrue(p["baseline_stale"])
+        self.assertEqual(self._manifest()["improvement_loop"], MANIFEST["improvement_loop"])
+        # Même valeur : rien écrit, rien régénéré.
+        stamp = (self.ws / ".claude" / "team.json").stat().st_mtime_ns
+        status, p = team.set_agents_config("w1", {"reviewer": {"effort": "high"}}, self.vars)
+        self.assertEqual((status, p["written"], p["generated"]), (200, False, []))
+        self.assertEqual((self.ws / ".claude" / "team.json").stat().st_mtime_ns, stamp)
+        # effort null : retiré du manifeste et de l'agent généré.
+        status, p = team.set_agents_config("w1", {"reviewer": {"effort": None}}, self.vars)
+        self.assertEqual(status, 200)
+        self.assertNotIn("effort", {a["id"]: a for a in self._manifest()["agents"]}["reviewer"])
+        self.assertNotIn("effort:", self._agent("reviewer"))
+
+    def test_set_agents_config_erreurs(self):
+        for body in ({"inconnu": {"model": "opus"}}, {"reviewer": {"model": "gpt"}},
+                     {"reviewer": {"effort": "turbo"}}, {"reviewer": "opus"}, {}, None):
+            with self.subTest(body=body):
+                self.assertEqual(team.set_agents_config("w1", body)[0], 400)
+        self.assertEqual(team.set_agents_config("absent", {"reviewer": {"model": "opus"}})[0], 404)
+        # Itération /improve en attente : 409 sans écriture.
+        before = (self.ws / ".claude" / "team.json").read_bytes()
+        self._journal({"iteration": 2, "status": "pending", "config_version": "abc"})
+        status, p = team.set_agents_config("w1", {"reviewer": {"model": "sonnet"}})
+        self.assertEqual(status, 409)
+        self.assertIn("en attente", p["error"])
+        self.assertEqual((self.ws / ".claude" / "team.json").read_bytes(), before)
+        (self.ws / ".claude" / "team.json").write_text("{corrompu", encoding="utf-8")
+        self.assertEqual(team.set_agents_config("w1", {"reviewer": {"model": "opus"}})[0], 409)
+        (self.ws / ".claude" / "team.json").unlink()
+        self.assertEqual(team.set_agents_config("w1", {"reviewer": {"model": "opus"}})[0], 404)
+
+    def test_set_agents_config_en_attente_sans_changement_passe(self):
+        team.generate_agents(self.ws, self.vars)
+        self._journal({"iteration": 2, "status": "pending", "config_version": "abc"})
+        before = (self.ws / ".claude" / "team.json").read_bytes()
+        # Valeurs actuelles (executor : modèle implicite `sonnet`) : 200, rien écrit.
+        status, p = team.set_agents_config("w1", {"reviewer": {"model": "opus"},
+                                                  "executor": {"model": "sonnet", "effort": None}})
+        self.assertEqual((status, p.get("written")), (200, False), p)
+        self.assertEqual((self.ws / ".claude" / "team.json").read_bytes(), before)
+
+    def test_reappliquer_sans_changement_reel_n_ecrit_rien(self):
+        # Modale d'activation : tous les modèles renvoyés, égaux à l'effectif
+        # (executor : implicite via models.default). Aucun champ implicite
+        # rendu explicite, manifeste inchangé à l'octet, empreinte stable.
+        team.generate_agents(self.ws, self.vars)
+        before = (self.ws / ".claude" / "team.json").read_bytes()
+        h = team.team_config_hash(self.ws, "w1")
+        current = {a["id"]: a["model"] for a in team.team_state("w1")[1]["agents"]}
+        self.assertEqual(current["executor"], "sonnet")
+        self.assertFalse(team._persist_models(self.ws, current, None))
+        team.generate_agents(self.ws, self.vars, {"models": current, "regenerate": True})
+        self.assertEqual((self.ws / ".claude" / "team.json").read_bytes(), before)
+        self.assertNotIn("model", {a["id"]: a for a in self._manifest()["agents"]}["executor"])
+        self.assertEqual(team.team_config_hash(self.ws, "w1"), h)
+
+    def test_default_model_seulement_sans_modele_declare(self):
+        self.assertTrue(team._persist_models(self.ws, {"critic": "haiku"}, "fable"))
+        by_id = {a["id"]: a for a in self._manifest()["agents"]}
+        self.assertEqual(by_id["critic"]["model"], "haiku")      # choix explicite par agent
+        self.assertEqual(by_id["executor"]["model"], "fable")    # sans modèle déclaré
+        self.assertEqual(by_id["reviewer"]["model"], "opus")     # déclaré : intact
+        self.assertEqual(by_id["evaluator"]["model"], "sonnet")  # déclaré : intact
+
+    def test_modeles_d_activation_iteration_en_attente(self):
+        team.generate_agents(self.ws, self.vars)
+        self._journal({"iteration": 3, "status": "pending", "config_version": "abc"})
+        before = (self.ws / ".claude" / "team.json").read_bytes()
+        with self.assertRaises(team.PendingIterationError) as cm:
+            team.generate_agents(self.ws, self.vars, {"models": {"reviewer": "sonnet"}})
+        self.assertEqual(cm.exception.pending["iteration"], 3)
+        self.assertIn("en attente", str(cm.exception))
+        self.assertEqual((self.ws / ".claude" / "team.json").read_bytes(), before)
+        self.assertEqual(team.models_change_pending(self.ws, {"reviewer": "sonnet"}, None),
+                         {"iteration": 3})
+        # Sans changement réel : passe.
+        self.assertIsNone(team.models_change_pending(self.ws, {"reviewer": "opus"}, None))
+        team.generate_agents(self.ws, self.vars, {"models": {"reviewer": "opus"}})
+        # Itération tranchée (dernière ligne de l'itération) : plus de verrou.
+        self._journal({"iteration": 3, "status": "pending"}, {"iteration": 3, "status": "rejected"})
+        self.assertIsNone(team.models_change_pending(self.ws, {"reviewer": "sonnet"}, None))
+
+    def test_team_state_expose_iteration_en_attente(self):
+        # La modale d'activation verrouille modèles et efforts sur cette clé.
+        team.generate_agents(self.ws, self.vars)
+        self.assertIsNone(team.team_state("w1")[1]["pending"])
+        self._journal({"iteration": 5, "status": "pending", "config_version": "abc"})
+        self.assertEqual(team.team_state("w1")[1]["pending"], {"iteration": 5})
+
+    def test_regeneration_iteration_en_attente_seulement_si_reecriture_reelle(self):
+        team.generate_agents(self.ws, self.vars)
+        self._journal({"iteration": 6, "status": "pending", "config_version": "abc"})
+        regen = {"regenerate": True}
+        # Rien ne changerait : pas de verrou (ni sans « Régénérer »).
+        self.assertIsNone(team.agents_rewrite_pending(self.ws, self.vars, regen))
+        self.assertIsNone(team.agents_rewrite_pending(self.ws, self.vars, {}))
+        # Corps modifié à la main depuis la phase 1 : la régénération réécrirait.
+        body = self.ws / ".claude" / "team" / "agents" / "critic.md"
+        body.write_text(body.read_text(encoding="utf-8") + "\nAjout.\n", encoding="utf-8")
+        self.assertEqual(team.agents_rewrite_pending(self.ws, self.vars, regen), {"iteration": 6})
+        self.assertIsNone(team.agents_rewrite_pending(self.ws, self.vars, {}))
+        # Agent généré absent : régénéré même sans « Régénérer ».
+        (self.ws / ".claude" / "agents" / "w1-critic.md").unlink()
+        self.assertEqual(team.agents_rewrite_pending(self.ws, self.vars, {}), {"iteration": 6})
+        # Itération tranchée : plus de verrou.
+        self._journal({"iteration": 6, "status": "pending"}, {"iteration": 6, "status": "accepted"})
+        self.assertIsNone(team.agents_rewrite_pending(self.ws, self.vars, regen))
+
+
+class LegacyAgentFileModelTests(unittest.TestCase):
+    """Ami en 2.4.x : modèle choisi à l'activation écrit SEULEMENT dans l'agent
+    généré (`model:` du frontmatter), jamais dans team.json."""
+
+    def setUp(self):
+        reset_sandbox()
+        self.ws = make_workspace("w1")
+        write_json_file(self.ws / ".claude" / "team.json", MANIFEST)
+        for a in MANIFEST["agents"]:
+            if a["id"] != "bad id":
+                _write(self.ws / ".claude" / a["file"], f"# Rôle {a['id']}\n")
+        self.vars = {"name": "w1", "label": "w1"}
+        team.generate_agents(self.ws, self.vars)
+        self.manifest_path = self.ws / ".claude" / "team.json"
+
+    def _path(self, aid: str) -> Path:
+        return self.ws / ".claude" / "agents" / f"w1-{aid}.md"
+
+    def _manifest_agent(self, aid: str) -> dict:
+        data = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        return {a["id"]: a for a in data["agents"]}[aid]
+
+    def _legacy_executor_opus(self) -> None:
+        # Rendu exact de la 2.4.1 : override d'activation, rien dans team.json.
+        agent = {a["id"]: a for a in MANIFEST["agents"]}["executor"]
+        body = (self.ws / ".claude" / agent["file"]).read_text(encoding="utf-8")
+        self._path("executor").write_text(
+            team.render_agent(agent, MANIFEST, self.vars, body, {"models": {"executor": "opus"}}),
+            encoding="utf-8")
+        self.assertNotIn("model", self._manifest_agent("executor"))
+
+    def _journal(self, *lines) -> None:
+        _write(self.ws / ".claude" / "journal" / "changes.jsonl",
+               "".join(json.dumps(x) + "\n" for x in lines))
+
+    def test_get_team_montre_le_modele_du_fichier(self):
+        self._legacy_executor_opus()
+        before = self.manifest_path.read_bytes()
+        st = team.team_state("w1")[1]
+        ex = {a["id"]: a for a in st["agents"]}["executor"]
+        self.assertEqual((ex["model"], ex["effective_model"], ex["model_source"]),
+                         ("opus", "opus", "agent_file"))
+        by = {a["id"]: a for a in st["agents"]}
+        self.assertEqual(by["reviewer"]["model_source"], "manifest")
+        # Choix de l'utilisateur : la règle du rôle ne propose pas d'en changer.
+        self.assertFalse(any(s["agent"] == "executor" and s["proposed"]["model"] != "opus"
+                             for s in st["suggestions"]))
+        self.assertEqual(self.manifest_path.read_bytes(), before)  # affichage seul
+
+    def test_regler_l_effort_du_reviewer_garde_l_executor_en_opus(self):
+        self._legacy_executor_opus()
+        status, p = team.set_agents_config("w1", {"reviewer": {"effort": "high"}}, self.vars)
+        self.assertEqual(status, 200, p)
+        self.assertTrue(p["written"])
+        self.assertEqual(p["adopted_models"], {"executor": "opus"})
+        self.assertEqual(_frontmatter(self._path("executor").read_text(encoding="utf-8"))["model"],
+                         "opus")
+        self.assertEqual(self._manifest_agent("executor")["model"], "opus")
+        st = team.team_state("w1")[1]
+        self.assertEqual({a["id"]: a for a in st["agents"]}["executor"]["model_source"], "manifest")
+
+    def test_regenerer_reprend_le_modele_du_fichier(self):
+        self._legacy_executor_opus()
+        team.generate_agents(self.ws, self.vars, {"regenerate": True})
+        self.assertEqual(self._manifest_agent("executor")["model"], "opus")
+        self.assertEqual(_frontmatter(self._path("executor").read_text(encoding="utf-8"))["model"],
+                         "opus")
+
+    def test_modale_qui_renvoie_le_modele_du_fichier(self):
+        # Pré-remplie par GET /team, la modale renvoie opus : persisté, conservé.
+        self._legacy_executor_opus()
+        current = {a["id"]: a["model"] for a in team.team_state("w1")[1]["agents"]}
+        self.assertEqual(current["executor"], "opus")
+        team.generate_agents(self.ws, self.vars, {"models": current, "regenerate": True})
+        self.assertEqual(self._manifest_agent("executor")["model"], "opus")
+        self.assertEqual(_frontmatter(self._path("executor").read_text(encoding="utf-8"))["model"],
+                         "opus")
+
+    def test_iteration_en_attente_affiche_sans_ecrire(self):
+        self._legacy_executor_opus()
+        self._journal({"iteration": 4, "status": "pending", "config_version": "abc"})
+        before = self.manifest_path.read_bytes()
+        agent_before = self._path("executor").read_bytes()
+        ex = {a["id"]: a for a in team.team_state("w1")[1]["agents"]}["executor"]
+        self.assertEqual((ex["model"], ex["model_source"]), ("opus", "agent_file"))
+        # La modale renvoie opus : pas un changement, pas de 409.
+        self.assertIsNone(team.models_change_pending(self.ws, {"executor": "opus"}, None, self.vars))
+        self.assertIsNone(team.agents_rewrite_pending(self.ws, self.vars, {"regenerate": True}))
+        status, p = team.set_agents_config("w1", {"executor": {"model": "opus"}}, self.vars)
+        self.assertEqual((status, p["written"]), (200, False), p)
+        team.generate_agents(self.ws, self.vars, {"models": {"executor": "opus"}, "regenerate": True})
+        self.assertEqual(self.manifest_path.read_bytes(), before)
+        self.assertEqual(self._path("executor").read_bytes(), agent_before)
+        # Un vrai changement reste refusé.
+        self.assertEqual(team.set_agents_config("w1", {"executor": {"model": "sonnet"}})[0], 409)
+
+    def test_agent_edite_a_la_main_ignore(self):
+        p = self._path("executor")
+        p.write_text("---\nname: w1-executor\nmodel: opus\n---\nà moi\n", encoding="utf-8")
+        self.assertEqual(team.agent_file_models(self.ws, MANIFEST, "w1"), {})
+        ex = {a["id"]: a for a in team.team_state("w1")[1]["agents"]}["executor"]
+        self.assertEqual((ex["model"], ex["model_source"]), ("sonnet", "default"))
+
+    def test_sans_ecart_rien_ne_change_a_l_octet(self):
+        files = [self.manifest_path, *sorted((self.ws / ".claude" / "agents").glob("w1-*.md"))]
+        before = {f: f.read_bytes() for f in files}
+        h = team.team_config_hash(self.ws, "w1")
+        self.assertEqual(team.agent_file_models(self.ws, MANIFEST, "w1"), {})
+        st = team.team_state("w1")[1]
+        self.assertNotIn("agent_file", {a["model_source"] for a in st["agents"]})
+        team.generate_agents(self.ws, self.vars, {"regenerate": True})
+        current = {a["id"]: a["model"] for a in st["agents"]}
+        team.generate_agents(self.ws, self.vars, {"models": current, "regenerate": True})
+        status, p = team.set_agents_config("w1", {"executor": {"model": "sonnet"}}, self.vars)
+        self.assertEqual((status, p["written"], p["adopted_models"]), (200, False, {}))
+        self.assertEqual({f: f.read_bytes() for f in files}, before)
+        self.assertEqual(team.team_config_hash(self.ws, "w1"), h)
+        # Rendu identique à celui de la 2.4.1 (sans override) pour chaque agent.
+        for a in team.manifest_agents(MANIFEST):
+            body = (self.ws / ".claude" / a["file"]).read_text(encoding="utf-8")
+            self.assertEqual(self._path(a["id"]).read_text(encoding="utf-8"),
+                             team.render_agent(a, MANIFEST, self.vars, body))
 
 
 if __name__ == "__main__":

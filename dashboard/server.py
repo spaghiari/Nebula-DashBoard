@@ -62,6 +62,7 @@ from dashcore.api_workspaces import (
 from dashcore.folder_picker import picker_capability, pick_folder
 from dashcore.api_overlays import (
     list_overlays, apply_overlay, overlay_is_active, overlays_usage,
+    overlay_vars, remove_overlay,
 )
 from dashcore.api_team import team_state, improvement_state
 from dashcore.api_files import (
@@ -389,18 +390,10 @@ def h_post_apply_overlay(q, b, ws, ov_id):
         return 400, {"error": "id invalide"}
     # On reutilise les memes vars que create_workspace pour que les
     # placeholders ({{name}}, {{label}}, etc.) soient substitues coherament.
-    import datetime as _dt
     ws_obj = next((x for x in list_workspaces() if x["id"] == ws), None)
     if not ws_obj:
         return 404, {"error": "workspace absent du registre"}
-    vars = {
-        "name": ws_obj["id"],
-        "label": ws_obj.get("label") or ws_obj["id"],
-        "description": ws_obj.get("description") or "(a completer)",
-        "tools": "(a completer)",
-        "date": _dt.date.today().isoformat(),
-        "emoji": ws_obj.get("emoji") or "📁",
-    }
+    vars = overlay_vars(ws_obj)
     b = b or {}
     options = {
         "mode": b.get("mode"),
@@ -417,6 +410,39 @@ def h_post_apply_overlay(q, b, ws, ov_id):
         "prefix": b.get("prefix"),
     }
     return apply_overlay(ws, ov_id, vars, options)
+
+def h_post_remove_overlay(q, b, ws, ov_id):
+    """Retire un module d'un workspace (cf. api_overlays.remove_overlay) :
+    `{"dry_run": bool, "plan_id": str|null, "keep_living": bool, "force": bool}`.
+    Apercu d'abord (dry_run, aucune ecriture, rend `plan_id`), puis execution
+    avec ce `plan_id` (409 s'il est absent ou perime). Rien n'est supprime :
+    tout part dans `.claude/.nebula-removed/<module>-<horodatage>/`."""
+    if not safe_id(ws):
+        return 400, {"error": "id invalide"}
+    ws_obj = next((x for x in list_workspaces() if x["id"] == ws), None)
+    if not ws_obj:
+        return 404, {"error": "workspace absent du registre"}
+    b = b or {}
+    plan_id = b.get("plan_id")
+    options = {
+        "dry_run": b.get("dry_run") is True,
+        "plan_id": plan_id if isinstance(plan_id, str) else None,
+        "keep_living": b.get("keep_living") is True,
+        "force": b.get("force") is True,
+    }
+    return remove_overlay(ws, ov_id, overlay_vars(ws_obj), options)
+
+def h_post_ws_team_agents_config(q, b, ws):
+    """Modele et effort par agent claude-team : `{"agents": {"<id>": {"model":
+    "...", "effort": "...|null"}}}` ecrit dans `.claude/team.json` puis
+    regeneration des agents generes (jamais un agent edite a la main)."""
+    if not safe_id(ws):
+        return 400, {"error": "id invalide"}
+    ws_obj = next((x for x in list_workspaces() if x["id"] == ws), None)
+    if not ws_obj:
+        return 404, {"error": "workspace absent du registre"}
+    from dashcore.api_team import set_agents_config
+    return set_agents_config(ws, (b or {}).get("agents"), overlay_vars(ws_obj))
 
 # ── Skills ──────────────────────────────────────────────────────────────────
 def h_get_skills(q, b):                     return 200, {"global": list_skills_global()}
@@ -753,8 +779,12 @@ ROUTES_POST = [
     (re.compile(rf"^/api/templates/({_ID})/file$"),                                         h_post_template_file),
     # Overlays : application sur un workspace existant (idempotent)
     (re.compile(rf"^/api/workspaces/({_ID})/overlays/({_ID})$"),                            h_post_apply_overlay),
+    # Overlays : retrait (aperçu dry_run puis exécution avec plan_id)
+    (re.compile(rf"^/api/workspaces/({_ID})/overlays/({_ID})/remove$"),                     h_post_remove_overlay),
     # Module claude-team : routage always-on (mode / gate de relecture)
     (re.compile(rf"^/api/workspaces/({_ID})/team/routing$"),                                h_post_ws_team_routing),
+    # Module claude-team : modèle et effort par agent (+ régénération)
+    (re.compile(rf"^/api/workspaces/({_ID})/team/agents-config$"),                          h_post_ws_team_agents_config),
     # Skills
     (re.compile(r"^/api/skills$"),                                                         h_post_create_skill),
     (re.compile(r"^/api/skills/copy$"),                                                    h_post_copy_skill),

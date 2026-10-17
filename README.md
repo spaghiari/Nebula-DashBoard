@@ -235,6 +235,21 @@ diffèrent, l'ancienne étant sauvegardée en `.bak`. Tes registres, ta
 mémoire de projet, le bloc « Auto-amélioration » du `CLAUDE.md` que tu as
 complété et le reste du fichier ne sont jamais touchés.
 
+**Retirer un module** se fait depuis sa ligne, avec le bouton « Retirer ».
+Un aperçu montre d'abord ce qui va partir et ce qui reste, et pourquoi.
+Rien n'est supprimé : les fichiers du module sont déplacés dans une
+archive du projet (`.claude/.nebula-removed/<module>-<date>/`), avec un
+`removal.json` qui explique comment tout remettre en place. Un
+`settings.json` resté identique à celui livré par le module part entier
+dans l'archive ; sinon, dans `settings.json` comme dans
+`settings.local.json`, seuls les hooks du module sont retirés (tes
+permissions restent). Dans `CLAUDE.md`, seul le bloc du module part. `.gitignore` et `settings.local.json` restent toujours en
+place. L'équipe d'agents s'appuie sur l'auto-amélioration : retire d'abord
+l'équipe, puis l'auto-amélioration. Une case permet de garder ta mémoire
+et tes registres en place. Ferme toute session Claude ouverte dans le
+projet (Nebula ne voit que celles qu'il a lancées), puis relance Claude
+Code après le retrait.
+
 <!-- claude-team -->
 L'overlay **`claude-team`** (qui requiert le précédent) ajoute une **équipe
 de 7 agents** générés depuis `.claude/team.json` : orchestrateur,
@@ -251,6 +266,20 @@ livré en mode `auto`, avec une relecture systématique par le relecteur
 tokens. Sur la ligne du module, dans l'onglet Configuration du workspace,
 tu peux passer le routage en « assisté » (suggestions seulement) ou
 « manuel », et la relecture du code en « dès 3 fichiers » ou « jamais ».
+
+La carte **« Équipe : modèle et effort »** de l'onglet Amélioration règle,
+agent par agent, le modèle (`sonnet`, `opus`, `haiku`, `fable`, ou
+`inherit` pour reprendre celui de la session) et l'effort de raisonnement
+(de « faible » à « max », vide = réglage par défaut). Ses propositions ne
+font que compléter, chacune expliquée : le modèle du rôle seulement pour
+un agent qui n'en déclare pas, un effort du rôle seulement s'il est
+au-dessus de l'actuel (un agent sans effort compte comme « moyen », le défaut de Claude Code sur les modèles 5.5), et un
+cran d'effort en plus pour un agent qui échoue à la dernière mesure.
+Jamais de baisse d'effort ni de changement d'un modèle déclaré, et rien
+n'est appliqué sans clic. Changer la configuration rend la mesure de
+référence périmée : relance `/eval` dans une nouvelle session de Claude
+Code. Tant qu'une itération `/improve` attend son verdict, aucun modèle ni
+effort ne peut changer (ni ici, ni par « Ré-appliquer »).
 <!-- /claude-team -->
 
 </details>

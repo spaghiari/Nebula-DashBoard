@@ -327,6 +327,7 @@ function _helpSections() {
 'modules': `
       <h2>${I.zap}<span>Modules (overlays)</span></h2>
       <p>Un module se pose <strong>par-dessus</strong> un workspace existant, sans jamais écraser un fichier déjà présent (le <code class="mono">CLAUDE.md</code> reçoit juste un bloc délimité). On l'active depuis l'onglet <strong>Configuration</strong> du workspace, ou depuis la section <strong>Modules</strong> de la page Templates (« Activer sur un workspace… »). Sur un workspace où il est déjà actif, <strong>Ré-appliquer</strong> met le module à jour : les fichiers manquants sont copiés, les fichiers <em>gérés</em> par le module (ses hooks, et pour l'équipe d'agents ses quatre commandes et son bloc de règles du <code class="mono">CLAUDE.md</code>) sont remplacés par la version courante s'ils en diffèrent, l'ancienne version étant sauvegardée en <code class="mono">.bak</code>. Ton contenu (registres, mémoire de projet, manifeste, bloc « Auto-amélioration » du <code class="mono">CLAUDE.md</code> que tu as complété, texte hors des blocs) n'est jamais touché. Relance Claude Code ensuite pour charger les changements.</p>
+      <p>Le bouton <strong>Retirer</strong> de la ligne d'un module montre d'abord un aperçu de ce qui part et de ce qui reste. Rien n'est supprimé : les fichiers du module partent dans une archive du projet (<code class="mono">.claude/.nebula-removed/</code>, avec un <code class="mono">removal.json</code> pour tout remettre en place) ; un <code class="mono">settings.json</code> resté identique à celui livré par le module part entier dans l'archive, sinon seuls les hooks du module y sont retirés (tes permissions restent), et dans <code class="mono">CLAUDE.md</code> seul son bloc part. L'équipe d'agents se retire avant l'auto-amélioration, et une case garde ta mémoire et tes registres en place.</p>
 
       <div class="help-grid help-grid-3">
         <div class="help-tile">
@@ -348,6 +349,7 @@ function _helpSections() {
         <li><code class="mono">/improve</code> : une itération d'amélioration en deux phases ; la seconde se lance dans une <strong>nouvelle session</strong> Claude Code.</li>
         <li><code class="mono">/eval-add</code> : transforme un échec observé en nouveau cas d'éval.</li>
         <li>L'onglet <strong>Amélioration</strong> du workspace affiche scores, journal et registres.</li>
+        <li>Sa carte <strong>Équipe : modèle et effort</strong> règle le modèle (<code class="mono">inherit</code> = celui de la session) et l'effort de raisonnement de chaque agent, de « faible » à « max ». Les propositions sont expliquées et ne s'appliquent qu'au clic ; après un changement, relance <code class="mono">/eval</code> dans une nouvelle session pour remesurer.</li>
       </ul>
 
       <h3>Routage et coût</h3>

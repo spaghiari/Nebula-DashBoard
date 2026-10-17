@@ -33,7 +33,8 @@ from pathlib import Path
 
 from dashcore.config import (
     CAPABILITY_TOOLS, CAPABILITY_WRITE_TOOLS, REGISTER_STATUSES,
-    TEAM_GENERATED_MARKER, TEAM_MODEL_ALIASES, _MUTATION_LOCK, log,
+    TEAM_EFFORT_LEVELS, TEAM_GENERATED_MARKER, TEAM_MODEL_ALIASES,
+    TEAM_ROLE_DEFAULTS, TEAM_SESSION_DEFAULT_EFFORT, _MUTATION_LOCK, log,
 )
 from dashcore.helpers import (
     CorruptJsonError, read_json, read_json_strict, render_placeholders,
@@ -115,6 +116,170 @@ def _persist_prefix(ws_dir: Path, prefix: str) -> bool:
         if team.get("prefix") == prefix:
             return False
         team["prefix"] = prefix
+        write_json(path, data)
+        return True
+
+
+class PendingIterationError(Exception):
+    """Changement de modèle refusé : une itération /improve attend son
+    verdict (le candidat serait mesuré sur une autre configuration)."""
+
+    def __init__(self, pending: dict):
+        self.pending = pending
+        super().__init__(pending_message(pending, "les modèles"))
+
+
+def pending_message(pending: dict, what: str) -> str:
+    """Message affiché quand une itération en attente bloque un changement."""
+    return (f"itération /improve {pending.get('iteration')} en attente de verdict : la "
+            f"trancher (nouvelle session puis /improve) avant de changer {what} ; rien "
+            "n'a été modifié")
+
+
+def pending_iteration(ws_dir: Path, manifest: dict | None) -> dict | None:
+    """Itération /improve encore `pending` (dernière ligne de chaque itération
+    du journal, même règle que improvement_state), ou None. Lecture seule."""
+    loop = (manifest or {}).get("improvement_loop") or {}
+    jp = _claude_path(ws_dir, str(loop.get("journal") or "journal/changes.jsonl"))
+    entries, _ = _parse_journal(jp) if jp else ([], 0)
+    last: dict = {}
+    for i, e in enumerate(entries, 1):
+        it = e.get("iteration") if isinstance(e.get("iteration"), int) else i
+        last[it] = _norm_status(e.get("status"))
+    pend = [it for it, s in last.items() if s == "pending"]
+    return {"iteration": pend[-1]} if pend else None
+
+
+def _declared_model(agent: dict) -> str | None:
+    """`model` déclaré explicitement par l'agent dans le manifeste (alias
+    valide), ou None (le modèle vient alors du défaut)."""
+    v = agent.get("model")
+    return v if isinstance(v, str) and v in TEAM_MODEL_ALIASES else None
+
+
+_FM_MODEL_RE = re.compile(r"^model:[ \t]*(\S+)[ \t]*\r?$", re.M)
+
+
+def agent_file_models(ws_dir: Path, manifest: dict | None, prefix: str | None) -> dict[str, str]:
+    """Modèles choisis avant la 2.5.0 et restés seulement dans les agents
+    générés : jusqu'en 2.4.1, les modèles de la modale d'activation
+    n'étaient écrits que dans le frontmatter `model:` de
+    `.claude/agents/<prefix>-<id>.md`, jamais dans `team.json`.
+
+    Retourne {agent_id: alias} pour chaque agent SANS modèle déclaré dans le
+    manifeste dont le fichier généré (porteur du marqueur) déclare un alias
+    valide différent du modèle effectif du manifeste. Ce modèle est le choix
+    de l'utilisateur : il est affiché, puis persisté avant toute
+    régénération (cf. _persist_models, set_agents_config). Lecture seule ;
+    {} sans écart (rendu identique à la 2.4.1)."""
+    out: dict[str, str] = {}
+    if not isinstance(manifest, dict) or not prefix:
+        return out
+    for a in manifest_agents(manifest):
+        if _declared_model(a) is not None:
+            continue
+        target = ws_dir / AGENTS_DIR_REL / f"{prefix}-{a['id']}.md"
+        try:
+            content = target.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if not _is_generated(content):
+            continue
+        fm = _FRONTMATTER_RE.match(content)
+        m = _FM_MODEL_RE.search(fm.group(0)) if fm else None
+        if not m:
+            continue
+        model = m.group(1)
+        if model in TEAM_MODEL_ALIASES and model != _effective_model(a, manifest, None):
+            out[a["id"]] = model
+    return out
+
+
+def _with_file_models(manifest: dict, file_models: dict[str, str]) -> dict:
+    """Copie du manifeste où les modèles des agents générés (cf.
+    agent_file_models) sont déclarés : vue pour l'affichage et le rendu,
+    jamais écrite telle quelle. Le manifeste lui-même si aucun écart."""
+    if not file_models:
+        return manifest
+    view = json.loads(json.dumps(manifest))
+    for a in view.get("agents") or []:
+        if isinstance(a, dict) and a.get("id") in file_models:
+            a["model"] = file_models[a["id"]]
+    return view
+
+
+def _model_changes(data: dict, models: dict, default_model: str | None) -> list[tuple[dict, str]]:
+    """Changements de modèle RÉELS demandés à l'activation : `models[id]`
+    (choix explicite par agent), sinon `default_model` pour un agent SANS
+    modèle déclaré seulement (un modèle déclaré n'est jamais écrasé par le
+    défaut). Une valeur égale au modèle effectif actuel n'est pas un
+    changement (pas de champ implicite rendu explicite)."""
+    out: list[tuple[dict, str]] = []
+    for a in data.get("agents") or []:
+        if not isinstance(a, dict) or not safe_id(str(a.get("id") or "")):
+            continue
+        if a["id"] in models:
+            want = models[a["id"]]
+        elif default_model and _declared_model(a) is None:
+            want = default_model
+        else:
+            continue
+        if want != _effective_model(a, data, None):
+            out.append((a, want))
+    return out
+
+
+def models_change_pending(ws_dir: Path, models: dict, default_model: str | None,
+                          vars: dict | None = None) -> dict | None:
+    """Itération en attente qui bloquerait les changements de modèle
+    demandés (None : rien ne change, ou aucune itération en attente).
+    Un modèle resté dans l'agent généré (cf. agent_file_models) compte
+    comme modèle actuel : la modale qui le renvoie ne change rien.
+    Lecture non stricte : un manifeste corrompu est traité plus loin (409)."""
+    data = read_json(ws_dir / MANIFEST_REL, None)
+    if not isinstance(data, dict) or not isinstance(data.get("agents"), list):
+        return None
+    prefix = effective_prefix(data, vars or {"name": ws_dir.name})
+    view = _with_file_models(data, agent_file_models(ws_dir, data, prefix))
+    if not _model_changes(view, models or {}, default_model):
+        return None
+    return pending_iteration(ws_dir, data)
+
+
+def _persist_models(ws_dir: Path, models: dict, default_model: str | None,
+                    prefix: str | None = None) -> bool:
+    """Écrit les modèles choisis à l'activation dans `agents[i].model` de la
+    copie workspace du manifeste (cf. _model_changes). Seuls `model` des
+    agents changent (jamais `improvement_loop`). Lecture stricte ; écrit
+    seulement si une valeur change réellement ; itération /improve en
+    attente + changement réel -> PendingIterationError (rien écrit).
+
+    `prefix` (préfixe des agents déjà générés) : les modèles restés
+    seulement dans les agents générés (cf. agent_file_models) sont d'abord
+    déclarés dans le manifeste, pour que la régénération les conserve. Sous
+    itération en attente, cette reprise n'est pas écrite (elle changerait
+    l'empreinte) : le rendu l'applique sans l'écrire (cf. generate_agents).
+    Retourne True si écrit."""
+    path = ws_dir / MANIFEST_REL
+    with _MUTATION_LOCK:
+        data = read_json_strict(path, None)
+        if not isinstance(data, dict) or not isinstance(data.get("agents"), list):
+            return False
+        file_models = agent_file_models(ws_dir, data, prefix)
+        view = _with_file_models(data, file_models)
+        changes = _model_changes(view, models or {}, default_model)
+        if not changes and not file_models:
+            return False
+        pend = pending_iteration(ws_dir, data)
+        if pend:
+            if changes:
+                raise PendingIterationError(pend)
+            return False
+        by_id = {a.get("id"): a for a in data["agents"] if isinstance(a, dict)}
+        for aid, model in file_models.items():
+            by_id[aid]["model"] = model
+        for a, want in changes:
+            by_id[a["id"]]["model"] = want
         write_json(path, data)
         return True
 
@@ -236,16 +401,30 @@ def team_config_hash(ws_dir: Path, default_prefix: str | None = None) -> str:
 # --- Mapping manifeste -> frontmatter ------------------------------------------
 
 def _effective_model(agent: dict, manifest: dict, overrides: dict | None) -> str:
-    """Alias de modèle du frontmatter : override par agent, puis
-    `default_model` de l'override, puis `model` de l'agent, puis
-    `models.default` du manifeste, puis `sonnet`."""
+    """Alias de modèle du frontmatter : override par agent, puis `model`
+    déclaré par l'agent, puis `default_model` de l'override (agents sans
+    modèle déclaré seulement), puis `models.default` du manifeste, puis
+    `sonnet`."""
     overrides = overrides or {}
     per_agent = overrides.get("models") or {}
-    for cand in (per_agent.get(agent.get("id")), overrides.get("default_model"),
-                 agent.get("model"), (manifest.get("models") or {}).get("default")):
+    for cand in (per_agent.get(agent.get("id")), agent.get("model"),
+                 overrides.get("default_model"), (manifest.get("models") or {}).get("default")):
         if isinstance(cand, str) and cand in TEAM_MODEL_ALIASES:
             return cand
     return "sonnet"
+
+
+def _effective_effort(agent: dict) -> str | None:
+    """Niveau d'effort (`effort:` du frontmatter) déclaré par l'agent dans le
+    manifeste, ou None (non déclaré ou hors TEAM_EFFORT_LEVELS) : rien n'est
+    alors écrit, le rendu reste identique à celui d'avant l'effort."""
+    v = agent.get("effort")
+    return v if isinstance(v, str) and v in TEAM_EFFORT_LEVELS else None
+
+
+# Modèles sans phrase d'« usage » dans la description générée : haiku
+# (historique), fable et inherit (absents du catalogue `models` du manifeste).
+_NO_USAGE_MODELS = ("haiku", "fable", "inherit")
 
 
 def agent_tools(agent: dict, manifest: dict) -> list[str]:
@@ -277,11 +456,13 @@ def _agent_name(agent: dict, vars: dict) -> str:
 def agent_frontmatter(agent: dict, manifest: dict, vars: dict,
                       overrides: dict | None = None) -> dict:
     """Champs du frontmatter Claude Code pour `agent` : name, description,
-    model, tools (liste)."""
+    model, effort (None si non déclaré), tools (liste)."""
     desc = str(agent.get("description") or "").strip()
     role = str(agent.get("role") or "").strip()
     model = _effective_model(agent, manifest, overrides)
-    usage = ((manifest.get("models") or {}).get(model) or {}).get("usage") if model != "haiku" else None
+    usage = None
+    if model not in _NO_USAGE_MODELS:
+        usage = ((manifest.get("models") or {}).get(model) or {}).get("usage")
     extra = []
     if role:
         extra.append(f"Rôle : {role}")
@@ -298,6 +479,7 @@ def agent_frontmatter(agent: dict, manifest: dict, vars: dict,
         "name": _agent_name(agent, vars),
         "description": desc or f"Agent {agent['id']} de l'équipe {vars.get('label') or ''}".strip(),
         "model": model,
+        "effort": _effective_effort(agent),
         "tools": agent_tools(agent, manifest),
     }
 
@@ -380,11 +562,15 @@ def render_agent(agent: dict, manifest: dict, vars: dict, body: str,
     de provenance + contraintes + corps (placeholders substitués)."""
     fm = agent_frontmatter(agent, manifest, vars, overrides)
     desc = fm["description"].replace("\n", " ").replace('"', "'")
+    # `effort:` seulement s'il est déclaré : un manifeste sans effort rend
+    # exactement le même fichier qu'avant (empreinte /eval inchangée).
+    effort_line = f"effort: {fm['effort']}\n" if fm["effort"] else ""
     head = (
         "---\n"
         f"name: {fm['name']}\n"
         f"description: \"{desc}\"\n"
         f"model: {fm['model']}\n"
+        f"{effort_line}"
         f"tools: {', '.join(fm['tools'])}\n"
         "---\n"
     )
@@ -446,12 +632,20 @@ def generate_agents(ws_dir: Path, vars: dict, options: dict | None = None) -> di
     opts = normalize_team_options(options)
     generated: list[str] = []
     skipped: list[dict] = []
+    wants_models = bool(opts["models"] or opts["default_model"])
     manifest = load_manifest(ws_dir)
     if manifest is None:
+        # Choix de modèles demandés sur un manifeste corrompu : ils ne
+        # pourraient pas être mémorisés -> CorruptJsonError (409 côté route).
+        if wants_models and (ws_dir / MANIFEST_REL).exists():
+            read_json_strict(ws_dir / MANIFEST_REL, None)
         skipped.append({"path": MANIFEST_REL.as_posix(), "reason": "manifeste absent ou illisible"})
         return {"generated": generated, "skipped": skipped, "prefix": None}
 
     prefix = effective_prefix(manifest, vars, opts["prefix"])
+    # Préfixe des agents DÉJÀ générés (avant un éventuel nouveau préfixe) :
+    # c'est là que se lisent les modèles d'avant la 2.5.0 (agent_file_models).
+    old_prefix = effective_prefix(manifest, vars)
     # Les corps sont rendus avec le préfixe comme `{{name}}` (noms d'agents
     # dans la règle de délégation, mentions dans le corps).
     vars = {**vars, "name": prefix}
@@ -460,38 +654,96 @@ def generate_agents(ws_dir: Path, vars: dict, options: dict | None = None) -> di
             _persist_prefix(ws_dir, prefix)
         except CorruptJsonError as e:
             skipped.append({"path": MANIFEST_REL.as_posix(), "reason": f"manifeste corrompu : {e}"})
-        for agent in manifest_agents(manifest):
-            src_rel = str(agent.get("file") or f"team/agents/{agent['id']}.md")
-            src = _claude_path(ws_dir, src_rel)
-            target = ws_dir / AGENTS_DIR_REL / f"{_agent_name(agent, vars)}.md"
-            rel = target.relative_to(ws_dir).as_posix()
-            if src is None:
-                skipped.append({"path": rel, "reason": f"corps source hors de .claude refusé : {src_rel}"})
-                continue
+        if wants_models or opts["regenerate"]:
+            # Modèles choisis à l'activation écrits dans `agents[i].model` :
+            # un « Régénérer » ultérieur sans payload les retrouve (lecture
+            # stricte : CorruptJsonError remontée, jamais d'écrasement). Les
+            # modèles restés seulement dans les agents générés sont repris
+            # d'abord (sinon la régénération les remettrait au défaut).
             try:
-                body = src.read_text(encoding="utf-8")
-            except OSError:
-                skipped.append({"path": rel, "reason": f"corps source absent : .claude/{src_rel}"})
+                if _persist_models(ws_dir, opts["models"], opts["default_model"], old_prefix):
+                    manifest = load_manifest(ws_dir) or manifest
+            except CorruptJsonError:
+                if wants_models:
+                    raise
+        # Reprise non écrite (itération en attente) : appliquée au rendu.
+        manifest = _with_file_models(manifest, agent_file_models(ws_dir, manifest, old_prefix))
+        for rel, target, content, reason in _agent_jobs(ws_dir, manifest, vars, opts):
+            if content is None:
+                skipped.append({"path": rel, "reason": reason})
                 continue
-            if target.exists():
-                if not opts["regenerate"]:
-                    skipped.append({"path": rel, "reason": "already present"})
-                    continue
-                try:
-                    existing = target.read_text(encoding="utf-8")
-                except OSError:
-                    existing = ""
-                if not _is_generated(existing):
-                    skipped.append({"path": rel, "reason": "édité à la main (marqueur généré absent)"})
-                    continue
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(render_agent(agent, manifest, vars, body, opts), encoding="utf-8")
+                target.write_text(content, encoding="utf-8")
                 generated.append(rel)
             except OSError as e:
                 log.warning("génération agent %s : %s", target, e)
                 skipped.append({"path": rel, "reason": f"write error: {e}"})
     return {"generated": generated, "skipped": skipped, "prefix": prefix}
+
+
+def _agent_jobs(ws_dir: Path, manifest: dict, vars: dict, opts: dict) -> list[tuple]:
+    """Travail du générateur, sans rien écrire : par agent du manifeste,
+    (rel, cible, contenu rendu à écrire, None) ou (rel, cible, None, raison
+    du saut). `vars['name']` = préfixe effectif ; `opts` normalisées."""
+    jobs: list[tuple] = []
+    for agent in manifest_agents(manifest):
+        src_rel = str(agent.get("file") or f"team/agents/{agent['id']}.md")
+        src = _claude_path(ws_dir, src_rel)
+        target = ws_dir / AGENTS_DIR_REL / f"{_agent_name(agent, vars)}.md"
+        rel = target.relative_to(ws_dir).as_posix()
+        if src is None:
+            jobs.append((rel, target, None, f"corps source hors de .claude refusé : {src_rel}"))
+            continue
+        try:
+            body = src.read_text(encoding="utf-8")
+        except OSError:
+            jobs.append((rel, target, None, f"corps source absent : .claude/{src_rel}"))
+            continue
+        if target.exists():
+            if not opts["regenerate"]:
+                jobs.append((rel, target, None, "already present"))
+                continue
+            try:
+                existing = target.read_text(encoding="utf-8")
+            except OSError:
+                existing = ""
+            if not _is_generated(existing):
+                jobs.append((rel, target, None, "édité à la main (marqueur généré absent)"))
+                continue
+        jobs.append((rel, target, render_agent(agent, manifest, vars, body, opts), None))
+    return jobs
+
+
+def agents_rewrite_pending(ws_dir: Path, vars: dict, options: dict | None = None) -> dict | None:
+    """Itération /improve en attente qui bloquerait une ré-application :
+    `generate_agents` réécrirait RÉELLEMENT au moins un agent (contenu rendu
+    différent de l'agent présent, ou agent absent : team.json ou corps
+    modifié depuis la phase 1, nouveau préfixe...). None sinon (rien ne
+    changerait, ou aucune itération en attente). Lecture seule, tolérante
+    (manifeste corrompu : traité par l'appelant)."""
+    manifest = load_manifest(ws_dir)
+    if manifest is None:
+        return None
+    pend = pending_iteration(ws_dir, manifest)
+    if not pend:
+        return None
+    opts = normalize_team_options(options)
+    # Même rendu que generate_agents sous itération en attente : les modèles
+    # restés seulement dans les agents générés sont conservés (pas de faux refus).
+    manifest = _with_file_models(manifest, agent_file_models(
+        ws_dir, manifest, effective_prefix(manifest, vars or {})))
+    vars = {**(vars or {}), "name": effective_prefix(manifest, vars or {}, opts["prefix"])}
+    for _rel, target, content, _reason in _agent_jobs(ws_dir, manifest, vars, opts):
+        if content is None:
+            continue
+        try:
+            existing = target.read_text(encoding="utf-8")
+        except OSError:
+            return pend
+        if existing.replace("\r\n", "\n") != content.replace("\r\n", "\n"):
+            return pend
+    return None
 
 
 # --- État (routes GET) ----------------------------------------------------------
@@ -520,9 +772,15 @@ def team_state(ws_id: str) -> tuple[int, dict]:
         return 200, {"active": False, "agents": [], "manifest": None}
     prefix = effective_prefix(manifest, {"name": ws_id})
     vars = {"name": prefix, "label": ws_id}
+    # Modèles d'avant la 2.5.0 restés seulement dans les agents générés :
+    # affichés comme modèles actuels (vue), persistés à la prochaine écriture.
+    file_models = agent_file_models(ws_dir, manifest, prefix)
+    manifest = _with_file_models(manifest, file_models)
     agents = []
     for a in manifest_agents(manifest):
         fm = agent_frontmatter(a, manifest, vars)
+        model_source = ("agent_file" if a["id"] in file_models
+                        else "manifest" if _declared_model(a) else "default")
         target = ws_dir / AGENTS_DIR_REL / f"{fm['name']}.md"
         present = target.is_file()
         generated_by_nebula = False
@@ -535,6 +793,14 @@ def team_state(ws_id: str) -> tuple[int, dict]:
             "id": a["id"], "role": a.get("role") or "", "description": a.get("description") or "",
             "model": a.get("model") or (manifest.get("models") or {}).get("default") or "sonnet",
             "effective_model": fm["model"], "tools": fm["tools"],
+            # Provenance du modèle : `manifest` (déclaré dans team.json),
+            # `agent_file` (choix d'avant la 2.5.0 lu dans l'agent généré,
+            # pas encore écrit dans team.json), `default` (défaut du manifeste).
+            "model_source": model_source,
+            # Effort déclaré (brut) et effort réellement rendu (None = aucun
+            # `effort:` dans l'agent généré, réglage par défaut de Claude Code).
+            "effort": a.get("effort") if isinstance(a.get("effort"), str) else None,
+            "effective_effort": fm["effort"],
             "read_only": bool(a.get("read_only")), "name": fm["name"],
             "path": target.relative_to(ws_dir).as_posix(),
             "generated": present, "generated_by_nebula": generated_by_nebula,
@@ -543,13 +809,27 @@ def team_state(ws_id: str) -> tuple[int, dict]:
             "auto": agent_auto(a), "triggers": agent_triggers(a),
         })
     loop = manifest.get("improvement_loop") or {}
+    signals = measure_signals(ws_dir, manifest)
     return 200, {
         "active": True,
         "manifest": {"team": manifest.get("team") or {}, "models": manifest.get("models") or {},
                      "improvement_loop": loop},
         "agents": agents,
+        # Propositions modèle / effort (règles par rôle + signal mesuré),
+        # appliquées seulement au clic (POST .../team/agents-config).
+        "suggestions": suggest_agent_config(manifest, signals),
+        "suggestions_basis": {
+            "measured": signals is not None,
+            "date": (signals or {}).get("date") or None,
+            "iteration": (signals or {}).get("iteration"),
+        },
+        "model_aliases": list(TEAM_MODEL_ALIASES),
+        "effort_levels": list(TEAM_EFFORT_LEVELS),
         "prefix": prefix,
         "routing": routing_state(manifest),
+        # Itération /improve en attente de verdict ({"iteration": n}) ou None :
+        # la modale d'activation verrouille alors modèles et efforts.
+        "pending": pending_iteration(ws_dir, manifest),
         "config_hash": team_config_hash(ws_dir, ws_id),
         "evals_locked": bool(loop.get("eval_set_locked")),
         "evals_unlocked": _evals_unlocked(ws_dir),
@@ -741,4 +1021,226 @@ def improvement_state(ws_id: str) -> tuple[int, dict]:
             "holdout_cases": _count_jsonl(holdout_p) if holdout_p else 0,
         },
         "registers": registers,
+    }
+
+
+# --- Modèle et effort par agent : propositions + application ------------------
+
+# Seuils du signal mesuré : un agent n'est signalé que sur assez de cas.
+SIGNAL_MIN_CASES = 2
+SIGNAL_MAX_SUCCESS = 0.5
+# Clés du journal portant des ids de cas échoués, par ordre de préférence
+# dans une même ligne (mesure du candidat, puis mesure de la baseline).
+_FAILURE_KEYS = ("failures_after", "failures", "failures_before")
+
+
+def _failure_ids(raw) -> set[str] | None:
+    """Ids de cas échoués d'un champ du journal (liste de chaînes ou d'objets
+    `{"id": ...}`), ou None si le champ n'est pas une liste (absent)."""
+    if not isinstance(raw, list):
+        return None
+    out: set[str] = set()
+    for f in raw:
+        if isinstance(f, str) and f:
+            out.add(f)
+        elif isinstance(f, dict) and isinstance(f.get("id"), str):
+            out.add(f["id"])
+    return out
+
+
+def measure_signals(ws_dir: Path, manifest: dict) -> dict | None:
+    """Signal mesuré pour les propositions : dernière ligne du journal qui
+    porte une liste d'échecs, croisée avec le champ `agent` des cas de
+    `eval-set.jsonl` (LECTURE seule). Retourne `{"date", "iteration",
+    "by_agent": {id: {"passed", "total"}}}`, ou None sans mesure exploitable
+    (journal vide, aucune liste d'échecs, jeu d'évals absent)."""
+    loop = manifest.get("improvement_loop") or {}
+    journal_p = _claude_path(ws_dir, str(loop.get("journal") or "journal/changes.jsonl"))
+    eval_p = _claude_path(ws_dir, str(loop.get("eval_set") or "evals/eval-set.jsonl"))
+    if journal_p is None or eval_p is None:
+        return None
+    entries, _ = _parse_journal(journal_p)
+    chosen, failed = None, None
+    for e in reversed(entries):
+        for key in _FAILURE_KEYS:
+            ids = _failure_ids(e.get(key))
+            if ids is not None:
+                chosen, failed = e, ids
+                break
+        if chosen is not None:
+            break
+    if chosen is None:
+        return None
+    cases, _ = _parse_journal(eval_p)  # même format JSONL, lecture seule
+    if not cases:
+        return None
+    by_agent: dict[str, dict] = {}
+    for c in cases:
+        cid, aid = c.get("id"), c.get("agent")
+        if not (isinstance(cid, str) and isinstance(aid, str)):
+            continue
+        d = by_agent.setdefault(aid, {"passed": 0, "total": 0})
+        d["total"] += 1
+        if cid not in failed:
+            d["passed"] += 1
+    it = chosen.get("iteration")
+    return {"date": str(chosen.get("date") or ""), "iteration": it if isinstance(it, int) else None,
+            "by_agent": by_agent}
+
+
+def _effort_rank(effort: str | None) -> int:
+    return TEAM_EFFORT_LEVELS.index(effort) if effort in TEAM_EFFORT_LEVELS else -1
+
+
+def suggest_agent_config(manifest: dict, signals: dict | None = None) -> list[dict]:
+    """Propositions modèle / effort par agent (fonction pure).
+
+    1. Règle du rôle (TEAM_ROLE_DEFAULTS), qui ne fait que COMPLÉTER :
+       - modèle du rôle proposé seulement à un agent SANS modèle déclaré
+         dans team.json (un modèle déclaré n'est jamais remis en cause) ;
+       - effort du rôle (plafonné à `high`) proposé seulement s'il est
+         STRICTEMENT au-dessus de l'effort actuel. Un agent sans effort est
+         rapporté à TEAM_SESSION_DEFAULT_EFFORT (`medium`, défaut Claude Code des
+         modèles 5.5) : les rôles à `high` lui proposent `high`, jamais de baisse.
+    2. Signal mesuré (`measure_signals`) : agent avec au moins
+       SIGNAL_MIN_CASES cas et un taux de réussite < SIGNAL_MAX_SUCCESS ->
+       +1 cran d'effort au-dessus du plus haut entre l'actuel (ou le défaut
+       de session) et la règle ; rien au-delà de `max`. Jamais de changement
+       de modèle par le signal.
+
+    Retourne `[{"agent", "current": {model, effort}, "proposed": {model,
+    effort}, "reasons": [...], "source": "rule" | "measure" | "rule+measure"}]`,
+    seulement pour les agents dont la proposition diffère de l'actuel."""
+    out: list[dict] = []
+    high = _effort_rank("high")
+    by_agent = (signals or {}).get("by_agent") or {}
+    for a in manifest_agents(manifest):
+        cur = {"model": _effective_model(a, manifest, None), "effort": _effective_effort(a)}
+        cur_rank = _effort_rank(cur["effort"] or TEAM_SESSION_DEFAULT_EFFORT)
+        prop = dict(cur)
+        reasons: list[str] = []
+        sources: list[str] = []
+        rule = TEAM_ROLE_DEFAULTS.get(a["id"])
+        if rule:
+            r_model = rule.get("model")
+            if (_declared_model(a) is None and r_model in TEAM_MODEL_ALIASES
+                    and r_model != cur["model"]):
+                prop["model"] = r_model
+            r_rank = min(_effort_rank(rule.get("effort")), high)
+            if r_rank > cur_rank:
+                prop["effort"] = TEAM_EFFORT_LEVELS[r_rank]
+            if prop != cur:
+                reasons.append(f"Règle du rôle : {rule.get('why') or a['id']}.")
+                sources.append("rule")
+        stat = by_agent.get(a["id"])
+        if (isinstance(stat, dict) and stat.get("total", 0) >= SIGNAL_MIN_CASES
+                and stat.get("passed", 0) / stat["total"] < SIGNAL_MAX_SUCCESS):
+            base = max(_effort_rank(prop["effort"]), cur_rank)
+            if base + 1 < len(TEAM_EFFORT_LEVELS):
+                prop["effort"] = TEAM_EFFORT_LEVELS[base + 1]
+                date = (signals or {}).get("date") or "?"
+                reasons.append(f"{stat['passed']}/{stat['total']} cas réussis à la mesure du "
+                               f"{date} : effort +1 cran.")
+                sources.append("measure")
+        if prop != cur and sources:
+            out.append({"agent": a["id"], "current": cur, "proposed": prop,
+                        "reasons": reasons, "source": "+".join(sources)})
+    return out
+
+
+def set_agents_config(ws_id: str, agents_cfg, vars: dict | None = None) -> tuple[int, dict]:
+    """Écrit `model` / `effort` par agent dans `.claude/team.json`, puis
+    régénère les agents (seuls ceux qui portent le marqueur généré).
+
+    `agents_cfg` = `{"<id>": {"model": "...", "effort": "...|null"}}` (clés
+    optionnelles ; `effort: null` retire l'effort). 400 agent ou valeur hors
+    liste ; 404 module inactif ; 409 manifeste corrompu ou itération
+    `/improve` en attente de verdict (le candidat serait mesuré sur une autre
+    configuration). Rien n'est écrit si rien ne change. Jamais la section
+    `improvement_loop`. Réponse : `written`, `generated` (contenu réellement
+    changé), `skipped`, `config_hash_before/after`, `baseline_stale`."""
+    if not safe_id(ws_id):
+        return 400, {"error": "id invalide"}
+    ws_dir = resolve_ws_dir(ws_id)
+    if not ws_dir.exists():
+        return 404, {"error": "workspace absent sur disque"}
+    if not isinstance(agents_cfg, dict) or not agents_cfg:
+        return 400, {"error": "corps attendu : {\"agents\": {\"<id>\": {\"model\", \"effort\"}}}"}
+    path = ws_dir / MANIFEST_REL
+    with _MUTATION_LOCK:
+        try:
+            data = read_json_strict(path, None)
+        except CorruptJsonError as e:
+            return 409, {"error": f"manifeste corrompu : {e}"}
+        if not isinstance(data, dict) or not isinstance(data.get("agents"), list):
+            return 404, {"error": "module claude-team inactif (manifeste absent)"}
+        by_id = {a["id"]: a for a in data["agents"]
+                 if isinstance(a, dict) and safe_id(str(a.get("id") or ""))}
+        for aid, cfg in agents_cfg.items():
+            if aid not in by_id:
+                return 400, {"error": f"agent inconnu du manifeste : {aid}"}
+            if not isinstance(cfg, dict):
+                return 400, {"error": f"configuration invalide pour {aid}"}
+            if "model" in cfg and cfg["model"] not in TEAM_MODEL_ALIASES:
+                return 400, {"error": f"modèle invalide pour {aid} (attendu : "
+                                      f"{', '.join(TEAM_MODEL_ALIASES)})"}
+            if "effort" in cfg and cfg["effort"] is not None and cfg["effort"] not in TEAM_EFFORT_LEVELS:
+                return 400, {"error": f"effort invalide pour {aid} (attendu : "
+                                      f"{', '.join(TEAM_EFFORT_LEVELS)} ou null)"}
+        hash_before = team_config_hash(ws_dir, ws_id)
+        # Modèles d'avant la 2.5.0 restés seulement dans les agents générés :
+        # déclarés d'abord (en mémoire), écrits avec le changement demandé,
+        # sinon la régénération des 7 agents les remettrait au défaut. Seuls,
+        # ils ne déclenchent aucune écriture.
+        adopted = agent_file_models(ws_dir, data, effective_prefix(data, {"name": ws_id}))
+        for aid, model in adopted.items():
+            by_id[aid]["model"] = model
+        changed = False
+        for aid, cfg in agents_cfg.items():
+            a = by_id[aid]
+            # Égal au modèle effectif actuel : pas un changement (un modèle
+            # implicite n'est pas rendu explicite pour rien).
+            if "model" in cfg and cfg["model"] != _effective_model(a, data, None):
+                a["model"] = cfg["model"]
+                changed = True
+            if "effort" in cfg:
+                if cfg["effort"] is None:
+                    if "effort" in a:
+                        del a["effort"]
+                        changed = True
+                elif a.get("effort") != cfg["effort"]:
+                    a["effort"] = cfg["effort"]
+                    changed = True
+        generated: list[str] = []
+        skipped: list[dict] = []
+        if changed:
+            # Itération /improve en attente : refus seulement si quelque chose
+            # change réellement (la copie modifiée n'est jamais écrite).
+            _, impr = improvement_state(ws_id)
+            if impr.get("pending"):
+                return 409, {"error": pending_message(impr["pending"], "les modèles ou l'effort"),
+                             "pending": impr["pending"]}
+            write_json(path, data)
+            prefix = effective_prefix(data, {"name": ws_id})
+            targets = [ws_dir / AGENTS_DIR_REL / f"{prefix}-{aid}.md" for aid in by_id]
+
+            def _read(p: Path):
+                try:
+                    return p.read_bytes()
+                except OSError:
+                    return None
+            before = {p.relative_to(ws_dir).as_posix(): _read(p) for p in targets}
+            r = generate_agents(ws_dir, {"label": ws_id, **(vars or {}), "name": ws_id},
+                                {"regenerate": True})
+            generated = [rel for rel in r["generated"] if before.get(rel) != _read(ws_dir / rel)]
+            skipped = r["skipped"]
+        hash_after = team_config_hash(ws_dir, ws_id)
+        _, impr_after = improvement_state(ws_id)
+    return 200, {
+        "ok": True, "written": changed, "generated": generated, "skipped": skipped,
+        # Modèles repris des agents générés et désormais déclarés dans team.json.
+        "adopted_models": adopted if changed else {},
+        "config_hash_before": hash_before, "config_hash_after": hash_after,
+        # Une baseline existait et ne mesure plus la configuration courante.
+        "baseline_stale": bool(impr_after.get("baseline_version")) and not impr_after.get("baseline_current"),
     }

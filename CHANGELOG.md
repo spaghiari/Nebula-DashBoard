@@ -4,6 +4,52 @@ Les nouveautés de Nebula, version par version. La plus récente est en haut.
 La mise à jour se fait depuis Nebula : badge « MAJ » en haut de l'écran, ou
 Outils > Mises à jour.
 
+## 2.5.0 - 2026-10-17
+
+### Nouveautés
+
+- **Retirer un module** (« Auto-amélioration de Claude », « Équipe
+  d'agents ») depuis l'onglet Configuration du projet, avec un aperçu avant
+  de confirmer. **Rien n'est supprimé** : les fichiers du module partent dans
+  une archive `.claude/.nebula-removed/<module>-<date>/`, avec une notice
+  pour tout remettre en place. Dans `settings.json`, seuls les hooks du
+  module sont retirés, et dans `CLAUDE.md`, seul son bloc. Tes fichiers
+  modifiés, ton `.gitignore` et tes réglages locaux restent en place. Option
+  « Garder ma mémoire et mes registres en place ».
+- **Modèle et effort de chaque agent** réglables dans l'onglet Amélioration
+  (carte « Équipe : modèle et effort ») et à l'activation de l'équipe :
+  modèles sonnet, opus, haiku, fable ou celui de la session, effort de
+  faible à max.
+- **Propositions de réglage expliquées**, appliquées seulement si tu
+  cliques : règles par rôle (ex. « élevé » pour l'architecte et le
+  relecteur) et un cran d'effort en plus pour un agent qui échoue aux
+  évaluations. Jamais de baisse ni de changement de modèle automatique.
+
+### Correctifs
+
+- Les modèles choisis à l'activation de l'équipe ne sont plus perdus lors
+  d'un « Régénérer ».
+- Pendant une itération `/improve` en attente de verdict, aucun réglage ne
+  peut fausser la mesure (carte et Ré-appliquer verrouillés, avec
+  explication).
+
+### À faire après la mise à jour
+
+1. Redémarre le dashboard.
+2. Rien d'autre d'obligatoire : tes modules restent actifs et tes agents
+   sont générés à l'identique tant que tu ne règles pas d'effort. Les
+   modèles que tu avais choisis à l'activation de l'équipe sont repris
+   tels quels.
+3. Si ton projet est suivi par git et que tu comptes retirer un module :
+   ajoute ces deux lignes à son `.gitignore` (les nouveaux projets les ont
+   déjà), pour que l'archive et les sauvegardes locales ne soient pas
+   commitées :
+
+   ```
+   .claude/.nebula-removed/
+   .claude/settings.local.json*
+   ```
+
 ## 2.4.1 - 2026-10-17
 
 ### Correctifs

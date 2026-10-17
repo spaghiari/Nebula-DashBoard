@@ -33,6 +33,25 @@ const API = {
   },
   get(url) { return this._req('GET', url); },
   post(url, body = {}) { return this._req('POST', url, body); },
+  // POST qui ne throw PAS sur un statut non-ok : rend {status, ok, data} pour
+  // les routes dont la réponse d'erreur porte des données utiles (409 du
+  // retrait d'un module : `dependents`, `active_session`, aperçu frais).
+  // Serveur injoignable -> throw comme _req.
+  async postStatus(url, body = {}) {
+    let r;
+    try {
+      r = await fetch(url, {
+        method: 'POST',
+        headers: { 'X-Nebula-XHR': '1', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (e) { throw new Error('Serveur injoignable'); }
+    let data = {};
+    try { data = await r.json(); } catch { data = { error: `HTTP ${r.status}` }; }
+    if (!data || typeof data !== 'object') data = {};
+    if (!r.ok && !data.error) data.error = `HTTP ${r.status}`;
+    return { status: r.status, ok: r.ok, data };
+  },
   del(url) { return this._req('DELETE', url); },
 
   // Téléchargement d'un fichier servi par une route protégée (header

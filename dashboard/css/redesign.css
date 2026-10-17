@@ -1186,6 +1186,38 @@ a.hc-row:hover { background: var(--hover); }
 .impr-reg-row .chip.todo b, .impr-reg-row .chip.done b, .impr-reg-row .chip.prog b { color: inherit; }
 .impr-steps { margin: 10px 0 0; padding: 0 var(--card-pad) 0 calc(var(--card-pad) + 18px); font-size: 12.5px; color: var(--text-muted); display: flex; flex-direction: column; gap: 6px; }
 .impr-steps code { color: var(--text); }
+/* Carte « Equipe : modele et effort » (une ligne par agent). */
+.impr-team { padding-bottom: var(--card-pad); }
+/* Icône des titres de cartes de l'onglet : taille fixe (sans elle, le SVG
+   de « Équipe : modèle et effort » s'étirait sur toute la hauteur). */
+.impr .card-h h3 { display: flex; align-items: center; gap: 8px; }
+.impr .card-h h3 svg { width: 16px; height: 16px; flex: none; color: var(--text-dim); }
+.impr-team-rows { display: flex; flex-direction: column; margin-top: 12px; }
+.impr-team-row {
+  display: grid; grid-template-columns: minmax(130px, 1.1fr) 150px 130px minmax(160px, 2fr) 120px;
+  gap: 10px; align-items: center; min-height: 44px; padding: 6px var(--card-pad); border-top: 1px solid var(--border);
+}
+.impr-team-row.h { min-height: 30px; font-size: 11.5px; color: var(--text-dim); font-weight: 600; }
+.impr-team-row > * { min-width: 0; }
+.impr-team-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.impr-team-name b { font-size: 12.5px; font-weight: 600; color: var(--text); }
+.impr-team-name small, .impr-team-prop small { color: var(--text-dim); font-size: 11.5px; line-height: 1.4; }
+.impr-team-sel .select { width: 100%; height: 30px; font-size: 12px; }
+.impr-team-prop { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.impr-team-prop b { font-weight: 600; color: var(--text); }
+.impr-team-act { display: flex; gap: 6px; justify-content: flex-end; }
+.impr-team-foot { display: flex; justify-content: flex-end; padding: 10px var(--card-pad) 0; }
+.impr-team-foot:empty { display: none; }
+.impr-team-msg { display: flex; gap: 8px; align-items: flex-start; margin: 10px var(--card-pad) 0; padding: 8px 10px; border-radius: var(--r-md); background: var(--chip-bg); font-size: 12.5px; line-height: 1.45; }
+.impr-team-msg.ok { background: var(--ok-soft); color: var(--ok); }
+.impr-team-msg.warn { background: var(--warn-soft); color: var(--warn); }
+.impr-team-msg svg { width: 14px; height: 14px; flex: none; margin-top: 2px; }
+@media (max-width: 900px) {
+  .impr-team-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .impr-team-row.h { display: none; }
+  .impr-team-name, .impr-team-prop, .impr-team-act { grid-column: 1 / -1; }
+  .impr-team-act { justify-content: flex-start; }
+}
 @media (max-width: 1100px) {
   .impr-grid { grid-template-columns: 1fr; }
   .impr-journal .tr { grid-template-columns: 34px 92px minmax(0, 1.4fr) 140px 70px 84px; }
@@ -1288,6 +1320,42 @@ a.hc-row:hover { background: var(--hover); }
   .upd-item .pill { min-width: 0; }
   .upd-adv-reset { flex-direction: column; align-items: stretch; }
   .upd-actions .btn { flex: 1 1 auto; }
+}
+
+/* --- Modules : modèle + effort à l'activation, modale de retrait ----- */
+.team-models.with-effort { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+.team-model-row { display: grid; grid-template-columns: minmax(0, 1fr) 190px 170px; gap: 8px; align-items: center; font-size: 12.5px; min-width: 0; }
+.team-model-row > span { min-width: 0; display: flex; flex-direction: column; }
+.team-model-row b { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--text); }
+.team-model-row small { color: var(--text-dim); font-size: 11px; }
+.team-model-row .select { height: 30px; font-size: 12px; min-width: 0; width: 100%; }
+.callout-err { background: var(--err-soft); border-color: color-mix(in srgb, var(--err) 30%, transparent); border-left-color: var(--err); }
+.callout-err, .callout-err strong, .callout-err b { color: var(--text); }
+.rm-ov { display: flex; flex-direction: column; gap: 12px; font-size: 13px; color: var(--text-muted); line-height: 1.5; }
+.rm-ov p { margin: 0; }
+.rm-ov code { font-family: var(--font-mono); font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
+.rm-ov .callout { margin: 0; display: block; }
+.rm-intro b { color: var(--text); }
+.rm-sec { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border); }
+.rm-sec h4 { margin: 0; font-size: 13px; font-weight: 650; color: var(--text); display: flex; align-items: center; gap: 8px; }
+.rm-ov .ct { font: 600 11px var(--font-ui); background: var(--chip-bg); color: var(--chip-tx); border-radius: 99px; padding: 0 6px; line-height: 18px; font-variant-numeric: tabular-nums; }
+.rm-grp > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--text); font-weight: 600; font-size: 12.5px; padding: 4px 0; }
+.rm-grp > summary { list-style: none; }
+.rm-grp > summary::-webkit-details-marker { display: none; }
+.rm-grp > summary::before { content: ""; width: 6px; height: 6px; border-right: 2px solid var(--text-muted); border-bottom: 2px solid var(--text-muted); transform: rotate(-45deg); margin: 0 4px 0 2px; transition: transform .15s; }
+.rm-grp[open] > summary::before { transform: rotate(45deg); }
+.rm-grp > summary small { flex-basis: 100%; font-weight: 400; color: var(--text-muted); font-size: 11.5px; }
+.rm-grp > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.rm-list { margin: 0; padding: 0 0 0 18px; display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow: auto; }
+.rm-list li { overflow-wrap: anywhere; }
+.rm-list .dim, .rm-ov p.dim { color: var(--text-muted); font-size: 12px; }
+.rm-keep { height: auto; padding: 10px 0 0; border-top: 1px solid var(--border); color: var(--text); }
+.rm-keep-h { margin-top: -8px !important; font-size: 12px; }
+.rm-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.rm-foot { font-size: 12px; }
+@media (max-width: 640px) {
+  .team-model-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .team-model-row > span { grid-column: 1 / -1; }
 }
 
 /* === 12. MOUVEMENT REDUIT ========================================== */

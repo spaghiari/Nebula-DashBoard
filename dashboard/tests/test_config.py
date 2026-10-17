@@ -143,5 +143,29 @@ class PlatformGuardTests(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "ok")
 
 
+class TeamConstantsTests(unittest.TestCase):
+    """Constantes du module claude-team : alias, efforts, règles par rôle."""
+
+    def test_alias_et_efforts(self):
+        self.assertEqual(config.TEAM_MODEL_ALIASES, ("sonnet", "opus", "haiku", "fable", "inherit"))
+        self.assertEqual(config.TEAM_EFFORT_LEVELS, ("low", "medium", "high", "xhigh", "max"))
+
+    def test_regles_par_role(self):
+        roles = {"orchestrator", "researcher", "architect", "executor", "reviewer",
+                 "evaluator", "critic"}
+        self.assertEqual(set(config.TEAM_ROLE_DEFAULTS), roles)
+        allowed = config.TEAM_EFFORT_LEVELS[:config.TEAM_EFFORT_LEVELS.index("high") + 1]
+        for role, rule in config.TEAM_ROLE_DEFAULTS.items():
+            with self.subTest(role=role):
+                self.assertIn(rule["model"], config.TEAM_MODEL_ALIASES)
+                # Une règle ne propose jamais au-delà de `high`.
+                self.assertIn(rule["effort"], allowed)
+                self.assertTrue(rule["why"].strip())
+                self.assertNotIn(chr(0x2014), rule["why"])  # pas de tiret cadratin
+        self.assertEqual(config.TEAM_ROLE_DEFAULTS["orchestrator"]["effort"], "medium")
+        self.assertEqual(config.TEAM_ROLE_DEFAULTS["reviewer"], {
+            **config.TEAM_ROLE_DEFAULTS["reviewer"], "model": "opus", "effort": "high"})
+
+
 if __name__ == "__main__":
     unittest.main()

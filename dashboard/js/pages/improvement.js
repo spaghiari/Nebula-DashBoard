@@ -187,7 +187,121 @@ async function renderWsImprovement(wsId, host) {
   grid.appendChild(how);
   frag.appendChild(grid);
 
+  // --- Equipe : modele et effort par agent (propositions au clic) ---------
+  if (team && team.active && agents.length) frag.appendChild(teamConfigCard(wsId, host, team, impr));
+
   host.replaceChildren(frag);
+}
+
+// Libelles des alias de modele et des niveaux d'effort (valeurs = celles de
+// dashcore/config.py TEAM_MODEL_ALIASES / TEAM_EFFORT_LEVELS, renvoyees par
+// GET /team ; un alias inconnu s'affiche tel quel).
+const IMPR_MODEL_LABELS = { sonnet: 'sonnet (rapide)', opus: 'opus (profond)', haiku: 'haiku (léger)', fable: 'fable', inherit: 'inherit (session)' };
+const IMPR_EFFORT_LABELS = { low: 'faible', medium: 'moyen', high: 'élevé', xhigh: 'très élevé', max: 'max' };
+// Resultat du dernier enregistrement, affiche apres le re-rendu de l'onglet.
+const IMPR_TEAM_NOTES = {};
+
+function imprEffortLabel(e) {
+  return e ? (IMPR_EFFORT_LABELS[e] || e) : 'par défaut';
+}
+
+// Carte « Equipe : modele et effort » : une ligne par agent (selecteurs
+// modele + effort, proposition expliquee, « Appliquer »), « Appliquer toutes
+// les propositions ». POST /api/workspaces/<id>/team/agents-config puis
+// re-rendu ; mention « baseline perimee » si la configuration mesuree change.
+function teamConfigCard(wsId, host, team, impr) {
+  const card = el('section', 'card impr-team');
+  card.setAttribute('aria-label', 'Modèle et effort des agents');
+  const models = team.model_aliases || Object.keys(IMPR_MODEL_LABELS);
+  const efforts = team.effort_levels || Object.keys(IMPR_EFFORT_LABELS);
+  const sugg = {};
+  for (const s of team.suggestions || []) sugg[s.agent] = s;
+  const basis = team.suggestions_basis || {};
+  const pend = impr && impr.pending;
+  const note = IMPR_TEAM_NOTES[wsId];
+  delete IMPR_TEAM_NOTES[wsId];
+
+  const basisPill = basis.measured
+    ? `<span class="pill info" title="Propositions = règles par rôle + signal mesuré (agent avec au moins 2 cas et moins de la moitié réussis : effort +1 cran)">Mesure du ${escapeHtml(basis.date || '?')}</span>`
+    : '<span class="pill mute" title="Aucune ligne du journal avec liste d\'échecs : propositions issues des seules règles par rôle. Lance /eval puis /improve pour un signal mesuré.">Règles seules (aucune mesure)</span>';
+  const opt = (vals, cur, label) => vals.map(v => `<option value="${escapeHtml(v)}"${v === cur ? ' selected' : ''}>${escapeHtml(label(v))}</option>`).join('');
+  const rows = (team.agents || []).map(a => {
+    const s = sugg[a.id];
+    const cur = { model: a.effective_model || a.model, effort: a.effective_effort || '' };
+    const manual = a.generated && !a.generated_by_nebula;
+    const prop = !s ? '<span class="muted">Aucune proposition</span>'
+      : `<b class="mono">${escapeHtml(s.proposed.model)} · ${escapeHtml(imprEffortLabel(s.proposed.effort))}</b>
+         <small>${(s.reasons || []).map(r => escapeHtml(r)).join(' ')}</small>`;
+    return `<div class="impr-team-row" role="row" data-agent="${escapeHtml(a.id)}">
+      <span class="impr-team-name" role="cell"><b class="mono">${escapeHtml(a.name || a.id)}</b>${a.role ? `<small>${escapeHtml(a.role)}</small>` : ''}${manual ? ' <span class="pill warn" title="Agent édité à la main (marqueur généré absent) : le manifeste change, le fichier non">édité à la main</span>' : ''}</span>
+      <label class="impr-team-sel" role="cell"><span class="sr-only">Modèle de ${escapeHtml(a.id)}</span>
+        <select class="select" data-k="model">${opt(models.includes(cur.model) ? models : [cur.model, ...models], cur.model, v => IMPR_MODEL_LABELS[v] || v)}</select></label>
+      <label class="impr-team-sel" role="cell"><span class="sr-only">Effort de ${escapeHtml(a.id)}</span>
+        <select class="select" data-k="effort">${opt(['', ...efforts], cur.effort, imprEffortLabel)}</select></label>
+      <span class="impr-team-prop" role="cell">${prop}</span>
+      <span class="impr-team-act" role="cell"></span>
+    </div>`;
+  }).join('');
+
+  const noteHtml = !note ? '' : (note.written
+    ? `<p class="impr-team-msg ${note.stale ? 'warn' : 'ok'}">${I.check}<span>${escapeHtml(String(note.generated))} agent${note.generated > 1 ? 's' : ''} régénéré${note.generated > 1 ? 's' : ''}.${note.stale ? ' Baseline périmée : relance <code class="mono">/eval</code> (ou <code class="mono">/improve</code>, qui re-mesure d\'abord) dans une nouvelle session.' : ' Nouvelle session Claude nécessaire pour que les agents modifiés soient pris en compte.'}${note.manual ? ` ${escapeHtml(String(note.manual))} agent${note.manual > 1 ? 's' : ''} édité${note.manual > 1 ? 's' : ''} à la main non réécrit${note.manual > 1 ? 's' : ''}.` : ''}</span></p>`
+    : `<p class="impr-team-msg">${I.info}<span>Aucun changement : la configuration était déjà celle-ci.</span></p>`);
+
+  card['innerHTML'] = `<div class="card-h"><h3>${I.sliders}Équipe : modèle et effort</h3><span class="r">${basisPill}</span></div>
+    <p class="muted impr-note">Modèle et effort de raisonnement de chaque agent, écrits dans <code class="mono">.claude/team.json</code> puis rendus dans l'agent généré. Les propositions ne font que compléter : la règle du rôle propose un modèle seulement à un agent qui n'en déclare pas, et un effort (jamais au-delà de « élevé ») seulement s'il est au-dessus de l'actuel ; un agent sans effort est compté comme « moyen » (défaut de Claude Code sur les modèles 5.5), la règle peut donc lui proposer « élevé ». S'il existe une mesure, un agent en échec reçoit +1 cran d'effort. Jamais de baisse d'effort, jamais de changement d'un modèle déclaré. Rien n'est appliqué sans clic.</p>
+    ${noteHtml}
+    ${pend ? `<p class="impr-team-msg warn">${I.alert}<span>Itération ${escapeHtml(String(pend.iteration))} de <code class="mono">/improve</code> en attente de verdict : trancher d'abord (nouvelle session puis <code class="mono">/improve</code>), sinon le candidat serait mesuré sur une autre configuration.</span></p>` : ''}
+    <div class="impr-team-rows" role="table" aria-label="Modèle et effort par agent">
+      <div class="impr-team-row h" role="row"><span role="columnheader">Agent</span><span role="columnheader">Modèle</span><span role="columnheader">Effort</span><span role="columnheader">Proposition</span><span role="columnheader"><span class="sr-only">Action</span></span></div>
+      ${rows}
+    </div>
+    <div class="impr-team-foot"></div>`;
+
+  const save = async (b, payload) => {
+    try {
+      const r = await withBusy(b, () => API.post(`/api/workspaces/${wsId}/team/agents-config`, { agents: payload }));
+      const manual = (r.skipped || []).filter(s => /main/.test(s.reason || '')).length;
+      IMPR_TEAM_NOTES[wsId] = { written: r.written, stale: r.baseline_stale, generated: (r.generated || []).length, manual };
+      toastOk(r.written ? 'Configuration de l\'équipe enregistrée' : 'Aucun changement');
+      await renderWsImprovement(wsId, host);
+    } catch (e) {
+      toastErr(e.message);
+    }
+  };
+
+  const allPayload = {};
+  for (const row of card.querySelectorAll('.impr-team-row[data-agent]')) {
+    const id = row.dataset.agent;
+    const a = (team.agents || []).find(x => x.id === id) || {};
+    const cur = { model: a.effective_model || a.model, effort: a.effective_effort || '' };
+    const selM = row.querySelector('[data-k=model]');
+    const selE = row.querySelector('[data-k=effort]');
+    const act = row.querySelector('.impr-team-act');
+    const s = sugg[id];
+    if (pend) { selM.disabled = true; selE.disabled = true; }
+    const saveBtn = btn('Enregistrer', 'btn-sm btn-primary', I.check);
+    saveBtn.hidden = true;
+    saveBtn.addEventListener('click', () => save(saveBtn, { [id]: { model: selM.value, effort: selE.value || null } }));
+    const sync = () => { saveBtn.hidden = selM.value === cur.model && selE.value === cur.effort; if (applyBtn) applyBtn.hidden = !saveBtn.hidden; };
+    let applyBtn = null;
+    if (s && !pend) {
+      applyBtn = btn('Appliquer', 'btn-sm btn-ghost', I.zap);
+      applyBtn.title = `Passer à ${s.proposed.model} · ${imprEffortLabel(s.proposed.effort)}`;
+      applyBtn.addEventListener('click', () => save(applyBtn, { [id]: { model: s.proposed.model, effort: s.proposed.effort || null } }));
+      act.appendChild(applyBtn);
+      allPayload[id] = { model: s.proposed.model, effort: s.proposed.effort || null };
+    }
+    act.appendChild(saveBtn);
+    selM.addEventListener('change', sync);
+    selE.addEventListener('change', sync);
+  }
+  const n = Object.keys(allPayload).length;
+  if (n > 1) {
+    const all = btn(`Appliquer toutes les propositions (${n})`, 'btn-sm btn-primary', I.sparkle);
+    all.addEventListener('click', () => save(all, allPayload));
+    card.querySelector('.impr-team-foot').appendChild(all);
+  }
+  return card;
 }
 
 function fmtScore(v) {

@@ -839,6 +839,14 @@ async function renderWsOverlays(wsId, host) {
     // generateur team_agents) AVANT d'appliquer.
     applyBtn.addEventListener('click', () => modalApplyOverlay(wsId, ov, host));
     actions.prepend(applyBtn);
+    if (ov.active) {
+      // Retrait : aperçu d'abord (rien n'est supprimé, tout est archivé).
+      const removeBtn = btn('Retirer', 'btn-sm btn-danger-outline', I.archive);
+      removeBtn.title = "Retire le module de ce projet après un aperçu : rien n'est supprimé, tout est mis de côté dans une archive du projet.";
+      removeBtn.setAttribute('aria-label', `Retirer ${ov.label || ov.id}`);
+      removeBtn.addEventListener('click', () => modalRemoveOverlay(wsId, ov, host, { byId }));
+      applyBtn.after(removeBtn);
+    }
     const reqLink = row.querySelector('[data-req]');
     if (reqLink) reqLink.addEventListener('click', () => {
       const req = byId.get(reqLink.dataset.req);
@@ -861,12 +869,39 @@ async function renderWsOverlays(wsId, host) {
 // opts.then : overlay a proposer juste apres (activation d'un prerequis
 // depuis la modale d'un module dependant) ; opts.onDone : rappel apres
 // application reussie (page Templates).
+// Alias de modèle et niveaux d'effort proposés à l'activation (valeurs =
+// dashcore/config.py TEAM_MODEL_ALIASES / TEAM_EFFORT_LEVELS ; GET /team les
+// renvoie dans `model_aliases` / `effort_levels`, qui priment s'ils sont là).
+const TEAM_MODEL_CHOICES = [['sonnet', 'sonnet (rapide)'], ['opus', 'opus (profond)'], ['haiku', 'haiku (léger)'], ['fable', 'fable'], ['inherit', 'inherit : modèle de la session']];
+const TEAM_EFFORT_CHOICES = [['', 'effort : défaut de la session'], ['low', 'effort faible'], ['medium', 'effort moyen'], ['high', 'effort élevé'], ['xhigh', 'effort très élevé'], ['max', 'effort max']];
+
 function modalApplyOverlay(wsId, ov, host, opts = {}) {
+  const hasTeam = (ov.generators || []).includes('team_agents');
+  // Module équipe déjà actif : modèles et efforts pré-remplis depuis le
+  // .claude/team.json du workspace (GET /team), pas depuis le modèle livré,
+  // sinon « Ré-appliquer » remettrait les modèles du template.
+  if (hasTeam && ov.active && !opts._team) {
+    API.get(`/api/workspaces/${wsId}/team`).catch(() => null)
+      .then(t => modalApplyOverlay(wsId, ov, host, { ...opts, _team: t || {} }));
+    return;
+  }
   const body = el('div');
   const hasBoot = ov.bootstrap_options !== false;
-  const hasTeam = (ov.generators || []).includes('team_agents');
-  const agents = hasTeam ? (ov.agents || []) : [];
-  const MODELS = [['sonnet', 'sonnet (rapide)'], ['opus', 'opus (profond)'], ['haiku', 'haiku (léger)']];
+  const wsTeam = opts._team || {};
+  const wsAgents = new Map(((wsTeam.active && wsTeam.agents) || []).map(a => [a.id, a]));
+  const agents = hasTeam ? (ov.agents || []).map(a => {
+    const w = wsAgents.get(a.id);
+    return w ? { ...a, model: w.model || a.model, effort: w.effort || null } : a;
+  }) : [];
+  const aliases = Array.isArray(wsTeam.model_aliases) && wsTeam.model_aliases.length ? wsTeam.model_aliases : TEAM_MODEL_CHOICES.map(m => m[0]);
+  const MODELS = aliases.map(v => TEAM_MODEL_CHOICES.find(m => m[0] === v) || [v, v]);
+  const levels = Array.isArray(wsTeam.effort_levels) && wsTeam.effort_levels.length ? wsTeam.effort_levels : TEAM_EFFORT_CHOICES.slice(1).map(e => e[0]);
+  const EFFORTS = [TEAM_EFFORT_CHOICES[0], ...levels.map(v => TEAM_EFFORT_CHOICES.find(e => e[0] === v) || [v, v])];
+  const optList = (list, cur) => list.map(([v, l]) => `<option value="${escapeHtml(v)}"${v === (cur || '') ? ' selected' : ''}>${escapeHtml(l)}</option>`).join('');
+  // Itération /improve en attente de verdict (GET /team) : modèles et
+  // efforts verrouillés comme dans la carte de l'onglet Amélioration, et
+  // jamais envoyés (le candidat serait mesuré sur une autre configuration).
+  const pend = hasTeam && ov.active ? (wsTeam.pending || null) : null;
   body.innerHTML = `
     <div class="muted" style="font-size:12px;margin-bottom:10px">
       ${escapeHtml(ov.emoji || '🧩')} <strong>${escapeHtml(ov.label || ov.id)}</strong> :
@@ -922,12 +957,14 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
     </div>` : ''}
     ${agents.length ? `
     <div class="field">
-      <label class="field-label">Modèles par rôle</label>
-      <div class="muted" style="font-size:11px;margin-bottom:6px">Pré-rempli depuis le manifeste. Un agent déjà généré n'est pas réécrit sans « Régénérer ».</div>
-      <div class="team-models">${agents.map(a => `
-        <label><span><b>${escapeHtml(a.id)}</b>${a.role ? `<small>${escapeHtml(a.role)}</small>` : ''}</span>
-          <select class="select" name="model-${escapeHtml(a.id)}" data-agent="${escapeHtml(a.id)}">${MODELS.map(([v, l]) => `<option value="${v}"${v === a.model ? ' selected' : ''}>${l}</option>`).join('')}</select>
-        </label>`).join('')}</div>
+      <label class="field-label">Modèle et effort par rôle</label>
+      <div class="muted" style="font-size:11px;margin-bottom:6px">Pré-rempli depuis ${ov.active ? 'le <code>.claude/team.json</code> du projet' : 'le manifeste'}. Effort vide = réglage par défaut de la session. Un agent déjà généré n'est pas réécrit sans « Régénérer » (sauf si son effort change).</div>
+      ${pend ? `<p class="impr-team-msg warn" style="margin:0 0 8px">${I.alert}<span>Itération ${escapeHtml(String(pend.iteration))} de <code class="mono">/improve</code> en attente de verdict : trancher d'abord (nouvelle session puis <code class="mono">/improve</code>), sinon le candidat serait mesuré sur une autre configuration.</span></p>` : ''}
+      <div class="team-models with-effort">${agents.map(a => `
+        <div class="team-model-row"><span><b>${escapeHtml(a.id)}</b>${a.role ? `<small>${escapeHtml(a.role)}</small>` : ''}</span>
+          <select class="select" name="model-${escapeHtml(a.id)}" data-agent="${escapeHtml(a.id)}" aria-label="Modèle de ${escapeHtml(a.id)}"${pend ? ' disabled' : ''}>${optList(MODELS, a.model)}</select>
+          <select class="select" name="effort-${escapeHtml(a.id)}" data-effort="${escapeHtml(a.id)}" data-initial="${escapeHtml(a.effort || '')}" aria-label="Effort de ${escapeHtml(a.id)}"${pend ? ' disabled' : ''}>${optList(EFFORTS, a.effort)}</select>
+        </div>`).join('')}</div>
     </div>
     ${ov.active ? `<label class="xswitch" style="padding:0"><input type="checkbox" name="regenerate"> Régénérer les agents générés par Nebula (ceux qui portent encore le marqueur généré)</label>` : ''}` : ''}
   `;
@@ -960,8 +997,11 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
       payload.author = body.querySelector('[name=author]').value.trim();
     }
     if (agents.length) {
-      payload.models = {};
-      for (const sel of body.querySelectorAll('select[data-agent]')) payload.models[sel.dataset.agent] = sel.value;
+      // Itération en attente : aucun modèle envoyé (le serveur refuserait).
+      if (!pend) {
+        payload.models = {};
+        for (const sel of body.querySelectorAll('select[data-agent]')) payload.models[sel.dataset.agent] = sel.value;
+      }
       const regen = body.querySelector('[name=regenerate]');
       payload.regenerate = !!(regen && regen.checked);
     }
@@ -976,8 +1016,21 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
       }
       if (prefix) payload.prefix = prefix;
     }
+    // Efforts modifiés (l'activation ne les porte pas) : écrits juste après
+    // par POST /team/agents-config, qui régénère les agents générés.
+    const efforts = {};
+    for (const sel of pend ? [] : body.querySelectorAll('select[data-effort]')) {
+      if (sel.value !== sel.dataset.initial) efforts[sel.dataset.effort] = { effort: sel.value || null };
+    }
     try {
       const r = await API.post(`/api/workspaces/${wsId}/overlays/${ov.id}`, payload);
+      if (Object.keys(efforts).length) {
+        try {
+          const rc = await API.post(`/api/workspaces/${wsId}/team/agents-config`, { agents: efforts });
+          const ne = Object.keys(efforts).length;
+          if (rc.written) toast(`Effort enregistré pour ${ne} agent${ne > 1 ? 's' : ''}${(rc.generated || []).length ? ` (${rc.generated.length} régénéré${rc.generated.length > 1 ? 's' : ''})` : ''}${rc.baseline_stale ? ' ; la mesure de référence ne correspond plus : relance /eval dans une nouvelle session' : ''}.`, 'success', 7000);
+        } catch (e) { toastErr(`Module appliqué, mais effort non enregistré : ${e.message}`); }
+      }
       const nc = (r.copied || []).length;
       const na = (r.appended || []).length;
       const nseed = (r.seeded || []).length;
@@ -1020,6 +1073,293 @@ function modalApplyOverlay(wsId, ov, host, opts = {}) {
       }
     } catch (e) { toastErr(e.message); }
   }));
+}
+
+/* ---- Retrait d'un module -------------------------------------------
+   POST /api/workspaces/<id>/overlays/<ov>/remove en deux temps : aperçu
+   (dry_run, aucune écriture, rend plan_id) puis exécution avec ce plan_id.
+   Rien n'est supprimé : tout part dans .claude/.nebula-removed/<module>-<date>/
+   (+ removal.json). 409 gérés dans la modale : dependents (bouton qui
+   enchaîne sur le module dépendant), active_session (option « Forcer »),
+   plan_id périmé (aperçu frais renvoyé, réaffiché), settings.json corrompu.
+   Cf. dashcore/api_overlays.py remove_overlay. */
+// [raison renvoyée par le serveur, titre du groupe, précision]
+const OV_REMOVAL_GROUPS = [
+  ['identique au rendu', 'Fichiers du module, jamais modifiés', ''],
+  ['modifié', 'Fichiers du module que tu as modifiés', 'ta version est gardée telle quelle dans l\'archive'],
+  ['contenu vivant', 'Ton contenu : mémoire, registres, journal, évals', 'coche la case plus bas pour le laisser en place'],
+  ['agent généré', 'Agents générés par Nebula', ''],
+  ['signature du module', 'Marqueur d\'activation du module', 'sans lui, le module apparaît comme inactif'],
+];
+
+// Raison « laissé en place » du serveur -> phrase lisible.
+function ovKeepReasonText(reason) {
+  const r = String(reason || '');
+  if (r.startsWith('contenu vivant conservé')) return 'ton contenu, gardé à ta demande';
+  if (r.startsWith('agent édité à la main')) return 'agent modifié à la main : Nebula n\'y touche pas';
+  if (r === 'modifié : conservé') return 'modifié par toi : conservé';
+  if (r.startsWith('lien ou jonction')) return 'raccourci (lien) vers un autre dossier : laissé tel quel';
+  return r;
+}
+
+function ovPathListHtml(items, fmt) {
+  return `<ul class="rm-list">${items.map(x => `<li>${fmt(x)}</li>`).join('')}</ul>`;
+}
+
+// Mise à jour de l'interface après un retrait (même partiel) : état local
+// des modules, badges de l'en-tête, onglets optionnels (l'onglet
+// Amélioration disparaît sans rechargement), routage de l'accueil, puis
+// onglets Mémoire / Configuration / Extensions remontés s'ils ne sont pas en
+// cours d'édition (CLAUDE.md, settings.json et agents ont changé).
+async function afterOverlayRemoval(wsId, ovId, host, { removed = true } = {}) {
+  // Retrait partiel : le module peut rester actif (signature laissée), seul
+  // le serveur tranche (renderWsOverlays), pas de mise à jour anticipée.
+  if (removed) {
+    const act = (STATE.overlaysActive[wsId] || []).filter(x => x !== ovId);
+    if (act.length) STATE.overlaysActive[wsId] = act; else delete STATE.overlaysActive[wsId];
+    if (ovId === CLAUDE_TEAM_ID && STATE.teamRouting) delete STATE.teamRouting[wsId];
+  }
+  const onPage = WS_PAGE && WS_PAGE.wsId === wsId && WS_PAGE.root.isConnected;
+  if (onPage) { wsRefreshSiBadge(); wsSyncOptionalTabs(); }
+  // L'onglet Configuration courant et non modifié est remonté en entier
+  // (modules compris) ; sinon on ne rafraîchit que la liste des modules,
+  // qui recale aussi l'état sur la réponse du serveur.
+  const cfg = onPage ? WS_PAGE.panels.config : null;
+  const remountCfg = cfg && cfg.mounted && !cfg.isDirty() && WS_PAGE.tab === 'config';
+  // `host` a pu être remplacé par un remontage (retraits enchaînés) : on
+  // reprend alors le conteneur des modules de la page courante.
+  const mods = onPage ? WS_PAGE.root.querySelector('#ws-panel-config .mods') : null;
+  const liveHost = host && host.isConnected ? host : (mods ? mods.parentElement : null);
+  if (!remountCfg && liveHost) await renderWsOverlays(wsId, liveHost);
+  if (onPage) wsRefreshPanels(['memoire', 'config', 'extensions']);
+}
+
+// opts.byId : Map des modules du workspace (libellés) ; opts.then : module à
+// proposer de retirer juste après (retrait demandé d'un prérequis).
+function modalRemoveOverlay(wsId, ov, host, opts = {}) {
+  const label = ov.label || ov.id;
+  const url = `/api/workspaces/${wsId}/overlays/${ov.id}/remove`;
+  const st = { keepLiving: false, force: false, plan: null };
+  const body = el('div', 'rm-ov');
+  const cancel = btn('Annuler', 'btn-ghost');
+  const go = btn('Retirer le module', 'btn-danger', I.archive);
+  go.disabled = true;
+  const { close } = openModal({ title: `Retirer le module : ${label}`, body, footer: [cancel, go], wide: true });
+  cancel.addEventListener('click', close);
+
+  const loading = (txt) => {
+    go.disabled = true;
+    body['innerHTML'] = `<div class="page-loader"><div class="spinner"></div><span>${escapeHtml(txt)}</span></div>`;
+  };
+
+  const preview = async (notice) => {
+    loading('Préparation de l\'aperçu…');
+    let res;
+    try {
+      res = await API.postStatus(url, { dry_run: true, keep_living: st.keepLiving, force: st.force });
+    } catch (e) { renderError(e.message); return; }
+    handle(res, notice);
+  };
+
+  const handle = (res, notice) => {
+    const d = res.data || {};
+    if (res.ok) { if (d.dry_run) renderPreview(d, notice); else renderDone(d); return; }
+    if (res.status === 409 && Array.isArray(d.dependents) && d.dependents.length) { renderDependents(d); return; }
+    if (res.status === 409 && d.active_session) { renderSession(); return; }
+    if (res.status === 409 && d.plan_id) { renderPreview(d, 'stale'); return; }
+    if (res.status === 409) { renderError(d.error, { settings: true, file: d.file }); return; }
+    renderError(d.error, d.dry_run === false ? d : null);
+  };
+
+  const renderPreview = (d, notice) => {
+    st.plan = d;
+    const s = d.settings || {};
+    const c = d.claude_md || {};
+    // settings.json et CLAUDE.md archivés entiers sont déplacés aussi : ils
+    // comptent dans l'archive affichée (le serveur les traite à part).
+    const archive = [...(d.archive || [])];
+    if (s.archived) archive.push({ path: '.claude/settings.json', reason: 'identique au rendu' });
+    if (c.block_removed && c.whole_file) archive.push({ path: 'CLAUDE.md', reason: 'identique au rendu' });
+    const keep = d.keep || [];
+    const notFound = d.not_found || [];
+    const known = OV_REMOVAL_GROUPS.map(g => g[0]);
+    const groups = OV_REMOVAL_GROUPS.map(([r, t, h]) => [t, h, archive.filter(a => a.reason === r)]);
+    const other = archive.filter(a => !known.includes(a.reason));
+    if (other.length) groups.push(['Autres fichiers du module', '', other]);
+    const openAll = archive.length <= 12;
+    const hasLiving = archive.some(a => a.reason === 'contenu vivant');
+    const code = (p) => `<code>${escapeHtml(p)}</code>`;
+
+    let settingsHtml;
+    if (!s.present) settingsHtml = '<p>Pas de <code>settings.json</code> dans ce projet : rien à faire.</p>';
+    else if (s.archived) settingsHtml = '<p>Identique à celui livré par le module : il part entier dans l\'archive.</p>';
+    else if ((s.entries_removed || []).length || s.statusline_removed) {
+      settingsHtml = `<p>Seuls les hooks du module sont retirés (une copie de sauvegarde <code>.bak</code> est faite avant). Tes permissions et tes autres réglages ne bougent pas.</p>
+        ${(s.entries_removed || []).length ? ovPathListHtml(s.entries_removed, h => `<b>${escapeHtml(h.event)}</b>${h.matcher ? ` <span class="dim">(${escapeHtml(h.matcher)})</span>` : ''} : ${code(h.command)}`) : ''}
+        ${s.statusline_removed ? '<p>La barre d\'état (<code>statusLine</code>) du module est retirée aussi.</p>' : ''}`;
+    } else settingsHtml = '<p>Aucun hook du module à retirer : le fichier n\'est pas touché.</p>';
+    if (s.note) settingsHtml += `<p class="dim">${escapeHtml(s.note)}</p>`;
+    // settings.local.json : jamais archivé, seuls les hooks du module partent.
+    const sl = d.settings_local || {};
+    const localHtml = ((sl.entries_removed || []).length || sl.statusline_removed)
+      ? `<div class="rm-sec"><h4><code>settings.local.json</code></h4><p>Tes réglages locaux référencent aussi des scripts du module : ces hooks sont retirés (sauvegarde <code>settings.local.json.bak</code> avant, rangée dans l'archive du retrait et non à côté du fichier), le reste du fichier ne bouge pas.</p>
+        ${(sl.entries_removed || []).length ? ovPathListHtml(sl.entries_removed, h => `<b>${escapeHtml(h.event)}</b>${h.matcher ? ` <span class="dim">(${escapeHtml(h.matcher)})</span>` : ''} : ${code(h.command)}`) : ''}
+        ${sl.statusline_removed ? '<p>La barre d\'état (<code>statusLine</code>) du module est retirée aussi.</p>' : ''}
+        ${sl.note ? `<p class="dim">${escapeHtml(sl.note)}</p>` : ''}</div>`
+      : (sl.note ? `<div class="rm-sec"><h4><code>settings.local.json</code></h4><p class="dim">${escapeHtml(sl.note)}</p></div>` : '');
+
+    let mdHtml;
+    if (c.block_removed && c.whole_file) mdHtml = '<p>Le fichier ne contient que le bloc du module : il part entier dans l\'archive.</p>';
+    else if (c.block_removed) mdHtml = '<p>Seul le bloc du module est retiré (copié dans l\'archive, plus une sauvegarde <code>.bak</code>). Le reste du fichier ne bouge pas.</p>';
+    else mdHtml = `<p>${c.note ? escapeHtml(c.note.charAt(0).toUpperCase() + c.note.slice(1)) : 'Aucun bloc du module dans <code>CLAUDE.md</code>.'}</p>`;
+
+    const nArch = archive.length;
+    body['innerHTML'] = `
+      ${notice === 'stale' ? `<div class="callout callout-warn"><div>Un fichier a changé depuis l'aperçu : voici l'aperçu à jour. Relis-le avant de confirmer.</div></div>` : ''}
+      ${st.force ? `<div class="callout callout-warn"><div>Retrait forcé alors qu'une session Claude tourne : relance-la ensuite, elle garde l'ancien état du module en mémoire.</div></div>` : ''}
+      ${d.inactive ? `<div class="callout callout-info"><div>Ce module n'est pas actif ici (son marqueur d'activation est absent) : seules les traces sûres d'un retrait interrompu sont traitées (hooks vers un script du module disparu, bloc du module dans <code>CLAUDE.md</code>, agents générés par Nebula). Les fichiers de même nom sont considérés comme ceux du projet et ne sont pas touchés.</div></div>` : ''}
+      ${d.nothing_to_do
+        ? `<div class="callout callout-info"><div>Rien à retirer : ce module n'a plus rien dans ce projet.</div></div>`
+        : `<p class="rm-intro"><b>Rien n'est supprimé.</b> Chaque fichier est déplacé dans une archive du projet, avec un fichier <code>removal.json</code> qui explique comment tout remettre en place.</p>`}
+      <div class="rm-sec">
+        <h4>Mis de côté dans l'archive <span class="ct">${nArch}</span></h4>
+        ${nArch ? groups.filter(g => g[2].length).map(([t, h, items]) => `
+          <details class="rm-grp"${openAll ? ' open' : ''}><summary>${escapeHtml(t)} <span class="ct">${items.length}</span>${h ? `<small>${escapeHtml(h)}</small>` : ''}</summary>
+            ${ovPathListHtml(items, a => code(a.path))}</details>`).join('') : '<p class="dim">Aucun fichier.</p>'}
+      </div>
+      ${keep.length ? `<div class="rm-sec">
+        <h4>Laissé en place <span class="ct">${keep.length}</span></h4>
+        ${ovPathListHtml(keep, k => `${code(k.path)} <span class="dim">${escapeHtml(ovKeepReasonText(k.reason))}</span>`)}
+      </div>` : ''}
+      <div class="rm-sec"><h4><code>settings.json</code></h4>${settingsHtml}</div>
+      ${localHtml}
+      <div class="rm-sec"><h4><code>CLAUDE.md</code></h4>${mdHtml}</div>
+      ${notFound.length ? `<details class="rm-grp rm-sec"><summary>Déjà absents du projet <span class="ct">${notFound.length}</span><small>rien à faire pour eux</small></summary>${ovPathListHtml(notFound, code)}</details>` : ''}
+      <div class="rm-sec"><h4>Archive</h4><p>${code(`.claude/.nebula-removed/${ov.id}-<date>-<heure>/`)}, dans ce projet.</p></div>
+      ${hasLiving || st.keepLiving ? `<label class="xswitch rm-keep"><input type="checkbox" data-keep-living${st.keepLiving ? ' checked' : ''}> Garder ma mémoire et mes registres en place</label>
+        <p class="dim rm-keep-h">Ton contenu reste là où il est ; seuls les fichiers techniques du module partent dans l'archive. Exception : le fichier marqueur du module (${ov.signature_file ? code(ov.signature_file) : '<code>improvements.md</code> pour l\'auto-amélioration, <code>team.json</code> pour l\'équipe'}) part quand même dans l'archive, sinon le module resterait actif.</p>` : ''}
+      ${d.nothing_to_do ? '' : '<p class="dim rm-foot">Ferme aussi toute session Claude ouverte à la main dans ce dossier (Nebula ne voit que les sessions qu\'il a lancées), puis relance Claude Code dans ce projet après le retrait.</p>'}`;
+    const keepBox = body.querySelector('[data-keep-living]');
+    if (keepBox) keepBox.addEventListener('change', () => { st.keepLiving = keepBox.checked; preview(); });
+    go.disabled = !!d.nothing_to_do;
+    go.hidden = false;
+  };
+
+  const renderDependents = (d) => {
+    st.plan = null;
+    go.disabled = true;
+    const deps = d.dependents;
+    const names = deps.map(x => `<b>${escapeHtml(x.label || x.id)}</b>`).join(', ');
+    body['innerHTML'] = `<div class="callout callout-warn"><div>${names} s'appuie sur « ${escapeHtml(label)} » : retire-le d'abord, puis reviens retirer celui-ci. Rien n'a été modifié.</div></div><div class="rm-acts"></div>`;
+    const acts = body.querySelector('.rm-acts');
+    for (const dep of deps) {
+      const b = btn(dep.id === CLAUDE_TEAM_ID ? 'Retirer d\'abord l\'équipe' : `Retirer d'abord « ${dep.label || dep.id} »`, 'btn-primary', I.right);
+      b.addEventListener('click', () => {
+        close();
+        const full = (opts.byId && opts.byId.get(dep.id)) || dep;
+        modalRemoveOverlay(wsId, full, host, { byId: opts.byId, then: ov });
+      });
+      acts.appendChild(b);
+    }
+  };
+
+  const renderSession = () => {
+    st.plan = null;
+    go.disabled = true;
+    body['innerHTML'] = `<div class="callout callout-warn"><div><b>Ferme d'abord la session Claude de ce projet.</b> Elle garde les hooks et les agents du module chargés, et ses fichiers seraient déplacés pendant qu'elle tourne. Ferme aussi toute session Claude ouverte à la main dans ce dossier : Nebula ne voit que celles qu'il a lancées. Rien n'a été modifié.</div></div><div class="rm-acts"></div>`;
+    const acts = body.querySelector('.rm-acts');
+    const retry = btn('Réessayer', 'btn-sm', I.refresh);
+    retry.addEventListener('click', () => preview());
+    const force = btn('Forcer quand même', 'btn-sm btn-danger-outline', I.alert);
+    force.title = 'Retirer le module malgré la session ouverte (à relancer ensuite)';
+    force.addEventListener('click', () => { st.force = true; preview(); });
+    acts.append(retry, force);
+  };
+
+  const renderError = (msg, ctx) => {
+    st.plan = null;
+    go.disabled = true;
+    const partial = ctx && ctx.dry_run === false;
+    let html;
+    if (ctx && ctx.settings) {
+      const f = String(ctx.file || '.claude/settings.json').split('/').pop();
+      html = `<div class="callout callout-err"><div><b><code>${escapeHtml(f)}</code> de ce projet est illisible</b> (JSON invalide) : corrige-le${f === 'settings.json' ? ' dans l\'onglet Configuration' : ''}, puis réessaie. Rien n'a été modifié.<br><span class="dim">${escapeHtml(msg || '')}</span></div></div>`;
+    } else if (partial) {
+      const errs = ctx.errors || [];
+      html = `<div class="callout callout-err"><div><b>Le retrait s'est arrêté en cours de route.</b> ${escapeHtml(msg || '')}</div></div>
+        ${errs.length ? ovPathListHtml(errs, x => `<code>${escapeHtml(x.path)}</code> <span class="dim">${escapeHtml(x.error)}</span>`) : ''}
+        ${ctx.archive_dir ? `<p>Ce qui a déjà été déplacé est dans <code>${escapeHtml(ctx.archive_dir)}</code>.</p>` : ''}
+        <p>Relance l'aperçu pour terminer le retrait.</p>`;
+    } else {
+      html = `<div class="callout callout-err"><div>${escapeHtml(msg || 'Erreur inconnue')}</div></div>`;
+    }
+    body['innerHTML'] = html + '<div class="rm-acts"></div>';
+    const again = btn('Relancer l\'aperçu', 'btn-sm', I.refresh);
+    again.addEventListener('click', () => preview());
+    body.querySelector('.rm-acts').appendChild(again);
+    if (partial) {
+      toastErr(`Retrait partiel de « ${label} » : ${msg || 'erreur'}`);
+      afterOverlayRemoval(wsId, ov.id, host, { removed: false });
+    }
+  };
+
+  const renderDone = (d) => {
+    st.plan = null;
+    go.hidden = true;
+    cancel.querySelector('span').textContent = 'Fermer';
+    if (d.nothing_to_do) {
+      body['innerHTML'] = '<div class="callout callout-info"><div>Rien à retirer : ce module n\'a plus rien dans ce projet.</div></div>';
+      toast(`« ${label} » : rien à retirer`, 'info');
+      afterOverlayRemoval(wsId, ov.id, host);
+      return;
+    }
+    const n = (d.moved || []).length;
+    const s = d.settings || {};
+    const c = d.claude_md || {};
+    body['innerHTML'] = `
+      <div class="callout callout-info"><div><b>Module retiré.</b> ${n} fichier${n > 1 ? 's' : ''} mis de côté dans <code>${escapeHtml(d.archive_dir || '')}</code>.</div></div>
+      <p><b>Relance Claude Code dans ce projet</b> pour qu'il oublie les hooks et les agents du module.</p>
+      ${s.backup ? `<p class="dim">settings.json : sauvegarde <code>${escapeHtml(s.backup)}</code>.</p>` : ''}
+      ${(d.settings_local || {}).backup ? `<p class="dim">settings.local.json : sauvegarde <code>${escapeHtml(d.settings_local.backup)}</code>.</p>` : ''}
+      ${c.backup ? `<p class="dim">CLAUDE.md : sauvegarde <code>${escapeHtml(c.backup)}</code>.</p>` : ''}
+      <p class="dim">Pour revenir en arrière : le fichier <code>removal.json</code> de l'archive explique comment tout remettre en place.</p>
+      <div class="rm-acts"></div>`;
+    const acts = body.querySelector('.rm-acts');
+    const openArch = btn('Ouvrir le dossier des archives', 'btn-sm', I.folder);
+    openArch.addEventListener('click', () => withBusy(openArch, async () => {
+      try { const r = await API.post('/api/open', { target: `workspace-removed:${wsId}` }); toastOk(r.message || 'Ouvert'); }
+      catch (e) { toastErr(e.message); }
+    }));
+    acts.appendChild(openArch);
+    if (opts.then) {
+      const next = btn(`Retirer maintenant « ${opts.then.label || opts.then.id} »`, 'btn-sm btn-danger-outline', I.right);
+      next.addEventListener('click', () => { close(); modalRemoveOverlay(wsId, opts.then, host, { byId: opts.byId }); });
+      acts.appendChild(next);
+    }
+    toast(`Module « ${label} » retiré : ${n} fichier${n > 1 ? 's' : ''} dans ${d.archive_dir}. Relance Claude Code dans ce projet.`, 'success', 9000);
+    afterOverlayRemoval(wsId, ov.id, host);
+  };
+
+  go.addEventListener('click', async () => {
+    if (!st.plan || go.disabled) return;
+    const prevHtml = go['innerHTML'];
+    go.disabled = true;
+    go.setAttribute('aria-busy', 'true');
+    go['innerHTML'] = '<span class="btn-spinner" aria-hidden="true"></span><span>Retrait…</span>';
+    let res = null;
+    try {
+      res = await API.postStatus(url, { plan_id: st.plan.plan_id, keep_living: st.keepLiving, force: st.force });
+    } catch (e) {
+      toastErr(e.message);
+      go.disabled = false;
+    } finally {
+      go['innerHTML'] = prevHtml;
+      go.removeAttribute('aria-busy');
+    }
+    if (res) handle(res);
+  });
+
+  preview();
 }
 
 /* ================================================================

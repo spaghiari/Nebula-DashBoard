@@ -322,6 +322,13 @@ def open_target(key: str) -> tuple[int, dict]:
         if not safe_id(ws_id):
             return 400, {"ok": False, "error": "id invalide"}
         p = resolve_ws_dir(ws_id)
+    elif key.startswith("workspace-removed:"):
+        # Archives des modules retirés (.claude/.nebula-removed/), cf.
+        # api_overlays.remove_overlay.
+        ws_id = key.split(":", 1)[1]
+        if not safe_id(ws_id):
+            return 400, {"ok": False, "error": "id invalide"}
+        p = resolve_ws_dir(ws_id) / ".claude" / ".nebula-removed"
     elif key.startswith("template:"):
         tpl_id = key.split(":", 1)[1]
         if not safe_id(tpl_id):
