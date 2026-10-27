@@ -88,10 +88,9 @@ def controle_tiret_long(fichiers: list[str]) -> None:
 
 
 # ---------------------------------------------------------------- 2
-# `exemple` couvre aussi `git.exemple.lan`. Les exemples génériques
-# (exemple.lan, nas.lan) ne correspondent à aucun motif : ils passent, tout
-# comme le gabarit `C:\Users\<user>\` (espace réservé après Users\).
-REFERENCES_INTERNES = re.compile(r"exemple|C:\\Users\\(?!<)|Antoine", re.IGNORECASE)
+# Les exemples génériques (exemple.lan, nas.lan) ne correspondent à aucun
+# motif : ils passent, tout comme le gabarit `C:\Users\<user>\` (espace réservé après Users\).
+REFERENCES_INTERNES = re.compile(r"C:\\Users\\(?!<)|Antoine", re.IGNORECASE)
 # Exemptés : la CI elle-même (elle cite les motifs) et la licence
 # (nom du détenteur du droit d'auteur).
 EXEMPTES_REFERENCES = {"LICENSE"}
