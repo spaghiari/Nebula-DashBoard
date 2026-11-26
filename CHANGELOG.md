@@ -4,6 +4,36 @@ Les nouveautés de Nebula, version par version. La plus récente est en haut.
 La mise à jour se fait depuis Nebula : badge « MAJ » en haut de l'écran, ou
 Outils > Mises à jour.
 
+## 2.8.0 - 2026-11-26
+
+### Nouveautés
+
+- **Migration vers une autre machine** : nouvelle page « Migration ». Export de
+  tout l'environnement (workspaces, historique des sessions Claude Code,
+  MCPs, `~/.claude.json`, skills, secrets) dans une archive chiffrée par une
+  phrase de passe, puis import avec aperçu en lecture seule, conversion des
+  chemins (autre lecteur, autre nom d'utilisateur, autre système) et choix
+  explicite sur chaque conflit. Rien n'est écrasé sans sauvegarde dans
+  `backups/migration-<date>/`. L'export compresse sur tous les cœurs du
+  processeur. Le chiffrement est conçu pour ce projet et n'a pas été audité
+  par un tiers : l'archive est faite pour être déplacée puis supprimée, pas
+  pour être conservée.
+- **Onglet du terminal au nom du projet** : les terminaux ouverts depuis
+  Nebula (Lancer et Reprendre) portent le nom du workspace au lieu du sujet
+  de la conversation, pour repérer d'un coup d'œil quel terminal correspond à
+  quel projet. Contrepartie : dans ces terminaux, Claude Code ne génère plus
+  de titre de session.
+
+### Correctifs
+
+- Les statistiques ne plantent plus (erreur 500) quand un transcript de
+  session contient un message dans un format inattendu.
+
+### À faire après la mise à jour
+
+- Rien d'obligatoire. Les terminaux déjà ouverts gardent leur titre actuel ;
+  le nom du projet s'applique aux prochains lancements.
+
 ## 2.7.2 - 2026-10-17
 
 ### Correctifs

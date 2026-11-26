@@ -120,6 +120,18 @@ SAFE_ID = re.compile(r"^[a-zA-Z0-9_-]{1,40}$")
 SAFE_PLUGIN_SPEC = re.compile(r"^[a-zA-Z0-9@/_.-]{1,120}$")
 ENV_VAR_PATTERN = re.compile(r"\$\{([A-Z0-9_]+)\}")
 BAT_UNSAFE = re.compile(r'[&|<>^"%\r\n]')
+# Claude Code renomme sinon l'onglet avec le sujet de la conversation. Posée
+# (=1) dans l'environnement des terminaux lancés par Nebula seulement : le titre
+# reste alors celui du projet. Effets de bord documentés : plus de titre de
+# session généré, et le signal de statut OSC vers le terminal est coupé.
+TERMINAL_TITLE_ENV = "CLAUDE_CODE_DISABLE_TERMINAL_TITLE"
+TERMINAL_TITLE_MAX = 100
+# `cmd` réécrit le titre en « <titre>  - <commande> » pour toute commande lancée
+# depuis la ligne `/k` ; seul un `title` exécuté DANS un script n'est pas
+# réécrit. Le libellé passe donc par cette variable, lue par un petit script
+# intermédiaire (écrit dans DATA_DIR) qui pose le titre puis lance la commande.
+TERMINAL_TITLE_VAR = "NEBULA_TERMINAL_TITLE"
+TERMINAL_TITLE_WRAPPER = "nebula-title.cmd"
 PATH_UNSAFE = re.compile(r'["\r\n]')
 ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
@@ -170,6 +182,51 @@ PARENT_SCAN_MAX_VISITED = 2000
 
 # --- Sélecteur de dossier natif (dashcore/folder_picker.py) ------------------
 FOLDER_PICKER_TIMEOUT = 300  # secondes : au-delà, le dialogue est abandonné
+
+# --- Migration d'environnement (dashcore/migration*.py, api_migration.py) ------
+# Format d'archive `.nebmig` : en-tête de 80 octets + flux chiffré + étiquette
+# HMAC (cf. migration_crypto.py et memory/subsystems/migration.md).
+MIGRATION_EXT = ".nebmig"
+MIGRATION_MAGIC = b"NEBULAMG"          # 8 octets, en-tête de l'archive
+MIGRATION_FORMAT_VERSION = 1
+# PBKDF2-HMAC-SHA256 : coût choisi à l'export, relu dans l'en-tête à l'import
+# (borné : un en-tête hostile ne peut ni affaiblir ni bloquer la dérivation).
+MIGRATION_KDF_ITERATIONS = 1_000_000
+MIGRATION_KDF_MIN_ITERATIONS = 100_000
+MIGRATION_KDF_MAX_ITERATIONS = 5_000_000
+MIGRATION_CHUNK_SIZE = 1 << 20         # granularité du flux de clé (1 Mio)
+MIGRATION_MIN_PASSPHRASE = 12          # longueur minimale à l'export
+MIGRATION_COMPRESS_LEVEL = 5           # gzip, appliqué AVANT le chiffrement
+# Compression parallèle (migration_gzip.py) : le flux tar est coupé en membres
+# gzip indépendants de cette taille, compressés par un pool de threads.
+MIGRATION_GZIP_BLOCK = 4 << 20         # 4 Mio : perte de ratio négligeable
+MIGRATION_GZIP_MAX_WORKERS = 12        # plafond de threads (mémoire : ~2 blocs/thread)
+MIGRATION_PLAN_TTL = 1800              # s : validité d'un plan_id d'import
+MIGRATION_JOB_TTL = 3600               # s : conservation d'un job terminé
+MIGRATION_MAX_MEMBERS = 3_000_000      # plafond d'entrées d'une archive importée
+MIGRATION_BACKUP_PREFIX = "migration-" # dossier de sauvegarde sous BACKUPS_DIR
+# Dossiers régénérables, jamais exportés (venv non portables, dépendances).
+MIGRATION_EXCLUDED_DIRS = frozenset({
+    "node_modules", "__pycache__", ".venv", "venv", ".tox",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache",
+})
+MIGRATION_EXCLUDED_SUFFIXES = (".pyc",)
+# Fichiers de DATA_DIR exportés (le reste est dérivé ou propre à la machine :
+# active_sessions.json, mcp_sync_state.json, mcp_probe_state.json...).
+MIGRATION_DATA_FILES = ("ui_state.json", "stats_history.json", "mcp_recipes.local.json")
+# Éléments de ~/.claude exportés (fichiers puis dossiers listés élément par élément).
+MIGRATION_CLAUDE_FILES = ("settings.json", "settings.local.json", "CLAUDE.md",
+                          "keybindings.json", "history.jsonl")
+MIGRATION_CLAUDE_DIRS = ("skills", "agents", "commands")
+# Sessions : dossiers fusionnés fichier par fichier, jamais écrasés.
+MIGRATION_CLAUDE_MERGE_DIRS = ("projects", "file-history")
+# Clés d'une entrée `projects[<chemin>]` de ~/.claude.json reprises par la
+# migration (liste blanche : jamais compte, jeton, historique de prompts...).
+MIGRATION_CLAUDE_JSON_PROJECT_KEYS = (
+    "mcpServers", "disabledMcpServers", "enabledMcpjsonServers", "disabledMcpjsonServers",
+    "allowedTools", "mcpContextUris", "hasTrustDialogAccepted",
+    "hasCompletedProjectOnboarding", "ignorePatterns",
+)
 
 # --- Module claude-team (dashcore/api_team.py) --------------------------------
 # Capacités abstraites du manifeste `.claude/team.json` -> outils Claude Code

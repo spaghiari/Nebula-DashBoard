@@ -60,3 +60,6 @@ I.palette   = _icon('<circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.
 // fermee autour d'une etincelle (remplace l'emoji cerveau).
 I.selfImprove = _icon('<path d="M20.5 13A8.5 8.5 0 1 1 18 6.5"/><path d="M20.5 3v4.5H16"/><path d="m12 8.5 1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z"/>');
 I.file      = _icon('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>');
+// Migration d'environnement (page Migration)
+I.upload    = _icon('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>');
+I.transfer  = _icon('<path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/>');

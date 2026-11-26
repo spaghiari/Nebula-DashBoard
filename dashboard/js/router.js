@@ -293,6 +293,7 @@ async function route(opts) {
     else if (hash === '#/skills') await renderSkills();
     else if (hash === '#/templates') await renderTemplates();
     else if (hash === '#/tools') await renderTools();
+    else if (hash === '#/migration') await renderMigration();
     else if (hash === '#/aide' || hash.startsWith('#/aide/')) await renderHelp();
     else if (m) await renderWorkspace(m[1], m[2]);
     else { location.hash = '#/'; return; }

@@ -27,7 +27,10 @@ from dashcore.helpers import (
     project_dir_for_path, read_json, read_json_strict, resolve_ws_dir, safe_id, safe_path,
     sanitize_bat, validate_ws_path, write_json, write_launch_bat,
 )
-from dashcore.workspace_io import _ws_dir_from_entry, session_file_counts
+from dashcore.workspace_io import (
+    _ws_dir_from_entry, ensure_title_wrapper, session_file_counts, terminal_command,
+    terminal_env, terminal_title,
+)
 
 
 def list_templates() -> list[dict]:
@@ -1032,7 +1035,9 @@ def read_session_tail(ws_id: str, filename: str, offset: int = 0) -> tuple[int, 
         t = entry.get("type")
         if t not in ("user", "assistant"):
             continue
-        msg = entry.get("message") or {}
+        msg = entry.get("message")
+        if not isinstance(msg, dict):
+            msg = {"content": msg}
         content = msg.get("content")
         formatted = ""
         if isinstance(content, str):
@@ -1091,7 +1096,9 @@ def read_session_messages(ws_id: str, filename: str, limit: int = 200) -> tuple[
             t = entry.get("type")
             if t not in ("user", "assistant"):
                 continue
-            msg = entry.get("message") or {}
+            msg = entry.get("message")
+            if not isinstance(msg, dict):
+                msg = {"content": msg}
             content = msg.get("content")
             text = ""
             if isinstance(content, str):
@@ -1223,9 +1230,11 @@ def launch_resume(ws_id: str) -> tuple[int, dict]:
         # cmd /k directement (pas cmd /c start) pour que Popen.pid reste valide
         # tant que la fenêtre cmd est ouverte. Permet d'enregistrer le PID
         # dans active_sessions pour offrir un bouton Stop côté Nebula.
+        title = terminal_title(w.get("label"), ws_id)
         proc = subprocess.Popen(
-            ["cmd", "/k", "claude -c"],
+            terminal_command("claude -c", ensure_title_wrapper() if title else None),
             cwd=path,
+            env=terminal_env(title),
             creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
             shell=False,
         )

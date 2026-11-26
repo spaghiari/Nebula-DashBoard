@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import re
 import subprocess
 import sys
@@ -15,8 +16,9 @@ import threading
 from pathlib import Path
 
 from dashcore.config import (
-    BAT_UNSAFE, CLAUDE_PROJECTS, MCP_REGISTRY, SCRIPTS_DIR,
-    WORKSPACES_DIR, WORKSPACES_JSON, log, IS_WINDOWS, WINDOWS_ONLY_MSG,
+    BAT_UNSAFE, CLAUDE_PROJECTS, MCP_REGISTRY, SCRIPTS_DIR, TERMINAL_TITLE_ENV,
+    TERMINAL_TITLE_MAX, TERMINAL_TITLE_VAR, TERMINAL_TITLE_WRAPPER, WORKSPACES_DIR,
+    WORKSPACES_JSON, log, IS_WINDOWS, WINDOWS_ONLY_MSG,
 )
 from dashcore.env_local import load_env_local
 from dashcore import config as _config
@@ -261,6 +263,69 @@ def write_launch_bat(ws_id: str, label: str, path: str) -> Path:
     return bat_path
 
 
+def terminal_title(label: str | None, fallback: str | None = None) -> str:
+    """Titre d'onglet = nom du projet, nettoyé pour `cmd` (le registre peut
+    contenir un libellé saisi à la main : `& | < > ^ " %` et fins de ligne
+    sont retirés, sinon ils casseraient la ligne de commande)."""
+    for candidate in (label, fallback):
+        t = BAT_UNSAFE.sub("", candidate or "").strip()
+        if t:
+            return t[:TERMINAL_TITLE_MAX].rstrip()
+    return ""
+
+
+# Script intermédiaire : pose le titre (variable d'environnement) PUIS lance la
+# commande reçue. Il faut un script car `cmd` réécrit le titre en
+# « <titre>  - <commande> » pour toute commande de la ligne `/k`, alors qu'un
+# `title` exécuté dans un script n'est pas réécrit (mesuré sur le vrai `cmd`).
+_TITLE_WRAPPER_BODY = (
+    "@echo off\r\n"
+    f"if defined {TERMINAL_TITLE_VAR} title %{TERMINAL_TITLE_VAR}%\r\n"
+    "%*\r\n"
+)
+
+
+def ensure_title_wrapper() -> Path | None:
+    """Écrit (si absent ou différent) le script intermédiaire dans DATA_DIR.
+    None si l'écriture échoue : le lancement reste possible, sans titre."""
+    p = Path(_config.DATA_DIR) / TERMINAL_TITLE_WRAPPER
+    try:
+        try:
+            if p.read_bytes() == _TITLE_WRAPPER_BODY.encode("ascii"):
+                return p
+        except OSError:
+            pass
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(_TITLE_WRAPPER_BODY.encode("ascii"))
+        return p
+    except OSError as e:
+        log.warning("script de titre d'onglet non écrit (%s) : lancement sans titre", e)
+        return None
+
+
+def terminal_command(inner: str, wrapper: Path | None = None) -> str:
+    """Ligne de commande `cmd /k` qui lance `inner`, via le script de titre si
+    fourni. Chaîne entière (pas une liste) : `cmd /k "..."` retire les guillemets
+    extérieurs, alors que la quotation d'une liste y glisserait des `\\"` que
+    cmd ne comprend pas."""
+    if wrapper is not None:
+        return f'cmd /k ""{wrapper}" {inner}"'
+    return f'cmd /k "{inner}"'
+
+
+def terminal_env(title: str = "") -> dict[str, str]:
+    """Environnement des terminaux lancés : le libellé (lu par le script de
+    titre, jamais placé dans la ligne de commande) et, pour Claude Code, de quoi
+    ne pas réécrire le titre avec le sujet de la conversation."""
+    env = dict(os.environ)
+    env[TERMINAL_TITLE_ENV] = "1"
+    if title:
+        env[TERMINAL_TITLE_VAR] = title
+    else:
+        env.pop(TERMINAL_TITLE_VAR, None)
+    return env
+
+
 def launch_script(bat_name: str, *, ws_id: str | None = None, ws_label: str | None = None,
                   ws_path: str | None = None) -> tuple[int, dict]:
     """Lance un .bat dans une nouvelle console.
@@ -288,9 +353,12 @@ def launch_script(bat_name: str, *, ws_id: str | None = None, ws_label: str | No
             f"(Modifier le workspace) ou recrée le dossier"
         )}
     try:
+        # Onglet nommé d'après le projet (et non d'après la conversation).
+        title = terminal_title(ws_label, ws_id)
         proc = subprocess.Popen(
-            ["cmd", "/k", "call", str(bat)],
+            terminal_command(f'call "{bat}"', ensure_title_wrapper() if title else None),
             cwd=str(SCRIPTS_DIR),
+            env=terminal_env(title),
             creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0,
             shell=False,
         )
@@ -334,8 +402,13 @@ def _scan_session_file(jsonl: Path) -> tuple:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            # `message` peut être une chaîne dans certains transcripts : on
+            # ne lit `.get` que sur un dict (sinon 500 sur /api/stats).
+            msg = entry.get("message")
+            if not isinstance(msg, dict):
+                msg = {}
             if entry.get("type") == "user" and first_msg is None:
-                content = (entry.get("message") or {}).get("content")
+                content = msg.get("content")
                 if isinstance(content, str):
                     first_msg = content[:200]
                 elif isinstance(content, list):
@@ -345,7 +418,6 @@ def _scan_session_file(jsonl: Path) -> tuple:
                             break
             if entry.get("type") in ("user", "assistant"):
                 messages += 1
-            msg = entry.get("message") or {}
             usage = msg.get("usage") or entry.get("usage") or {}
             if not usage:
                 continue

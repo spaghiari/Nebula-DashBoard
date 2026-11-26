@@ -5433,7 +5433,7 @@ document.addEventListener('keydown', (e) => {
   // 'g' chord -> next key navigates
   if (e.key === 'g') { lastKey = 'g'; lastKeyAt = Date.now(); return; }
   if (lastKey === 'g' && Date.now() - lastKeyAt < 1000) {
-    const map = { h: '#/', m: '#/mcps', p: '#/plugins', k: '#/skills', t: '#/templates', o: '#/tools', a: '#/aide' };
+    const map = { h: '#/', m: '#/mcps', p: '#/plugins', k: '#/skills', t: '#/templates', o: '#/tools', e: '#/migration', a: '#/aide' };
     if (map[e.key]) { location.hash = map[e.key]; lastKey = null; e.preventDefault(); return; }
     lastKey = null;
   }

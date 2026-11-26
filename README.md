@@ -364,6 +364,37 @@ bougent pas.
 </details>
 
 <details>
+<summary><strong>📦 Migrer vers une autre machine</strong></summary>
+
+La page **Migration** emporte tout ton environnement dans **une seule archive
+chiffrée** (`.nebmig`) : workspaces (y compris ceux adoptés hors du dossier
+`workspaces/`), historique des sessions Claude Code (pour que `/resume`
+fonctionne), registre et serveurs MCP locaux, `~/.claude.json` (MCPs et
+permissions des projets, jamais ton compte), skills, agents, commandes,
+templates, mémoire et **secrets** (`.env.local`).
+
+- **Exporter** : la taille est estimée avant (par catégorie), tu choisis les
+  workspaces, tu saisis une **phrase de passe** (12 caractères minimum, deux
+  fois). L'archive est écrite dans le dossier de ton choix (`backups/` par
+  défaut), puis relue et vérifiée. Les `.venv` et `node_modules` ne sont pas
+  exportés : la liste de ce qu'il faudra recréer t'est donnée.
+- **Importer** : choisis l'archive, saisis la phrase, lis l'**aperçu** (rien
+  n'est écrit à ce stade) : ce qui sera créé, les conflits, les chemins
+  convertis pour la nouvelle machine (autre lecteur, autre nom d'utilisateur,
+  autre système). Tu tranches chaque conflit (ignorer, remplacer, renommer),
+  puis tu lances l'import.
+- **Rien n'est écrasé en silence** : tout ce qui est remplacé est d'abord
+  rangé dans `backups/migration-<date>/`. Les sessions sont fusionnées
+  fichier par fichier sans jamais écraser.
+- **La phrase de passe ne se récupère pas** : sans elle, l'archive est
+  perdue. Garde-la séparément de l'archive. Le chiffrement est construit avec
+  la seule bibliothèque standard de Python (pas d'AES disponible) : c'est une
+  construction maison, non auditée. Choisis une phrase longue et change tes
+  secrets si l'archive fuite.
+
+</details>
+
+<details>
 <summary><strong>🛠 Ménage dans ta config Claude existante</strong></summary>
 
 Si un même MCP est déclaré à la fois dans ta config Claude globale

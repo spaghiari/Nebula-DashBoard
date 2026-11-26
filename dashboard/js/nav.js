@@ -25,6 +25,7 @@ const NAV_ITEMS = [
   { id: 'templates', label: 'Templates',   route: '#/templates', icon: I.layers,  key: 't' },
   { section: 'Système' },
   { id: 'tools',     label: 'Outils',      route: '#/tools',     icon: I.tools,   key: 'o' },
+  { id: 'migration', label: 'Migration',   route: '#/migration', icon: I.transfer, key: 'e' },
   { id: 'aide',      label: 'Aide',        route: '#/aide',      icon: I.book,    key: 'a' },
 ];
 

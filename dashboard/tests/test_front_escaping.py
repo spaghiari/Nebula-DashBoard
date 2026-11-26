@@ -20,6 +20,7 @@ from _support import DASHBOARD_DIR
 APP_JS = DASHBOARD_DIR / "app.js"
 IMPR_JS = DASHBOARD_DIR / "js" / "pages" / "team-config.js"
 TOOLS_JS = DASHBOARD_DIR / "js" / "pages" / "tools.js"
+MIGRATION_JS = DASHBOARD_DIR / "js" / "pages" / "migration.js"
 
 # Fonctions contrôlées -> valeurs sûres propres à chacune : identifiants
 # (nombres calculés, fragments HTML construits dans la fonction à partir de
@@ -44,6 +45,27 @@ FUNCTIONS = {
     },
     TOOLS_JS: {
         "renderClaudePlanCard": {"vars": set(), "helpers": set()},
+    },
+    # Page Migration : noms de workspaces, chemins, ids, libelles de fichiers et
+    # messages d'erreur viennent du disque ou d'une archive (non fiables).
+    # `msg`, `pills`, `segs`, `legend`, `status`, `icon`, `cls`... = fragments
+    # construits dans la fonction a partir de valeurs deja echappees.
+    MIGRATION_JS: {
+        "migList": {"vars": set(), "helpers": set()},
+        "migCallout": {"vars": {"icon", "cls", "html"}, "helpers": set()},
+        "migProgressBox": {"vars": {"Math.round(snap.elapsed)", "pct"}, "helpers": set()},
+        "migRenderExportResult": {"vars": set(), "helpers": {"migPlural", "migBytes"}},
+        "migRenderImportResult": {"vars": {"it"}, "helpers": {"migList", "migPlural", "migBytes"},
+                                  "text_calls": {"migList"}},
+        "migBuildExport": {
+            "vars": {"segs", "legend", "CSS.escape(w.id)", "Math.max(g.bytes, total * 0.015)",
+                     "MIG_COLORS[i % MIG_COLORS.length]", "min", "pass.value.length"},
+            "helpers": {"migList", "wsGem", "migPlural", "migBytes"}},
+        "migBuildImport": {
+            "vars": {"status", "pills.join(S)", "c.workspaces_import", "MIG_COLORS[i % MIG_COLORS.length]"},
+            "helpers": {"migList", "kpi", "wsGem", "migPlural", "migBytes"},
+            # libelles accessibles et titres de section : echappes par sel() / section().
+            "text_calls": {"sel", "section", "migList"}},
     },
     IMPR_JS: {
         "teamConfigCard": {"vars": {"basisPill", "rows", "prop", "warnHtml", "pendHtml"},

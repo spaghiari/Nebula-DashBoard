@@ -110,6 +110,7 @@ from dashcore.api_plugins import (
     list_agents, list_commands,
     create_fileitem, delete_fileitem, get_fileitem_content, save_fileitem_content,
 )
+from dashcore import api_migration
 from dashcore.api_skills_library import (
     list_library, get_distribution, distribute, create_library_skill,
     delete_library_skill, get_library_skill_content, save_library_skill_content,
@@ -151,6 +152,14 @@ def h_post_ws_export(q, b, ws):
         "Content-Disposition": f'attachment; filename="{ws}.zip"',
         "Cache-Control": "no-store",
     }, data
+
+# ── Migration d'environnement (jobs asynchrones, cf. dashcore/api_migration.py) ──
+def h_get_migration_info(q, b):          return api_migration.get_info()
+def h_get_migration_job(q, b, jid):      return api_migration.get_job(jid)
+def h_post_migration_job(q, b):          return api_migration.start_job(b or {})
+def h_post_migration_cancel(q, b, jid):  return api_migration.cancel_job(jid)
+def h_post_migration_inspect(q, b):      return api_migration.inspect_archive(b or {})
+def h_post_migration_find(q, b):         return api_migration.list_archives(b or {})
 
 def h_post_create_ws(q, b):              return create_workspace(b)
 def h_post_update_ws(q, b, ws):          return update_workspace(ws, b)
@@ -767,6 +776,9 @@ ROUTES_GET = [
     (re.compile(r"^/api/system/version$"),                                                 h_get_system_version),
     (re.compile(r"^/api/system/pick-folder$"),                                             h_get_pick_folder),
     (re.compile(r"^/api/system/stashes$"),                                                 h_get_system_stashes),
+    # Migration d'environnement (X-Nebula-XHR exigé : préfixe sensible)
+    (re.compile(r"^/api/migration/info$"),                                                 h_get_migration_info),
+    (re.compile(r"^/api/migration/jobs/([A-Za-z0-9_-]{8,40})$"),                           h_get_migration_job),
 ]
 
 ROUTES_POST = [
@@ -858,6 +870,11 @@ ROUTES_POST = [
     (re.compile(r"^/api/system/stash-recover$"),                                           h_post_system_stash_recover),
     (re.compile(r"^/api/system/stash-drop$"),                                              h_post_system_stash_drop),
     (re.compile(r"^/api/system/stash-prune$"),                                             h_post_system_stash_prune),
+    # Migration d'environnement : archive chiffrée contenant des secrets
+    (re.compile(r"^/api/migration/jobs$"),                                                 h_post_migration_job),
+    (re.compile(r"^/api/migration/jobs/([A-Za-z0-9_-]{8,40})/cancel$"),                    h_post_migration_cancel),
+    (re.compile(r"^/api/migration/inspect-archive$"),                                      h_post_migration_inspect),
+    (re.compile(r"^/api/migration/find-archives$"),                                        h_post_migration_find),
 ]
 
 ROUTES_DELETE = [
@@ -1053,6 +1070,9 @@ class Handler(BaseHTTPRequestHandler):
     # (les GET ne sont pas gatés par défaut, ceux-ci le sont explicitement).
     _SENSITIVE_ROUTES = {"/api/env/values", "/api/env/encrypt", "/api/env/decrypt",
                          "/api/env/export-plain"}
+    # Préfixes dont les GET exigent aussi le header (aperçu d'import : chemins,
+    # noms de variables et de workspaces d'une archive de secrets).
+    _SENSITIVE_PREFIXES = ("/api/migration/",)
 
     def _dispatch(self, method: str, body=None):
         parsed = urlparse(self.path)
@@ -1079,6 +1099,7 @@ class Handler(BaseHTTPRequestHandler):
         needs_csrf = (
             method in ("POST", "DELETE", "PUT", "PATCH")
             or path in self._SENSITIVE_ROUTES
+            or path.startswith(self._SENSITIVE_PREFIXES)
             or (method == "GET" and any(p.match(path) for p in _SIDE_EFFECT_GET))
             or (method == "GET" and path == _FETCH_GET
                 and (query.get("check", ["0"])[0] or "0") == "1")

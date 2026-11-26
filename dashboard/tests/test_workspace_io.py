@@ -92,6 +92,16 @@ class StatsCacheTests(unittest.TestCase):
             workspace_io._scan_session_file = orig
         self.assertEqual(calls, [])
 
+    def test_message_de_type_chaine_ne_plante_pas(self):
+        # Régression : un transcript dont `message` est une chaîne faisait
+        # lever AttributeError (donc 500 sur /api/stats).
+        with self.s1.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "user", "message": "texte brut"}) + "\n")
+            f.write(json.dumps({"type": "assistant", "message": None}) + "\n")
+            f.write(json.dumps({"type": "assistant", "message": 42}) + "\n")
+        st = all_stats()["w1"]
+        self.assertEqual((st["messages"], st["input_tokens"]), (5, 10))
+
     def test_workspace_sans_dossier_projet(self):
         make_workspace("w2", path=ROOT / "ailleurs" / "w2")
         st = all_stats()["w2"]
